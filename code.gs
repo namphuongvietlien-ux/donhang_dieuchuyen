@@ -3,7 +3,7 @@ var SHEET_ID = "1lrMxXon0oEtTUs6nsAydSAthGxryO3GNde0GQusk4j4";
 // ================= THÔNG TIN CẤU HÌNH TELEGRAM & WEB APP =================
 var TELEGRAM_TOKEN = "8918960838:AAE2w_tEGPD2E25fRz6LK5xUiXGGZGWv8NU"; 
 var TELEGRAM_CHAT_ID = "-5408426667"; 
-var WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwhqeAzzNrPTm1cH7KMmmj44btXb2OL835xxaItHByohT11sLDrdgfw7BrVlI5txqXonw/exec"; // (Link Web App đuôi /exec)
+var WEB_APP_URL = "https://donhang-dieuchuyen.vercel.app";
 // Mapping original store names -> display (short) names for UI and Telegram
 var STORE_MAP = {
   "Kho Địa điểm kinh doanh Q7": "K9 Quận 7",
@@ -156,10 +156,10 @@ function handleTelegramMessage(message) {
       var sx = o.khoXuat || ""; var sn = o.khoNhan || "";
       var sxShort = STORE_MAP[sx] || sx;
       var snShort = STORE_MAP[sn] || sn;
-      return (idx + 1) + ". " + o.soPhieu + " (" + sx + " → " + sn + ") (" + sxShort + " → " + snShort + ")";
+      return (idx + 1) + ". " + o.soPhieu + " (" + sxShort + " → " + snShort + ")\n" + getOrderWebUrl(o.soPhieu);
     });
     var short = STORE_MAP[storeName] || storeName;
-    sendTelegramText(chatId, "🔔 Đơn mới cho kho " + storeName + " (" + short + "):\n" + lines.join("\n") + "\n\nMở web app để xử lý: " + WEB_APP_URL);
+    sendTelegramText(chatId, "🔔 Đơn mới cho kho " + storeName + " (" + short + "):\n" + lines.join("\n\n"));
     return;
   }
 
@@ -206,6 +206,9 @@ function doGet(e) {
           break;
         case 'getChiTietPhieu':
           res = getChiTietPhieu(e.parameter.soPhieu || '', e.parameter.storeName || '');
+          break;
+        case 'getThongTinPhieu':
+          res = getThongTinPhieu(e.parameter.soPhieu || '');
           break;
         case 'getDonHangTheoNgay':
           res = getDonHangTheoNgay(e.parameter.ngay || 'today', e.parameter.userRole || '', e.parameter.userStore || '');
@@ -371,6 +374,10 @@ function sendTelegramTextToStores(storeNames, text) {
   });
 }
 
+function getOrderWebUrl(soPhieu) {
+  return WEB_APP_URL + "?tab=quan-ly&soPhieu=" + encodeURIComponent(soPhieu);
+}
+
 function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
   var typeLabel = soPhieu.indexOf("DH") !== -1 ? "ĐƠN HÀNG MỚI" : "LỆNH ĐIỀU CHUYỂN MỚI";
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
@@ -380,7 +387,7 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
              "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
              "*Số mặt hàng:* " + itemCount + "\n\n" +
-             "Mở web app để xử lý: " + WEB_APP_URL;
+             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -391,8 +398,8 @@ function sendTelegramOrderReady(soPhieu, khoNhan) {
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var text = "✅ *Đã hoàn thành soạn hàng!*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
-             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
-             "Vui lòng kiểm tra đơn hàng trên hệ thống.";
+             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n\n" +
+             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -412,6 +419,24 @@ function getKhoNhanBySoPhieu(soPhieu) {
     }
   }
   return "";
+}
+
+function getThongTinPhieu(soPhieu) {
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  if (!historySheet || !soPhieu) return null;
+  var data = historySheet.getDataRange().getValues();
+  var target = String(soPhieu).trim().toLowerCase();
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] && String(data[i][1]).trim().toLowerCase() === target) {
+      return {
+        soPhieu: String(data[i][1]).trim(),
+        khoXuat: data[i][2] ? String(data[i][2]).trim() : "",
+        khoNhan: data[i][3] ? String(data[i][3]).trim() : ""
+      };
+    }
+  }
+  return null;
 }
 
 // --- API TÀI KHOẢN & ĐĂNG NHẬP ---

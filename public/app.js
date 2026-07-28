@@ -24,6 +24,8 @@ var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
 var storeMap = {};
 var phieuData = []; var editRows = []; var currentPhieuObj = null;
 var sessionUser = { user: "", role: "", store: "" };
+var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
+var deepLinkTab = new URLSearchParams(location.search).get("tab");
 
 window.onload = function() {
   document.getElementById("loading-overlay").style.display = "none";
@@ -71,13 +73,20 @@ function initSystemData() {
 
     if (sessionUser.role === "Admin") { var nav = document.getElementById("nav-tab-admin"); if(nav) nav.style.display = "block"; }
     applyQuyenKho();
+    openDeepLinkedOrder();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
-function switchTab(tabId) {
+function activateTab(tabId) {
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  event.target.classList.add('active'); document.getElementById(tabId).classList.add('active');
+  var nav = Array.from(document.querySelectorAll('.nav-tab')).find(function(el) { return el.getAttribute('onclick').indexOf("'" + tabId + "'") !== -1; });
+  if (nav) nav.classList.add('active');
+  document.getElementById(tabId).classList.add('active');
+}
+
+function switchTab(tabId) {
+  activateTab(tabId);
   if(tabId === 'tab-quan-ly') ql_loadPhieu();
   if(tabId === 'tab-soan-hang') sh_taiDanhSachDon();
   if(tabId === 'tab-admin') loadDSUser();
@@ -128,7 +137,7 @@ function handleSearchInput(e) {
   var html = "";
   results.slice(0, 10).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc">Mã: <b>' + item.maHang + '</b> | Vạch: <b>' + item.maVach + '</b></div></div>';
+    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc">Mã hàng hóa: <b>' + item.maHang + '</b> | Mã vạch: <b>' + item.maVach + '</b></div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
@@ -162,7 +171,7 @@ function renderTable() {
   arrItems.forEach((it, i) => {
     var isErr = (it.maHang === "LỖI MÃ" || isNaN(Number(it.sl))); tongSl += (Number(it.sl) || 0);
     var trClass = isErr ? 'row-error' : (it.highlight ? 'scan-highlight' : ''); it.highlight = false;
-    tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>' + it.maVach + '</b><br><small style="color:gray;">' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
+    tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>Mã vạch: ' + it.maVach + '</b><br><small style="color:gray;">Mã hàng hóa: ' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
   });
   document.getElementById("lbl-tong-sl").innerText = tongSl;
 }
@@ -195,7 +204,7 @@ function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
 
   var htmlStr = '<h2>' + typeTitle + '</h2><p><b>Số:</b> ' + soPhieu + '<br><b>Kho xuất:</b> ' + khoXuat + '<br><b>Kho nhận:</b> ' + khoNhan + '</p>';
   htmlStr += '<table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Số lượng</th></tr></thead><tbody>';
-  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td><b>'+ (it.maVach || '') +'</b><br><small style="color:gray;">'+ (it.maHang || '') +'</small></td><td>'+it.tenHang+'</td><td>'+it.dvt+'</td><td style="text-align:center;"><b>'+it.sl+'</b></td></tr>'; }});
+  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td><b>Mã vạch: '+ (it.maVach || '') +'</b><br><small style="color:gray;">Mã hàng hóa: '+ (it.maHang || '') +'</small></td><td>'+it.tenHang+'</td><td>'+it.dvt+'</td><td style="text-align:center;"><b>'+it.sl+'</b></td></tr>'; }});
   htmlStr += '</tbody></table><div style="display:flex; justify-content:space-between; margin-top:50px; text-align:center;"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div>';
 
   var iframe = document.createElement('iframe');
@@ -236,16 +245,35 @@ function ql_loadPhieu() {
 function ql_onSelectPhieu() {
   var val = document.getElementById("ql-phieu").value;
   if(!val) { document.getElementById("ql-view-phieu").style.display = "none"; return; }
-  currentPhieuObj = phieuData.find(x => x.soPhieu === val);
-  document.getElementById("ql-lbl-sophieu").innerText = val;
+  ql_hienThiChiTiet(phieuData.find(x => x.soPhieu === val));
+}
+
+function openDeepLinkedOrder() {
+  if (!deepLinkOrder || (deepLinkTab && deepLinkTab !== "quan-ly")) return;
+  showLoad("Đang mở đơn hàng...");
+  apiGet('getThongTinPhieu', { soPhieu: deepLinkOrder }).then(function(phieu) {
+    if (!phieu || !phieu.soPhieu) {
+      hideLoad();
+      alert("Không tìm thấy đơn hàng: " + deepLinkOrder);
+      return;
+    }
+    activateTab('tab-quan-ly');
+    ql_hienThiChiTiet(phieu);
+  }).catch(function(err) { hideLoad(); alert('Lỗi mở đơn hàng: ' + err.message); });
+}
+
+function ql_hienThiChiTiet(phieu) {
+  if (!phieu) return;
+  currentPhieuObj = phieu;
+  document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
   document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
   document.getElementById("ql-lbl-khonhan").innerText = currentPhieuObj.khoNhan + ' (' + (storeMap[currentPhieuObj.khoNhan] || '') + ')';
   showLoad("Tải chi tiết...");
-  apiGet('getChiTietPhieu', { soPhieu: val, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
+  apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
     hideLoad(); editRows = rows; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     rows.forEach((r, i) => {
       if(r.slGoc === 0) return;
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+(r.ghiChu?'background:#fce8e6;':'')+'"><td>'+(i+1)+'</td><td><b>'+r.maVach+'</b><br><small style="color:gray;">'+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+'</td><td>'+r.stock+'</td><td><input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+r.slGoc+'" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td></tr>');
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+(r.ghiChu?'background:#fce8e6;':'')+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+'</td><td>'+r.stock+'</td><td><input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+r.slGoc+'" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td></tr>');
     });
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
@@ -288,7 +316,7 @@ function sh_chonDonMobile() {
   apiGet('getChiTietDonHangMobile', { soPhieu: sp }).then(function(items) {
     var html = "";
     items.forEach((it, j) => {
-      html += '<div class="item-card"><b>'+it.tenHang+'</b><br><small><b>'+it.maVach+'</b> | '+(it.maHang||'')+' | ĐVT: '+it.dvt+'</small><div class="action-row"><div>SL Yêu Cầu: <b>'+it.slGoc+'</b><br>Thực tế: <input type="number" class="sl-thuc-te" data-row="'+it.rowIndex+'" value="'+it.slThucTe+'"></div><div style="text-align:right;"><label class="btn-camera" for="c-'+j+'">📷 Ảnh</label><input type="file" id="c-'+j+'" accept="image/*" capture="environment" style="display:none;" data-row="'+it.rowIndex+'" data-j="'+j+'" onchange="nenAnh(this)"><img id="p-'+j+'" src="'+(it.anhXacNhan||'')+'" style="display:'+(it.anhXacNhan?'block':'none')+'; width:50px; height:50px; margin-top:5px;"><small id="st-'+j+'"></small></div></div></div>';
+      html += '<div class="item-card"><b>'+it.tenHang+'</b><br><small><b>Mã vạch: '+it.maVach+'</b> | Mã hàng hóa: '+(it.maHang||'')+' | ĐVT: '+it.dvt+'</small><div class="action-row"><div>SL Yêu Cầu: <b>'+it.slGoc+'</b><br>Thực tế: <input type="number" class="sl-thuc-te" data-row="'+it.rowIndex+'" value="'+it.slThucTe+'"></div><div style="text-align:right;"><label class="btn-camera" for="c-'+j+'">📷 Ảnh</label><input type="file" id="c-'+j+'" accept="image/*" capture="environment" style="display:none;" data-row="'+it.rowIndex+'" data-j="'+j+'" onchange="nenAnh(this)"><img id="p-'+j+'" src="'+(it.anhXacNhan||'')+'" style="display:'+(it.anhXacNhan?'block':'none')+'; width:50px; height:50px; margin-top:5px;"><small id="st-'+j+'"></small></div></div></div>';
     });
     document.getElementById("sh-list-container").innerHTML = html; document.getElementById("sh-footer").style.display = "block";
   }).catch(function(err){ alert('Lỗi: '+err.message); });
