@@ -9,3 +9,5 @@ build/
 .nyc_output/
 coverage/
 .idea/
+.vercel
+.env*
