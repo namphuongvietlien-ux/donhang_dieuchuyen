@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hệ Thống Quản Lý Kho</title>
+  <style>
+    :root { --primary: #1a73e8; --bg: #f0f2f5; --text: #202124; --card-bg: #ffffff; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); -webkit-font-smoothing:antialiased; }
+    .header { background: var(--primary); color: white; padding: 12px 14px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.08); position:relative;}
+    .header h2 { margin: 0; font-size: 18px; }
+    #user-info-badge { position:absolute; right:10px; top:10px; font-size:12px; background:rgba(255,255,255,0.15); padding:5px 10px; border-radius:15px;}
+
+    .nav-tabs { display: flex; overflow-x: auto; background: var(--card-bg); border-bottom: 1px solid #eee; -webkit-overflow-scrolling: touch; }
+    .nav-tab { flex: 0 0 auto; min-width: 110px; text-align: center; padding: 12px 10px; cursor: pointer; font-weight: bold; color: #5f6368; border-bottom: 3px solid transparent; transition: 0.18s; white-space: nowrap; font-size:14px; }
+    .nav-tab.active { color: var(--primary); border-bottom-color: var(--primary); background:#f8f9fa; }
+    .container { padding: 16px; max-width: 1100px; margin: 0 auto; padding-bottom:120px; display:none; box-sizing:border-box; }
+    .tab-content { display: none; animation: fadeIn 0.18s; }
+    .tab-content.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    .card { background: var(--card-bg); border-radius: 10px; padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+    .form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .form-group { flex: 1; min-width: 160px; }
+    label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: #5f6368; }
+    select, input[type="text"], input[type="password"], input[type="number"], input[type="date"] { width: 100%; padding: 10px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 15px; box-sizing: border-box; }
+    select:focus, input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(26,115,232,0.08); }
+    select:disabled, input:disabled { background: #f3f4f6; cursor: not-allowed; color: #6b7280; }
+
+    table { width: 100%; border-collapse: collapse; min-width: 320px; }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #f1f1f1; font-size: 14px; }
+    th { background: #fafafa; font-weight: 700; color: #5f6368; }
+    .row-error { background-color: #fff4f4; }
+
+    .btn-submit { background: var(--primary); color: white; border: none; padding: 12px 18px; font-size: 15px; font-weight: 700; border-radius: 8px; cursor: pointer; width: 100%; box-shadow: 0 2px 6px rgba(26,115,232,0.18); }
+    .btn-success { background: #34a853; }
+    .btn-action-group { display: flex; gap: 10px; margin-top: 12px; flex-wrap:wrap; }
+
+    #loading-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(255,255,255,0.92); z-index: 9999; display: flex; justify-content: center; align-items: center; font-size: 18px; font-weight: bold; color: var(--primary); flex-direction: column; }
+    #login-screen { position: fixed; top:0; left:0; right:0; bottom:0; background: var(--bg); z-index: 5000; display: flex; justify-content: center; align-items: center; padding: 20px; box-sizing:border-box; }
+
+    .radio-group { display: flex; gap: 12px; align-items: center; padding: 8px; border: 1px solid #eee; border-radius: 8px; background: #fafafa; }
+    .radio-group label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin:0; font-size:14px; color:#1a73e8; font-weight:700;}
+
+    .badge-status { padding: 4px 8px; border-radius: 8px; font-size: 12px; font-weight: 700; margin-left: 6px;}
+    .status-new { background: #fff4f4; color: #d93025; border: 1px solid #ffd3cf; }
+    .status-done { background: #f0fbf2; color: #137333; border: 1px solid #dff2df; }
+    .stats-bar { display: flex; gap: 12px; margin-bottom: 12px; padding: 8px; background: #fafafa; border-radius: 8px; border: 1px solid #eee; justify-content:center; flex-wrap:wrap; }
+    .stat-box { font-size: 14px; font-weight: 700; }
+
+    #modal-action { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; justify-content:center; align-items:center; }
+    .modal-box { background:white; padding: 20px; border-radius:12px; text-align:center; max-width: 420px; width:92%; box-shadow: 0 6px 20px rgba(0,0,0,0.12);}
+
+    /* POS Table & Search */
+    .table-container-pos { max-height: 46vh; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; margin-top: 12px; }
+    .table-container-pos thead th { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .qty-control { display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .qty-btn { width: 34px; height: 34px; border: none; background: #f3f4f6; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 16px;}
+    .qty-input { width: 60px !important; text-align: center; padding: 6px !important; border-radius:6px; }
+    .action-footer { background: #fafafa; padding: 12px; display: flex; justify-content: space-between; align-items: center; border-radius: 0 0 8px 8px; margin: 12px -16px -16px -16px; gap:12px; }
+    .total-qty { font-size: 15px; font-weight: 800; color: #d93025; background: #fff4f4; padding: 8px 12px; border-radius: 8px; border: 1px solid #ffdede;}
+    .scan-highlight { animation: flashSuccess 0.45s ease-out; }
+    @keyframes flashSuccess { 0% { background-color: #e6f4ea; } 100% { background-color: transparent; } }
+
+    #suggest-box { display: none; position: absolute; background: white; border: 1px solid #e6e6e6; max-height: 280px; overflow-y: auto; z-index: 999; box-shadow: 0 6px 18px rgba(0,0,0,0.08); border-radius: 8px; margin-top: 4px; }
+    .suggest-item { padding: 10px 12px; border-bottom: 1px solid #f3f3f3; cursor: pointer; }
+    .suggest-item:hover { background-color: #eef6ff; }
+    .sg-title { font-weight: 700; font-size: 14px; color: #111827; }
+    .sg-desc { font-size: 12px; color: #6b7280; margin-top: 4px; }
+
+    .item-card { background: white; border-radius: 10px; padding: 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border-left: 5px solid #1a73e8; border:1px solid #f3f4f6;}
+    .fixed-footer { position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 10px 12px; box-shadow: 0 -6px 20px rgba(0,0,0,0.06); z-index: 100; }
+
+    /* Responsive tweaks */
+    @media (max-width: 900px) {
+      .container { padding: 12px; }
+      .nav-tab { min-width: 100px; padding: 10px 8px; font-size: 13px; }
+      .header h2 { font-size: 17px; }
+      #user-info-badge { top:8px; right:8px; font-size:11px; padding:4px 8px; }
+      .card { padding: 12px; }
+      .btn-action-group { flex-direction: column; }
+      .action-footer { flex-direction: column; align-items: stretch; gap:10px; }
+    }
+
+    @media (max-width: 600px) {
+      .nav-tab { min-width: 90px; font-size: 13px; padding: 10px 8px; }
+      .form-row { gap: 8px; }
+      .form-group { min-width: 120px; }
+      th, td { padding: 8px; font-size: 13px; }
+      .qty-input { width: 48px !important; }
+      .btn-submit { padding: 12px; font-size: 15px; }
+      .container { padding-bottom: 160px; }
+      #login-screen .card { width: 100%; box-sizing:border-box; }
+      .table-container-pos { max-height: 52vh; }
+      .modal-box { width: 94%; }
+    }
+
+    @media (max-width: 480px) {
+      table { display: block; width: 100%; overflow-x: auto; }
+      th, td { white-space: nowrap; }
+      .nav-tabs { padding: 6px 8px; }
+      .action-footer { margin-left: -12px; margin-right: -12px; padding-left: 12px; padding-right:12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Loading -->
+  <div id="loading-overlay"><h2>⏳ Đang kết nối...</h2><span id="loading-text">Chờ chút nhé...</span></div>
+  
+  <!-- Màn Hình Đăng Nhập -->
+  <div id="login-screen">
+    <div class="card" style="width: 320px;">
+      <h2 style="text-align:center; color:var(--primary); margin-top:0;">ĐĂNG NHẬP</h2>
+      <p style="text-align:center; font-size:13px; color:gray;">Hệ thống Quản lý Kho</p>
+      <div class="form-group" style="margin-bottom:15px;"><label>Tài khoản</label><input type="text" id="lg-user" placeholder="Nhập tài khoản"></div>
+      <div class="form-group" style="margin-bottom:20px;"><label>Mật khẩu</label><input type="password" id="lg-pass" placeholder="Nhập mật khẩu"></div>
+      <button class="btn-submit" onclick="doLogin()">VÀO HỆ THỐNG</button>
+    </div>
+  </div>
+
+  <!-- Modal Xuất File sau khi tạo -->
+  <div id="modal-action">
+    <div class="modal-box">
+      <h3 style="color:#34a853; margin-top:0;">🎉 ĐÃ LƯU ĐƠN THÀNH CÔNG</h3>
+      <p style="font-size:16px;">Số phiếu: <b id="modal-sophieu" style="color:var(--primary);"></b></p>
+      <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
+        <button class="btn-submit" onclick="actionPrintNew()">🖨️ IN ĐƠN (WEB)</button>
+        <button class="btn-submit btn-success" onclick="actionExportNew()">📥 XUẤT RA FILE EXCEL</button>
+        <button class="btn-submit" style="background:#5f6368;" onclick="actionCloseModal()">➕ Đóng & Tạo đơn khác</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="header">
+    <h2>⚡ Quản Lý Kho</h2>
+    <div id="user-info-badge">👤 <span id="lbl-username">Guest</span></div>
+  </div>
+  
+  <div class="nav-tabs">
+    <div class="nav-tab active" onclick="switchTab('tab-tao-phieu')">📝 Tạo Đơn</div>
+    <div class="nav-tab" onclick="switchTab('tab-quan-ly')">🖨️ Quản Lý</div>
+    <div class="nav-tab" onclick="switchTab('tab-soan-hang')">📦 Soạn Hàng</div>
+    <div class="nav-tab" id="nav-tab-admin" style="display:none;" onclick="switchTab('tab-admin')">⚙️ Tài Khoản</div>
+  </div>
+
+  <div class="container" id="main-container">
+    
+    <!-- TAB 1: TẠO ĐƠN HÀNG / ĐIỀU CHUYỂN -->
+    <div id="tab-tao-phieu" class="tab-content active">
+      <div class="card">
+        <div class="form-group" style="margin-bottom:15px;">
+          <label>Loại Đơn:</label>
+          <div class="radio-group">
+            <label><input type="radio" name="loaiPhieu" value="DonHang" onchange="applyQuyenKho()" checked> Tạo Đơn Hàng (Lấy từ Q7)</label>
+            <label><input type="radio" name="loaiPhieu" value="DieuChuyen" onchange="applyQuyenKho()"> Đơn Điều Chuyển (Giữa các kho)</label>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Kho Xuất:</label><select id="select-kho-xuat"></select></div>
+          <div class="form-group"><label>Kho Nhận:</label><select id="select-kho-nhan"></select></div>
+        </div>
+      </div>
+      
+      <div class="card" style="padding-bottom: 20px; position: relative;">
+        <label>Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:</label>
+        <input type="text" id="input-scan" placeholder="Nhập để tìm kiếm hoặc quét mã..." autocomplete="off" onkeyup="handleSearchInput(event)" style="border: 2px solid var(--primary); font-size:16px; font-weight: bold; padding: 12px; background: #f8f9fa;">
+        
+        <div id="suggest-box"></div>
+
+        <div class="table-container-pos">
+          <table id="table-items">
+            <thead>
+              <tr><th width="5%">STT</th><th width="20%">Mã SP</th><th width="40%">Tên hàng hóa</th><th width="10%">ĐVT</th><th width="20%" style="text-align:center;">SL</th><th width="5%">❌</th></tr>
+            </thead>
+            <tbody id="tbody-items"></tbody>
+          </table>
+        </div>
+        <div class="action-footer">
+          <div class="total-qty">Tổng cộng: <span id="lbl-tong-sl">0</span> món</div>
+          <button id="btn-save-phieu" class="btn-submit" onclick="submitPhieuMoi()" style="width: auto; padding: 12px 30px; font-size: 16px;">💾 LƯU ĐƠN</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: QUẢN LÝ PHIẾU -->
+    <div id="tab-quan-ly" class="tab-content">
+      <div class="card">
+        <h3 style="margin-top:0; color:var(--primary);">Tra cứu & Quản lý</h3>
+        <div class="form-row">
+          <div class="form-group"><label>Lọc Kho Nhận:</label><select id="ql-kho-nhan" onchange="ql_loadPhieu()"><option value="all">-- Tất cả --</option></select></div>
+          <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="ql_loadPhieu()"></div>
+        </div>
+        <div class="stats-bar" id="ql-stats"></div>
+        <div class="form-group">
+          <label>📦 Chọn Phiếu để Xem / Sửa / Xuất In:</label>
+          <select id="ql-phieu" onchange="ql_onSelectPhieu()" style="border:2px solid var(--primary); font-weight:bold; color:var(--primary);"><option value="">-- Chọn Phiếu --</option></select>
+        </div>
+      </div>
+
+      <div id="ql-view-phieu" class="card" style="display:none; border: 2px solid #34a853;">
+        <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
+        <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
+        <div style="overflow-x: auto;">
+          <table id="ql-table">
+            <thead><tr><th width="5%">STT</th><th width="20%">Mã</th><th width="40%">Tên SP</th><th width="10%">Tồn</th><th width="20%" style="background:#e8f0fe;">Số Lượng</th></tr></thead>
+            <tbody id="ql-tbody"></tbody>
+          </table>
+        </div><br>
+        <div class="btn-action-group">
+          <button class="btn-submit" id="ql-btn-save" onclick="ql_luuSua()" style="background:#f29900; color:black;">💾 LƯU SỬA ĐỔI</button>
+          <button class="btn-submit" onclick="ql_inWeb_FromEdit()">🖨️ XUẤT IN</button>
+          <button class="btn-submit btn-success" onclick="ql_xuatExcel_FromEdit()">📥 EXCEL</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: SOẠN HÀNG MOBILE -->
+    <div id="tab-soan-hang" class="tab-content">
+      <div class="card">
+        <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
+        <div class="form-row">
+          <div class="form-group"><label>Ngày xem đơn:</label><select id="sh-ngay" onchange="sh_taiDanhSachDon()"><option value="today">Hôm nay</option><option value="yesterday">Hôm qua</option><option value="all">Tất cả</option></select></div>
+          <div class="form-group"><label>Số phiếu cần soạn:</label><select id="sh-phieu" onchange="sh_chonDonMobile()"><option value="">-- Đang tải --</option></select></div>
+        </div>
+        <div class="stats-bar" id="sh-stats"></div>
+      </div>
+      <div id="sh-list-container"><div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div></div>
+      <div class="fixed-footer" id="sh-footer" style="display:none;">
+        <div id="sh-status" style="text-align:center; margin-bottom:5px; font-weight:bold; color:#d93025; font-size:13px;"></div>
+        <button id="sh-btn-save" class="btn-submit btn-success" onclick="sh_luuPhieu()">✅ LƯU KẾT QUẢ SOẠN</button>
+      </div>
+    </div>
+
+    <!-- TAB 4: ADMIN QUẢN LÝ TÀI KHOẢN -->
+    <div id="tab-admin" class="tab-content">
+      <div class="card" style="border-left: 4px solid var(--primary);">
+        <h3 style="margin-top:0;">Tạo Tài Khoản Mới</h3>
+        <div class="form-row">
+          <div class="form-group"><label>Tên đăng nhập</label><input type="text" id="adm-user"></div>
+          <div class="form-group"><label>Mật khẩu</label><input type="text" id="adm-pass"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Phân quyền</label>
+            <select id="adm-role" onchange="checkAdminRole()">
+              <option value="Chi nhánh">Chi nhánh</option>
+              <option value="Admin">Admin (Toàn quyền)</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Quản lý Kho/Chi nhánh</label><select id="adm-store"></select></div>
+        </div>
+        <button class="btn-submit btn-success" onclick="taoTaiKhoan()">+ Tạo Tài Khoản</button>
+      </div>
+      
+      <div class="card">
+        <h3>Danh Sách Tài Khoản</h3>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>Tài khoản</th><th>Phân quyền</th><th>Chi nhánh quản lý</th></tr></thead>
+            <tbody id="adm-table-users"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
