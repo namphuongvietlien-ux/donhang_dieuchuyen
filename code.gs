@@ -39,6 +39,15 @@ function doPost(e) {
           case 'luuChinhSuaPhieu':
             result = luuChinhSuaPhieu(payload.payload || {});
             break;
+          case 'themChiTietPhieu':
+            result = themChiTietPhieu(payload.payload || {});
+            break;
+          case 'huyDongChiTietPhieu':
+            result = huyDongChiTietPhieu(payload.payload || {});
+            break;
+          case 'huyPhieu':
+            result = huyPhieu(payload.payload || {});
+            break;
           case 'taoTaiKhoanMoi':
             result = taoTaiKhoanMoi(payload.payload || {});
             break;
@@ -569,7 +578,7 @@ function luuPhieuTuWebApp(payload) {
     if (isNaN(slNum) || slNum <= 0) { coLoiDongNay = true; ghiChuLoi = "Lỗi số lượng"; slNum = 0; }
     if (!item.dvt || item.dvt === "Không tìm thấy" || item.dvt === "") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Lỗi ĐVT"; }
     if (item.maHang === "LỖI MÃ") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Mã không tồn tại"; }
-    dataLichSuArr.push([ homNay, soPhieu, payload.khoXuat, payload.khoNhan, item.maHang, item.maVach, item.tenHang, slNum, "", item.dvt, "", ghiChuLoi ]);
+    dataLichSuArr.push([ homNay, soPhieu, payload.khoXuat, payload.khoNhan, item.maHang, item.maVach, item.tenHang, slNum, "", item.dvt, "", ghiChuLoi, "Đang xử lý" ]);
     if (coLoiDongNay) coLoiCanDieuChinh = true;
   }
 
@@ -579,11 +588,12 @@ function luuPhieuTuWebApp(payload) {
     var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
     if (!historySheet) {
       historySheet = ss.insertSheet("Lịch Sử Xuất Kho");
-      historySheet.getRange("A1:L1").setValues([["Thời gian tạo", "Số Phiếu", "Xuất từ Kho", "Kho Nhận", "Mã hàng", "Mã vạch", "Tên hàng hóa", "Số lượng", "Số lượng thực tế", "ĐVT thực tế", "Ảnh xác nhận", "Ghi chú hệ thống"]]).setFontWeight("bold").setBackground("#d9ead3");
+      historySheet.getRange("A1:M1").setValues([["Thời gian tạo", "Số Phiếu", "Xuất từ Kho", "Kho Nhận", "Mã hàng", "Mã vạch", "Tên hàng hóa", "Số lượng", "Số lượng thực tế", "ĐVT thực tế", "Ảnh xác nhận", "Ghi chú hệ thống", "Trạng thái"]]).setFontWeight("bold").setBackground("#d9ead3");
       historySheet.setFrozenRows(1);
     }
+    ensureHistoryStatusColumn(historySheet);
     var lastRow = historySheet.getLastRow();
-    historySheet.getRange(lastRow + 1, 1, dataLichSuArr.length, 12).setValues(dataLichSuArr);
+    historySheet.getRange(lastRow + 1, 1, dataLichSuArr.length, 13).setValues(dataLichSuArr);
     historySheet.getRange(lastRow + 1, 1, dataLichSuArr.length, 1).setNumberFormat("dd/MM/yyyy HH:mm:ss");
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
@@ -607,7 +617,8 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
     var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
     var slThucTe = data[i][8];
-    var isDaXuLy = (slThucTe !== "" && Number(slThucTe) > 0);
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Đang xử lý";
+    var isDaXuLy = rowStatus === "Đã hủy đơn" || (slThucTe !== "" && Number(slThucTe) > 0);
     var thoiGian = rowNgay instanceof Date ? rowNgay.getTime() : "";
 
     if (!rowSoPhieu) continue;
@@ -628,9 +639,10 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     }
     
     if (!map[rowSoPhieu]) { 
-      map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: isDaXuLy ? "Đã xử lý" : "Mới" }; 
+      map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: rowStatus === "Đã hủy đơn" ? "Đã hủy" : (isDaXuLy ? "Đã xử lý" : "Mới") };
     } else {
-      if (isDaXuLy) map[rowSoPhieu].trangThai = "Đã xử lý"; 
+      if (rowStatus === "Đã hủy đơn") map[rowSoPhieu].trangThai = "Đã hủy";
+      else if (isDaXuLy && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xử lý";
     }
   }
   var res = []; for(var key in map) res.push(map[key]); 
@@ -645,7 +657,7 @@ function getChiTietPhieu(soPhieu, storeName) {
   var matchedRows = [];
   for (var i = 1; i < data.length; i++) { 
     if (data[i][1] && data[i][1].toString().toLowerCase() === soPhieu.toLowerCase()) {
-      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: data[i][7], dvt: data[i][9], ghiChu: data[i][11]||"" });
+      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: data[i][7], dvt: data[i][9], ghiChu: data[i][11]||"", trangThai: data[i][12] || "Đang xử lý" });
     }
   }
   var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
@@ -662,24 +674,118 @@ function getChiTietPhieu(soPhieu, storeName) {
   return matchedRows;
 }
 
+function ensureHistoryStatusColumn(historySheet) {
+  if (historySheet.getRange(1, 13).getValue() !== "Trạng thái") {
+    historySheet.getRange(1, 13).setValue("Trạng thái").setFontWeight("bold").setBackground("#d9ead3");
+  }
+}
+
+function getAuditSheet(ss) {
+  var sheet = ss.getSheetByName("Lịch Sử Thay Đổi Đơn");
+  if (!sheet) {
+    sheet = ss.insertSheet("Lịch Sử Thay Đổi Đơn");
+    sheet.appendRow(["Thời gian", "Số phiếu", "Hành động", "Người thực hiện", "Mã hàng hóa", "Mã vạch", "Giá trị cũ", "Giá trị mới", "Ghi chú"]);
+    sheet.getRange("A1:I1").setFontWeight("bold").setBackground("#d9ead3");
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function logOrderChange(ss, soPhieu, action, actor, maHang, maVach, oldValue, newValue, note) {
+  getAuditSheet(ss).appendRow([new Date(), soPhieu, action, actor, maHang || "", maVach || "", oldValue || "", newValue || "", note || ""]);
+}
+
+function requireAdmin(actor) {
+  var users = getDanhSachTaiKhoan();
+  var account = users.filter(function(user) { return String(user.user).trim() === String(actor || "").trim(); })[0];
+  if (!account || account.role !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
+}
+
 function luuChinhSuaPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  requireAdmin(payload.actor);
+  ensureHistoryStatusColumn(historySheet);
   var lock = LockService.getDocumentLock();
   try {
     lock.waitLock(10000);
     for (var i = 0; i < payload.updates.length; i++) {
       var u = payload.updates[i];
+      var oldSl = historySheet.getRange(u.row, 8).getValue();
+      var soPhieu = historySheet.getRange(u.row, 2).getValue();
+      var maHang = historySheet.getRange(u.row, 5).getValue();
+      var maVach = historySheet.getRange(u.row, 6).getValue();
       if (Number(u.valSl) === 0) {
          historySheet.getRange(u.row, 8).setValue(0);
-         historySheet.getRange(u.row, 12).setValue("Đã xóa khỏi phiếu");
+         historySheet.getRange(u.row, 12).setValue("Đã hủy dòng");
+         historySheet.getRange(u.row, 13).setValue("Đã hủy dòng");
+         logOrderChange(ss, soPhieu, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
       } else {
-         if (u.valSl !== "") historySheet.getRange(u.row, 8).setValue(Number(u.valSl));
-         historySheet.getRange(u.row, 12).clearContent(); 
+         if (u.valSl !== "") {
+           historySheet.getRange(u.row, 8).setValue(Number(u.valSl));
+           historySheet.getRange(u.row, 12).clearContent();
+           historySheet.getRange(u.row, 13).setValue("Đang xử lý");
+           if (Number(oldSl) !== Number(u.valSl)) logOrderChange(ss, soPhieu, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, u.valSl, "");
+         }
       }
     }
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
+  return { success: true };
+}
+
+function themChiTietPhieu(payload) {
+  requireAdmin(payload.actor);
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  if (!historySheet || !payload.soPhieu || !payload.item) throw new Error("Thiếu dữ liệu đơn hàng hoặc sản phẩm.");
+  ensureHistoryStatusColumn(historySheet);
+  var data = historySheet.getDataRange().getValues();
+  var baseRow = null;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1]).trim() === String(payload.soPhieu).trim()) { baseRow = data[i]; break; }
+  }
+  if (!baseRow) throw new Error("Không tìm thấy đơn hàng.");
+  var item = payload.item;
+  var quantity = Number(item.sl);
+  if (!quantity || quantity < 1) throw new Error("Số lượng thêm phải lớn hơn 0.");
+  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", item.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý"];
+  historySheet.appendRow(row);
+  logOrderChange(ss, payload.soPhieu, "Thêm mã vào đơn", payload.actor, item.maHang, item.maVach, "", quantity, item.tenHang || "");
+  return { success: true };
+}
+
+function huyDongChiTietPhieu(payload) {
+  requireAdmin(payload.actor);
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  ensureHistoryStatusColumn(historySheet);
+  var row = Number(payload.row);
+  if (!row || row < 2) throw new Error("Dòng đơn hàng không hợp lệ.");
+  var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
+  historySheet.getRange(row, 8).setValue(0);
+  historySheet.getRange(row, 12).setValue("Đã hủy dòng");
+  historySheet.getRange(row, 13).setValue("Đã hủy dòng");
+  logOrderChange(ss, values[1], "Hủy mã khỏi đơn", payload.actor, values[4], values[5], values[7], 0, "Hủy từng dòng");
+  return { success: true };
+}
+
+function huyPhieu(payload) {
+  requireAdmin(payload.actor);
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  ensureHistoryStatusColumn(historySheet);
+  var data = historySheet.getDataRange().getValues();
+  var found = false;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1]).trim() === String(payload.soPhieu).trim()) {
+      historySheet.getRange(i + 1, 13).setValue("Đã hủy đơn");
+      historySheet.getRange(i + 1, 12).setValue("Đã hủy đơn");
+      found = true;
+    }
+  }
+  if (!found) throw new Error("Không tìm thấy đơn hàng.");
+  logOrderChange(ss, payload.soPhieu, "Hủy đơn", payload.actor, "", "", "Đang xử lý", "Đã hủy đơn", payload.reason || "");
   return { success: true };
 }
 

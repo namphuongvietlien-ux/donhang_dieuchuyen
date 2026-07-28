@@ -265,6 +265,11 @@ function openDeepLinkedOrder() {
 function ql_hienThiChiTiet(phieu) {
   if (!phieu) return;
   currentPhieuObj = phieu;
+  var isAdmin = sessionUser.role === "Admin";
+  document.getElementById("ql-admin-actions").style.display = isAdmin ? "flex" : "none";
+  document.getElementById("ql-admin-column").style.display = isAdmin ? "table-cell" : "none";
+  document.getElementById("ql-btn-cancel-order").style.display = isAdmin ? "block" : "none";
+  document.getElementById("ql-btn-save").style.display = isAdmin ? "block" : "none";
   document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
   document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
   document.getElementById("ql-lbl-khonhan").innerText = currentPhieuObj.khoNhan + ' (' + (storeMap[currentPhieuObj.khoNhan] || '') + ')';
@@ -272,18 +277,60 @@ function ql_hienThiChiTiet(phieu) {
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
     hideLoad(); editRows = rows; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     rows.forEach((r, i) => {
-      if(r.slGoc === 0) return;
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+(r.ghiChu?'background:#fce8e6;':'')+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+'</td><td>'+r.stock+'</td><td><input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+r.slGoc+'" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td></tr>');
+      var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
+      var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
+      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+r.slGoc+'" '+(isCancelled || sessionUser.role !== "Admin" ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
+      var cancelButton = sessionUser.role === "Admin" ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '';
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled?'<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>':'')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
     });
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
 function ql_luuSua() {
+  if (sessionUser.role !== "Admin") return alert("Chỉ quản trị viên được phép sửa đơn.");
   showLoad("Đang lưu chỉnh sửa...");
   var inputs = document.querySelectorAll(".edit-sl-input"), updates = [];
-  inputs.forEach(ip => updates.push({ row: parseInt(ip.getAttribute("data-row")), valSl: ip.value }));
-  apiPost('luuChinhSuaPhieu', { updates: updates }).then(function() { hideLoad(); alert("✅ Đã lưu chỉnh sửa thành công!"); ql_onSelectPhieu(); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+  inputs.forEach(ip => { if (!ip.disabled) updates.push({ row: parseInt(ip.getAttribute("data-row")), valSl: ip.value }); });
+  apiPost('luuChinhSuaPhieu', { updates: updates, actor: sessionUser.user }).then(function(res) { hideLoad(); if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi."); alert("✅ Đã lưu chỉnh sửa thành công!"); ql_hienThiChiTiet(currentPhieuObj); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function ql_themMaHang() {
+  if (sessionUser.role !== "Admin") return;
+  var code = document.getElementById("ql-add-code").value.trim().toUpperCase();
+  var quantity = Number(document.getElementById("ql-add-qty").value);
+  var item = danhMucGoc[code] || filterProducts(code)[0];
+  if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
+  if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
+  showLoad("Đang thêm mã vào đơn...");
+  apiPost('themChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, item: { maHang: item.maHang, maVach: item.maVach, tenHang: item.tenHang, dvt: item.dvt, sl: quantity }, actor: sessionUser.user }).then(function(res) {
+    hideLoad();
+    if (!res.success) throw new Error(res.error || "Không thể thêm mã.");
+    document.getElementById("ql-add-code").value = "";
+    document.getElementById("ql-add-qty").value = "1";
+    ql_hienThiChiTiet(currentPhieuObj);
+  }).catch(function(err) { hideLoad(); alert('Lỗi: ' + err.message); });
+}
+
+function ql_huyDong(row) {
+  if (!confirm("Hủy mã hàng này khỏi đơn? Dữ liệu sẽ được lưu lịch sử.")) return;
+  showLoad("Đang hủy mã hàng...");
+  apiPost('huyDongChiTietPhieu', { row: row, actor: sessionUser.user }).then(function(res) {
+    hideLoad();
+    if (!res.success) throw new Error(res.error || "Không thể hủy mã.");
+    ql_hienThiChiTiet(currentPhieuObj);
+  }).catch(function(err) { hideLoad(); alert('Lỗi: ' + err.message); });
+}
+
+function ql_huyPhieu() {
+  if (!confirm("Hủy toàn bộ đơn " + currentPhieuObj.soPhieu + "? Đơn sẽ vẫn được giữ trong Google Sheet với trạng thái Đã hủy.")) return;
+  showLoad("Đang hủy đơn...");
+  apiPost('huyPhieu', { soPhieu: currentPhieuObj.soPhieu, actor: sessionUser.user }).then(function(res) {
+    hideLoad();
+    if (!res.success) throw new Error(res.error || "Không thể hủy đơn.");
+    alert("✅ Đơn đã được hủy và lưu lịch sử.");
+    ql_hienThiChiTiet(currentPhieuObj);
+  }).catch(function(err) { hideLoad(); alert('Lỗi: ' + err.message); });
 }
 
 function layItemsTuBangSua() {

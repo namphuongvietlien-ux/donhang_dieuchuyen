@@ -201,9 +201,14 @@
       <div id="ql-view-phieu" class="card" style="display:none; border: 2px solid #34a853;">
         <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
         <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
+        <div id="ql-admin-actions" class="form-row" style="display:none; align-items:end;">
+          <div class="form-group"><label>Thêm mã hàng hóa hoặc mã vạch</label><input type="text" id="ql-add-code" placeholder="Nhập mã hàng hóa / mã vạch"></div>
+          <div class="form-group" style="max-width:130px;"><label>Số lượng</label><input type="number" id="ql-add-qty" min="1" value="1"></div>
+          <div class="form-group" style="max-width:180px;"><button class="btn-submit btn-success" type="button" onclick="ql_themMaHang()">+ THÊM MÃ</button></div>
+        </div>
         <div style="overflow-x: auto;">
           <table id="ql-table">
-            <thead><tr><th width="5%">STT</th><th width="20%">Mã</th><th width="40%">Tên SP</th><th width="10%">Tồn</th><th width="20%" style="background:#e8f0fe;">Số Lượng</th></tr></thead>
+            <thead><tr><th width="5%">STT</th><th width="20%">Mã</th><th width="40%">Tên SP</th><th width="10%">Tồn</th><th width="20%" style="background:#e8f0fe;">Số Lượng</th><th id="ql-admin-column" style="display:none;">Thao tác</th></tr></thead>
             <tbody id="ql-tbody"></tbody>
           </table>
         </div><br>
@@ -211,6 +216,7 @@
           <button class="btn-submit" id="ql-btn-save" onclick="ql_luuSua()" style="background:#f29900; color:black;">💾 LƯU SỬA ĐỔI</button>
           <button class="btn-submit" onclick="ql_inWeb_FromEdit()">🖨️ XUẤT IN</button>
           <button class="btn-submit btn-success" onclick="ql_xuatExcel_FromEdit()">📥 EXCEL</button>
+          <button class="btn-submit" id="ql-btn-cancel-order" onclick="ql_huyPhieu()" style="display:none; background:#d93025;">HỦY TOÀN BỘ ĐƠN</button>
         </div>
       </div>
     </div>
