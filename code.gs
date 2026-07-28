@@ -29,6 +29,10 @@ function doPost(e) {
       try {
         var result = null;
         switch(action) {
+          case 'loginUser':
+            var credentials = payload.payload || {};
+            result = loginUser(credentials.username || '', credentials.password || '');
+            break;
           case 'luuPhieuTuWebApp':
             result = luuPhieuTuWebApp(payload.payload || {});
             break;
