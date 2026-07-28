@@ -9,4 +9,3 @@ build/
 .nyc_output/
 coverage/
 .idea/
-public/app.js
