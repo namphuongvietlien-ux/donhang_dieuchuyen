@@ -47,6 +47,7 @@ function doLogin() {
     if(res.success) {
       sessionUser = { user: res.username, role: res.role, store: res.store };
       document.getElementById("lbl-username").innerText = sessionUser.user + " (" + sessionUser.role + ")";
+      updateDashboardHero();
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("main-container").style.display = "block";
       initSystemData();
@@ -72,9 +73,17 @@ function initSystemData() {
     var elA = document.getElementById("adm-store"); if(elA) elA.innerHTML = '<option value="Tất cả">-- Chọn kho quản lý --</option>' + htmlStores;
 
     if (sessionUser.role === "Admin") { var nav = document.getElementById("nav-tab-admin"); if(nav) nav.style.display = "block"; }
+    updateDashboardHero();
     applyQuyenKho();
     openDeepLinkedOrder();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function updateDashboardHero() {
+  var heroRole = document.getElementById('hero-role');
+  var heroStore = document.getElementById('hero-store');
+  if (heroRole) heroRole.innerText = sessionUser.role || 'Guest';
+  if (heroStore) heroStore.innerText = sessionUser.store && sessionUser.store !== 'Tất cả' ? (storeMap[sessionUser.store] || sessionUser.store) : 'Tất cả';
 }
 
 function activateTab(tabId) {
@@ -180,6 +189,53 @@ function filterProducts(kw) {
   return scored.map(function(entry) { return entry.item; });
 }
 
+function positionSuggestionBox(box, inputEl) {
+  if (!box || !inputEl) return;
+  box.style.width = (inputEl.offsetWidth || 280) + "px";
+  box.style.left = (inputEl.offsetLeft || 0) + "px";
+  box.style.top = (inputEl.offsetTop + inputEl.offsetHeight + 6) + "px";
+}
+
+function ql_handleAddCodeInput(e) {
+  var inputEl = document.getElementById("ql-add-code");
+  var box = document.getElementById("ql-suggest-box");
+  if (!inputEl || !box) return;
+  var val = inputEl.value.trim();
+  positionSuggestionBox(box, inputEl);
+
+  if (val.length < 1) { box.style.display = "none"; return; }
+  if (e && e.key === "Enter") {
+    e.preventDefault();
+    box.style.display = "none";
+    ql_themMaHang();
+    return;
+  }
+
+  var results = filterProducts(val);
+  if (results.length === 0) {
+    box.innerHTML = '<div class="suggest-empty">Không tìm thấy sản phẩm phù hợp.</div>';
+    box.style.display = "block";
+    return;
+  }
+
+  var html = '';
+  results.slice(0, 8).forEach(function(item) {
+    var itemStr = encodeURIComponent(JSON.stringify(item));
+    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + '</div></div>';
+  });
+  box.innerHTML = html;
+  box.style.display = "block";
+}
+
+function ql_pickSuggestedItem(itemStr) {
+  var item = JSON.parse(decodeURIComponent(itemStr));
+  var input = document.getElementById("ql-add-code");
+  var box = document.getElementById("ql-suggest-box");
+  if (input) input.value = item.maHang;
+  if (box) box.style.display = "none";
+  ql_themMaHang(item);
+}
+
 function chonSanPhamFromSuggest(itemStr) {
   chonSanPham(JSON.parse(decodeURIComponent(itemStr)));
   document.getElementById("input-scan").value = ""; document.getElementById("suggest-box").style.display = "none"; document.getElementById("input-scan").focus();
@@ -192,7 +248,14 @@ function chonSanPham(it) {
   renderTable();
 }
 
-document.addEventListener("click", function(event) { var box = document.getElementById("suggest-box"); var input = document.getElementById("input-scan"); if (event.target !== box && event.target !== input && !box.contains(event.target)) box.style.display = "none"; });
+document.addEventListener("click", function(event) {
+  var box = document.getElementById("suggest-box");
+  var input = document.getElementById("input-scan");
+  var qlBox = document.getElementById("ql-suggest-box");
+  var qlInput = document.getElementById("ql-add-code");
+  if (box && event.target !== box && event.target !== input && !box.contains(event.target)) box.style.display = "none";
+  if (qlBox && event.target !== qlBox && event.target !== qlInput && !qlBox.contains(event.target)) qlBox.style.display = "none";
+});
 
 function thayDoiSoLuong(index, delta) { var currentSl = Number(arrItems[index].sl) || 0; var newSl = currentSl + delta; if (newSl > 0) { arrItems[index].sl = newSl; renderTable(); } }
 
@@ -296,9 +359,10 @@ function ql_hienThiChiTiet(phieu) {
   if (!phieu) return;
   currentPhieuObj = phieu;
   var isAdmin = sessionUser.role === "Admin";
-  document.getElementById("ql-admin-actions").style.display = isAdmin ? "flex" : "none";
-  document.getElementById("ql-admin-column").style.display = isAdmin ? "table-cell" : "none";
-  document.getElementById("ql-btn-cancel-order").style.display = isAdmin ? "block" : "none";
+  var canManageOrder = !!sessionUser.user;
+  document.getElementById("ql-admin-actions").style.display = canManageOrder ? "flex" : "none";
+  document.getElementById("ql-admin-column").style.display = canManageOrder ? "table-cell" : "none";
+  document.getElementById("ql-btn-cancel-order").style.display = canManageOrder ? "block" : "none";
   document.getElementById("ql-btn-save").style.display = isAdmin ? "block" : "none";
   document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
   document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
@@ -310,7 +374,7 @@ function ql_hienThiChiTiet(phieu) {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
       var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+r.slGoc+'" '+(isCancelled || sessionUser.role !== "Admin" ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
-      var cancelButton = sessionUser.role === "Admin" ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '';
+      var cancelButton = sessionUser.user ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '';
       tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled?'<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>':'')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
     });
     document.getElementById("ql-view-phieu").style.display = "block";
@@ -325,25 +389,27 @@ function ql_luuSua() {
   apiPost('luuChinhSuaPhieu', { updates: updates, actor: sessionUser.user }).then(function(res) { hideLoad(); if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi."); alert("✅ Đã lưu chỉnh sửa thành công!"); ql_hienThiChiTiet(currentPhieuObj); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
-function ql_themMaHang() {
-  if (sessionUser.role !== "Admin") return;
-  var code = document.getElementById("ql-add-code").value.trim().toUpperCase();
+function ql_themMaHang(itemOverride) {
+  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
+  var inputEl = document.getElementById("ql-add-code");
+  var code = (inputEl ? inputEl.value : "").trim().toUpperCase();
   var quantity = Number(document.getElementById("ql-add-qty").value);
-  var item = danhMucGoc[code] || filterProducts(code)[0];
+  var item = itemOverride || danhMucGoc[code] || filterProducts(code)[0];
   if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
   if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
   showLoad("Đang thêm mã vào đơn...");
   apiPost('themChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, item: { maHang: item.maHang, maVach: item.maVach, tenHang: item.tenHang, dvt: item.dvt, sl: quantity }, actor: sessionUser.user }).then(function(res) {
     hideLoad();
     if (!res.success) throw new Error(res.error || "Không thể thêm mã.");
-    document.getElementById("ql-add-code").value = "";
+    if (inputEl) inputEl.value = "";
     document.getElementById("ql-add-qty").value = "1";
+    document.getElementById("ql-suggest-box").style.display = "none";
     ql_hienThiChiTiet(currentPhieuObj);
   }).catch(function(err) { hideLoad(); alert('Lỗi: ' + err.message); });
 }
 
 function ql_huyDong(row) {
-  if (sessionUser.role !== "Admin") return alert("Chỉ quản trị viên được phép hủy mã khỏi đơn.");
+  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
   if (!confirm("Hủy mã hàng này khỏi đơn? Dữ liệu sẽ được lưu lịch sử.")) return;
   showLoad("Đang hủy mã hàng...");
   apiPost('huyDongChiTietPhieu', { row: row, actor: sessionUser.user }).then(function(res) {
@@ -354,6 +420,7 @@ function ql_huyDong(row) {
 }
 
 function ql_huyPhieu() {
+  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
   if (!confirm("Hủy toàn bộ đơn " + currentPhieuObj.soPhieu + "? Đơn sẽ vẫn được giữ trong Google Sheet với trạng thái Đã hủy.")) return;
   showLoad("Đang hủy đơn...");
   apiPost('huyPhieu', { soPhieu: currentPhieuObj.soPhieu, actor: sessionUser.user }).then(function(res) {

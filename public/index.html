@@ -8,24 +8,33 @@
     :root { --primary: #2563eb; --primary-dark: #1d4ed8; --accent: #14b8a6; --bg: #f4f7fb; --text: #0f172a; --muted: #64748b; --card-bg: #ffffff; --line: #e2e8f0; }
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: linear-gradient(135deg, #f8fbff 0%, #eef4ff 100%); color: var(--text); -webkit-font-smoothing: antialiased; }
-    .header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 16px 18px; text-align: center; box-shadow: 0 10px 30px rgba(37, 99, 235, 0.16); position: sticky; top: 0; z-index: 20; }
-    .header h2 { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: 0.2px; }
+    .header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 18px 20px 24px; text-align: center; box-shadow: 0 10px 30px rgba(37, 99, 235, 0.16); position: sticky; top: 0; z-index: 20; }
+    .header h2 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.2px; }
     #user-info-badge { position:absolute; right:12px; top:12px; font-size:12px; background:rgba(255,255,255,0.16); padding:6px 10px; border-radius:999px; backdrop-filter: blur(8px); }
 
-    .nav-tabs { display: flex; overflow-x: auto; background: rgba(255,255,255,0.9); border-bottom: 1px solid var(--line); -webkit-overflow-scrolling: touch; padding: 0 8px; gap: 8px; }
-    .nav-tab { flex: 0 0 auto; min-width: 112px; text-align: center; padding: 12px 10px; cursor: pointer; font-weight: 700; color: var(--muted); border-bottom: 3px solid transparent; transition: all 0.2s ease; white-space: nowrap; font-size: 14px; border-radius: 8px 8px 0 0; }
-    .nav-tab.active { color: var(--primary); border-bottom-color: var(--primary); background:#f8fbff; }
+    .nav-tabs { display: flex; overflow-x: auto; background: rgba(255,255,255,0.92); border: 1px solid rgba(226,232,240,0.95); -webkit-overflow-scrolling: touch; padding: 8px; gap: 8px; margin: 12px auto 0; max-width: 1180px; border-radius: 16px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05); }
+    .nav-tab { flex: 0 0 auto; min-width: 112px; text-align: center; padding: 10px 12px; cursor: pointer; font-weight: 700; color: var(--muted); border: 1px solid transparent; transition: all 0.2s ease; white-space: nowrap; font-size: 14px; border-radius: 999px; }
+    .nav-tab.active { color: white; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.16); }
     .container { padding: 16px; max-width: 1180px; margin: 0 auto; padding-bottom: 130px; display: none; box-sizing: border-box; }
     .tab-content { display: none; animation: fadeIn 0.22s ease; }
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
-    .card { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06); border: 1px solid rgba(226,232,240,0.9); }
+    .card { background: var(--card-bg); border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06); border: 1px solid rgba(226,232,240,0.9); transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(15, 23, 42, 0.09); border-color: rgba(37, 99, 235, 0.2); }
+    .dashboard-hero { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; background: linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%); border: 1px solid rgba(37, 99, 235, 0.14); }
+    .hero-copy h3 { margin: 0 0 6px; font-size: 18px; color: var(--primary-dark); }
+    .hero-copy p { margin: 0; color: var(--muted); font-size: 14px; }
+    .hero-chip { display: inline-block; margin-bottom: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(37, 99, 235, 0.1); color: var(--primary); font-size: 12px; font-weight: 700; }
+    .hero-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+    .mini-stat { min-width: 120px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; }
+    .mini-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .mini-stat strong { font-size: 14px; color: var(--text); }
     .form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
     .form-group { flex: 1; min-width: 160px; }
     label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--muted); }
-    select, input[type="text"], input[type="password"], input[type="number"], input[type="date"] { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 15px; box-sizing: border-box; background: #fcfdff; }
-    select:focus, input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12); }
+    select, input[type="text"], input[type="password"], input[type="number"], input[type="date"] { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 15px; box-sizing: border-box; background: #fcfdff; transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease; }
+    select:focus, input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12); transform: translateY(-1px); }
     select:disabled, input:disabled { background: #f8fafc; cursor: not-allowed; color: #64748b; }
 
     table { width: 100%; border-collapse: collapse; min-width: 320px; }
@@ -33,8 +42,8 @@
     th { background: #f8fafc; font-weight: 700; color: #475569; }
     .row-error { background-color: #fef2f2; }
 
-    .btn-submit { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; border: none; padding: 12px 18px; font-size: 15px; font-weight: 700; border-radius: 999px; cursor: pointer; width: 100%; box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16); transition: transform 0.15s ease, box-shadow 0.15s ease; }
-    .btn-submit:hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2); }
+    .btn-submit { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; border: none; padding: 12px 18px; font-size: 15px; font-weight: 700; border-radius: 999px; cursor: pointer; width: 100%; box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16); transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease; }
+    .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2); filter: brightness(1.02); }
     .btn-success { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); }
     .btn-action-group { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 
@@ -64,13 +73,15 @@
     .scan-highlight { animation: flashSuccess 0.45s ease-out; }
     @keyframes flashSuccess { 0% { background-color: #ecfdf5; } 100% { background-color: transparent; } }
 
-    #suggest-box { display: none; position: absolute; background: white; border: 1px solid #e2e8f0; max-height: 300px; overflow-y: auto; z-index: 999; box-shadow: 0 10px 25px rgba(15,23,42,0.08); border-radius: 12px; margin-top: 6px; }
-    .suggest-item { padding: 11px 12px; border-bottom: 1px solid #f8fafc; cursor: pointer; }
+    #suggest-box, #ql-suggest-box { display: none; position: absolute; background: white; border: 1px solid #e2e8f0; max-height: 300px; overflow-y: auto; z-index: 999; box-shadow: 0 10px 25px rgba(15,23,42,0.08); border-radius: 12px; margin-top: 6px; backdrop-filter: blur(8px); }
+    .suggest-item { padding: 11px 12px; border-bottom: 1px solid #f8fafc; cursor: pointer; transition: background-color 0.18s ease; }
     .suggest-item:hover { background-color: #f8fbff; }
+    .suggest-empty { padding: 12px; color: #d93025; text-align: center; font-weight: 600; font-size: 13px; }
     .sg-title { font-weight: 700; font-size: 14px; color: #0f172a; }
     .sg-desc { font-size: 12px; color: #64748b; margin-top: 4px; }
 
-    .item-card { background: white; border-radius: 12px; padding: 12px; margin-bottom: 10px; box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05); border: 1px solid #eef2f7; border-left: 4px solid var(--primary); }
+    .item-card { background: white; border-radius: 12px; padding: 12px; margin-bottom: 10px; box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05); border: 1px solid #eef2f7; border-left: 4px solid var(--primary); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .item-card:hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08); }
     .fixed-footer { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(255,255,255,0.96); padding: 10px 12px; box-shadow: 0 -10px 24px rgba(15,23,42,0.08); z-index: 100; backdrop-filter: blur(8px); }
 
     @media (max-width: 900px) {
@@ -146,6 +157,17 @@
   </div>
 
   <div class="container" id="main-container">
+    <div class="card dashboard-hero">
+      <div class="hero-copy">
+        <div class="hero-chip">⚡ Hệ thống vận hành kho</div>
+        <h3 id="hero-title">Quản lý đơn hàng và điều chuyển hiệu quả</h3>
+        <p>Giao diện được tối ưu cho thao tác nhanh, theo dõi đơn hàng rõ ràng và trải nghiệm mượt mà trên cả máy tính lẫn điện thoại.</p>
+      </div>
+      <div class="hero-stats">
+        <div class="mini-stat"><span class="mini-label">Vai trò</span><strong id="hero-role">Guest</strong></div>
+        <div class="mini-stat"><span class="mini-label">Kho quản lý</span><strong id="hero-store">-</strong></div>
+      </div>
+    </div>
     
     <!-- TAB 1: TẠO ĐƠN HÀNG / ĐIỀU CHUYỂN -->
     <div id="tab-tao-phieu" class="tab-content active">
@@ -203,7 +225,11 @@
         <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
         <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
         <div id="ql-admin-actions" class="form-row" style="display:none; align-items:end;">
-          <div class="form-group"><label>Thêm mã hàng hóa hoặc mã vạch</label><input type="text" id="ql-add-code" placeholder="Nhập mã hàng hóa / mã vạch"></div>
+          <div class="form-group" style="position:relative;">
+            <label>Thêm mã hàng hóa hoặc mã vạch</label>
+            <input type="text" id="ql-add-code" placeholder="Nhập mã hàng hóa / mã vạch" oninput="ql_handleAddCodeInput(event)" onkeydown="if(event.key === 'Enter'){ event.preventDefault(); ql_themMaHang(); }" autocomplete="off">
+            <div id="ql-suggest-box"></div>
+          </div>
           <div class="form-group" style="max-width:130px;"><label>Số lượng</label><input type="number" id="ql-add-qty" min="1" value="1"></div>
           <div class="form-group" style="max-width:180px;"><button class="btn-submit btn-success" type="button" onclick="ql_themMaHang()">+ THÊM MÃ</button></div>
         </div>

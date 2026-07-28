@@ -41,15 +41,15 @@ function doPost(e) {
             result = luuChinhSuaPhieu(payload.payload || {});
             break;
           case 'themChiTietPhieu':
-            requireAdminAction(action, payload.payload || {});
+            requireAuthenticatedAction(payload.payload || {});
             result = themChiTietPhieu(payload.payload || {});
             break;
           case 'huyDongChiTietPhieu':
-            requireAdminAction(action, payload.payload || {});
+            requireAuthenticatedAction(payload.payload || {});
             result = huyDongChiTietPhieu(payload.payload || {});
             break;
           case 'huyPhieu':
-            requireAdminAction(action, payload.payload || {});
+            requireAuthenticatedAction(payload.payload || {});
             result = huyPhieu(payload.payload || {});
             break;
           case 'taoTaiKhoanMoi':
@@ -396,7 +396,7 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
   var typeLabel = soPhieu.indexOf("DH") !== -1 ? "ĐƠN HÀNG MỚI" : "LỆNH ĐIỀU CHUYỂN MỚI";
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
   var knShort = STORE_MAP[khoNhan] || khoNhan;
-  var text = "📦 *" + typeLabel + "*\n" +
+  var text = "📦 *THÔNG BÁO " + typeLabel + "*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
@@ -410,7 +410,7 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
 
 function sendTelegramOrderReady(soPhieu, khoNhan) {
   var knShort = STORE_MAP[khoNhan] || khoNhan;
-  var text = "✅ *Đã hoàn thành soạn hàng!*\n" +
+  var text = "✅ *ĐÃ HOÀN THÀNH SOẠN HÀNG*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n\n" +
              "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
@@ -419,6 +419,27 @@ function sendTelegramOrderReady(soPhieu, khoNhan) {
   }
   if (khoNhan) {
     sendTelegramTextToStoreUsers(khoNhan, text);
+  }
+}
+
+function sendTelegramOrderCancelled(soPhieu, khoXuat, khoNhan, actor, reason) {
+  var kxShort = STORE_MAP[khoXuat] || khoXuat;
+  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var reasonText = reason ? "\n*Lý do:* " + reason : "";
+  var text = "🛑 *ĐÃ HỦY ĐƠN HÀNG*\n" +
+             "*Số phiếu:* " + soPhieu + "\n" +
+             "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
+             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
+             "*Người hủy:* " + (actor || "Không xác định") + reasonText + "\n\n" +
+             "Thông tin này đã được lưu vào lịch sử đơn hàng.";
+  if (TELEGRAM_CHAT_ID) {
+    sendTelegramText(TELEGRAM_CHAT_ID, text);
+  }
+  var targetStores = [];
+  if (khoNhan) targetStores.push(khoNhan);
+  if (khoXuat) targetStores.push(khoXuat);
+  if (targetStores.length) {
+    sendTelegramTextToStores(targetStores, "⚠️ Đơn hàng đã bị hủy:\n" + text);
   }
 }
 
@@ -713,10 +734,17 @@ function isAdminActor(actor) {
   return !!(account && String(account.role).trim() === "Admin");
 }
 
+function requireAuthenticatedAction(payload) {
+  var actor = payload && payload.actor ? payload.actor : "";
+  if (!actor) throw new Error("Thiếu thông tin người thực hiện.");
+  var account = getAccountByActor(actor);
+  if (!account) throw new Error("Tài khoản không tồn tại.");
+}
+
 function requireAdminAction(action, payload) {
-  var adminActions = ['luuChinhSuaPhieu', 'themChiTietPhieu', 'huyDongChiTietPhieu', 'huyPhieu', 'taoTaiKhoanMoi'];
+  var adminActions = ['luuChinhSuaPhieu', 'taoTaiKhoanMoi'];
   if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
-    throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
+    throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
   }
 }
 
@@ -801,6 +829,7 @@ function huyPhieu(payload) {
   ensureHistoryStatusColumn(historySheet);
   var data = historySheet.getDataRange().getValues();
   var found = false;
+  var orderInfo = getThongTinPhieu(payload.soPhieu);
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][1]).trim() === String(payload.soPhieu).trim()) {
       historySheet.getRange(i + 1, 13).setValue("Đã hủy đơn");
@@ -810,6 +839,9 @@ function huyPhieu(payload) {
   }
   if (!found) throw new Error("Không tìm thấy đơn hàng.");
   logOrderChange(ss, payload.soPhieu, "Hủy đơn", payload.actor, "", "", "Đang xử lý", "Đã hủy đơn", payload.reason || "");
+  if (orderInfo) {
+    sendTelegramOrderCancelled(payload.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, payload.actor, payload.reason || "");
+  }
   return { success: true };
 }
 
