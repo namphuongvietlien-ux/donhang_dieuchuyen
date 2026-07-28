@@ -37,18 +37,23 @@ function doPost(e) {
             result = luuPhieuTuWebApp(payload.payload || {});
             break;
           case 'luuChinhSuaPhieu':
+            requireAdminAction(action, payload.payload || {});
             result = luuChinhSuaPhieu(payload.payload || {});
             break;
           case 'themChiTietPhieu':
+            requireAdminAction(action, payload.payload || {});
             result = themChiTietPhieu(payload.payload || {});
             break;
           case 'huyDongChiTietPhieu':
+            requireAdminAction(action, payload.payload || {});
             result = huyDongChiTietPhieu(payload.payload || {});
             break;
           case 'huyPhieu':
+            requireAdminAction(action, payload.payload || {});
             result = huyPhieu(payload.payload || {});
             break;
           case 'taoTaiKhoanMoi':
+            requireAdminAction(action, payload.payload || {});
             result = taoTaiKhoanMoi(payload.payload || {});
             break;
           case 'luuSoSoanHangVaAnh':
@@ -695,10 +700,29 @@ function logOrderChange(ss, soPhieu, action, actor, maHang, maVach, oldValue, ne
   getAuditSheet(ss).appendRow([new Date(), soPhieu, action, actor, maHang || "", maVach || "", oldValue || "", newValue || "", note || ""]);
 }
 
-function requireAdmin(actor) {
+function getAccountByActor(actor) {
   var users = getDanhSachTaiKhoan();
-  var account = users.filter(function(user) { return String(user.user).trim() === String(actor || "").trim(); })[0];
-  if (!account || account.role !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
+  for (var i = 0; i < users.length; i++) {
+    if (String(users[i].user).trim() === String(actor || "").trim()) return users[i];
+  }
+  return null;
+}
+
+function isAdminActor(actor) {
+  var account = getAccountByActor(actor);
+  return !!(account && String(account.role).trim() === "Admin");
+}
+
+function requireAdminAction(action, payload) {
+  var adminActions = ['luuChinhSuaPhieu', 'themChiTietPhieu', 'huyDongChiTietPhieu', 'huyPhieu', 'taoTaiKhoanMoi'];
+  if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
+    throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
+  }
+}
+
+function requireAdmin(actor) {
+  var account = getAccountByActor(actor);
+  if (!account || String(account.role).trim() !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
 }
 
 function luuChinhSuaPhieu(payload) {

@@ -111,13 +111,38 @@ function applyQuyenKho() {
 }
 
 // ================= TÌM KIẾM & TẠO PHIẾU =================
+function normalizeSearchText(value) {
+  return String(value || "").toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function getSearchScore(item, query) {
+  var score = 0;
+  var fields = [item.maHang, item.maVach, item.tenHang];
+  var q = normalizeSearchText(query);
+  if (!q) return 0;
+  fields.forEach(function(field) {
+    var norm = normalizeSearchText(field);
+    if (!norm) return;
+    if (norm === q) score += 1000;
+    else if (norm.indexOf(q) === 0) score += 600;
+    else if (norm.indexOf(q) !== -1) score += 250;
+    else {
+      var parts = q.split(/\s+/).filter(Boolean);
+      var matchedParts = parts.filter(function(part) { return norm.indexOf(part) !== -1; }).length;
+      if (matchedParts > 0) score += matchedParts * 80;
+    }
+    if (field === item.maVach && norm.length >= 6 && q.length >= 6 && norm.slice(-6) === q.slice(-6)) score += 180;
+  });
+  return score;
+}
+
 function handleSearchInput(e) {
   var inputEl = document.getElementById("input-scan");
   var val = inputEl.value.trim();
   var box = document.getElementById("suggest-box");
   box.style.width = (inputEl.offsetWidth) + "px"; box.style.left = (inputEl.offsetLeft) + "px"; box.style.top = (inputEl.offsetTop + inputEl.offsetHeight) + "px";
 
-  if (val.length < 2) { box.style.display = "none"; return; }
+  if (val.length < 1) { box.style.display = "none"; return; }
   var kw = val.toUpperCase();
 
   if (e.key === "Enter") {
@@ -132,22 +157,27 @@ function handleSearchInput(e) {
   }
 
   var results = filterProducts(kw);
-  if (results.length === 0) { box.innerHTML = '<div style="padding:10px; color:red; text-align:center;">Không tìm thấy!</div>'; box.style.display = "block"; return; }
+  if (results.length === 0) { box.innerHTML = '<div style="padding:10px; color:#d93025; text-align:center; font-weight:600;">Không tìm thấy sản phẩm phù hợp.</div>'; box.style.display = "block"; return; }
 
   var html = "";
   results.slice(0, 10).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc">Mã hàng hóa: <b>' + item.maHang + '</b> | Mã vạch: <b>' + item.maVach + '</b></div></div>';
+    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + '</div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
 
 function filterProducts(kw) {
-  return danhMucArr.filter(function(it) {
-    var maH = it.maHang ? it.maHang.toUpperCase() : ""; var maV = it.maVach ? it.maVach.toUpperCase() : ""; var tenH = it.tenHang ? it.tenHang.toUpperCase() : "";
-    var s6Vach = maV.length >= 6 ? maV.substring(maV.length - 6) : maV;
-    return maH.indexOf(kw) !== -1 || maV.indexOf(kw) !== -1 || tenH.indexOf(kw) !== -1 || s6Vach.indexOf(kw) !== -1;
+  var query = normalizeSearchText(kw);
+  if (!query) return [];
+  var scored = danhMucArr.map(function(it) {
+    return { item: it, score: getSearchScore(it, query) };
+  }).filter(function(entry) {
+    return entry.score > 0;
+  }).sort(function(a, b) {
+    return b.score - a.score || String(a.item.tenHang || "").localeCompare(String(b.item.tenHang || ""));
   });
+  return scored.map(function(entry) { return entry.item; });
 }
 
 function chonSanPhamFromSuggest(itemStr) {
@@ -313,6 +343,7 @@ function ql_themMaHang() {
 }
 
 function ql_huyDong(row) {
+  if (sessionUser.role !== "Admin") return alert("Chỉ quản trị viên được phép hủy mã khỏi đơn.");
   if (!confirm("Hủy mã hàng này khỏi đơn? Dữ liệu sẽ được lưu lịch sử.")) return;
   showLoad("Đang hủy mã hàng...");
   apiPost('huyDongChiTietPhieu', { row: row, actor: sessionUser.user }).then(function(res) {
