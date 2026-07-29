@@ -441,7 +441,7 @@ function confirm_onSelectPhieu() {
     rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
       var packedQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? Number(r.slThucTe) : Number(r.slGoc || 0);
       var inputValue = packedQty;
-      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td style="font-weight:700;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
+      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td style="font-weight:700;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
     });
     viewEl.style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
@@ -460,7 +460,8 @@ function confirm_xacNhanNhanHang() {
   document.querySelectorAll(".confirm-qty-input").forEach(function(inputEl) {
     var row = parseInt(inputEl.getAttribute("data-row"));
     var qty = Number(inputEl.value);
-    if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty });
+    var previousQty = Number(inputEl.getAttribute("data-previous") || 0);
+    if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty, previousQty: previousQty });
   });
   if (!confirmations.length) return alert("Không có dữ liệu xác nhận.");
   showLoad("Đang lưu xác nhận...");

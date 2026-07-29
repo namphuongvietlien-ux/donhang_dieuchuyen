@@ -492,14 +492,16 @@ function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, tot
   }
 }
 
-function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirmedTotal) {
+function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirmedTotal, changedCount, changedQtyTotal) {
   var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var detailText = changedCount > 0 ? "*Dòng có thay đổi số thực nhận:* " + changedCount + "\n" + "*Tổng số lượng thay đổi:* " + changedQtyTotal + "\n" : "*Không có dòng nào thay đổi số thực nhận.*\n";
   var text = "📥 *XÁC NHẬN NHẬN HÀNG*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
              "*Số dòng xác nhận:* " + count + "\n" +
              "*Người xác nhận:* " + (actor || "Không xác định") + "\n" +
-             "*Tổng số lượng đã xác nhận:* " + confirmedTotal + "\n\n" +
+             "*Tổng số lượng đã xác nhận:* " + confirmedTotal + "\n" +
+             detailText +
              "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu, "xac-nhan");
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
@@ -998,19 +1000,28 @@ function xacNhanNhanHang(payload) {
   var confirmations = payload.confirmations || [];
   if (!confirmations.length) throw new Error("Không có dữ liệu xác nhận.");
   var confirmedTotal = 0;
+  var changedCount = 0;
+  var changedQtyTotal = 0;
   for (var i = 0; i < confirmations.length; i++) {
     var conf = confirmations[i];
     var row = Number(conf.row);
     var qty = Number(conf.receivedQty);
     if (!row || row < 2 || isNaN(qty) || qty < 0) continue;
     var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
+    var requestedQty = Number(values[7]) || 0;
+    var previousQty = Number(conf.previousQty) || 0;
+    var actualChanged = qty !== previousQty;
+    if (actualChanged) {
+      changedCount += 1;
+      changedQtyTotal += Math.abs(qty - previousQty);
+    }
     receiveSheet.appendRow([new Date(), payload.soPhieu, expectedStore, payload.actor, values[4] || "", values[5] || "", values[6] || "", qty, values[7] || 0, "Đã xác nhận nhận hàng"]);
     logOrderChange(ss, payload.soPhieu, "Xác nhận nhận hàng", payload.actor, values[4], values[5], values[7], qty, "Xác nhận bởi chi nhánh");
     confirmedTotal += qty;
   }
   var orderInfo = getThongTinPhieu(payload.soPhieu);
   if (orderInfo) {
-    sendTelegramReceiveConfirmation(payload.soPhieu, orderInfo.khoNhan || expectedStore, payload.actor, confirmations.length, confirmedTotal);
+    sendTelegramReceiveConfirmation(payload.soPhieu, orderInfo.khoNhan || expectedStore, payload.actor, confirmations.length, confirmedTotal, changedCount, changedQtyTotal);
   }
   return { success: true, count: confirmations.length };
 }
@@ -1046,6 +1057,27 @@ function taoFileExcelVaLayLink(payload) {
   }
   SpreadsheetApp.flush();
   return { success: true, url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/export?format=xlsx&gid=" + targetSheet.getSheetId() };
+}
+
+function taoPreviewPublicUrl(soPhieu, khoXuat, khoNhan, rows) {
+  var ss = getSS();
+  var previewSheetName = "Preview_" + soPhieu.replace(/[^A-Za-z0-9]/g, "_");
+  var existing = ss.getSheetByName(previewSheetName);
+  if (existing) ss.deleteSheet(existing);
+  var sheet = ss.insertSheet(previewSheetName);
+  sheet.getRange("A1:G1").setValues([["Số phiếu", "Kho xuất", "Kho nhận", "Mã hàng", "Mã vạch", "Tên hàng", "Số thực nhận"]]).setFontWeight("bold");
+  var data = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    data.push([soPhieu, khoXuat, khoNhan, r.maHang || "", r.maVach || "", r.tenHang || "", r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "" ? r.slThucTe : r.slGoc || 0]);
+  }
+  if (data.length > 0) {
+    sheet.getRange(2, 1, data.length, 7).setValues(data);
+  }
+  sheet.autoResizeColumns(1, 7);
+  SpreadsheetApp.flush();
+  var url = "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + sheet.getSheetId();
+  return { success: true, url: url };
 }
 
 // --- API: SOẠN HÀNG MOBILE ---
