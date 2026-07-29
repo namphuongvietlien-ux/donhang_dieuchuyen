@@ -241,6 +241,13 @@
         <div class="form-row">
           <div class="form-group"><label>Lọc Kho Nhận:</label><select id="ql-kho-nhan" onchange="ql_loadPhieu()"><option value="all">-- Tất cả --</option></select></div>
           <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="ql_loadPhieu()"></div>
+          <div class="form-group"><label>Chọn nhanh:</label><select id="ql-ngay-fast" onchange="setQuickDateFilter(this.value, 'ql-ngay'); ql_loadPhieu()">
+            <option value="">-- Tùy chọn --</option>
+            <option value="today">Hôm nay</option>
+            <option value="yesterday">Hôm qua</option>
+            <option value="7days">7 ngày gần đây</option>
+            <option value="all">Tất cả</option>
+          </select></div>
         </div>
         <div class="stats-bar" id="ql-stats"></div>
         <div class="form-group">
@@ -282,6 +289,22 @@
     <div id="tab-xac-nhan" class="tab-content">
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📥 Xác nhận nhận hàng</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>📅 Lọc theo ngày</label>
+            <input type="date" id="confirm-ngay" onchange="confirm_loadPhieu()">
+          </div>
+          <div class="form-group">
+            <label>⚡ Chọn nhanh</label>
+            <select id="confirm-ngay-fast" onchange="setQuickDateFilter(this.value, 'confirm-ngay'); confirm_loadPhieu()">
+              <option value="">-- Tùy chọn --</option>
+              <option value="today">Hôm nay</option>
+              <option value="yesterday">Hôm qua</option>
+              <option value="7days">7 ngày gần đây</option>
+              <option value="all">Tất cả</option>
+            </select>
+          </div>
+        </div>
         <div class="form-group">
           <label>📦 Chọn phiếu để xác nhận</label>
           <select id="confirm-phieu" onchange="confirm_onSelectPhieu()" style="border:2px solid var(--primary); font-weight:bold; color:var(--primary);"><option value="">-- Chọn Phiếu --</option></select>

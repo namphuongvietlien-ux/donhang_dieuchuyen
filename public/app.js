@@ -378,6 +378,27 @@ function executeExportExcel(soPhieu, khoXuat, khoNhan, itemsArray) {
 }
 
 // ================= QUẢN LÝ PHIẾU =================
+function setQuickDateFilter(value, targetId) {
+  var inputEl = document.getElementById(targetId);
+  if (!inputEl) return;
+  if (!value) { inputEl.value = ''; return; }
+  var today = new Date();
+  if (value === 'today') {
+    var yyyy = today.getFullYear(); var mm = String(today.getMonth()+1).padStart(2,'0'); var dd = String(today.getDate()).padStart(2,'0');
+    inputEl.value = yyyy + '-' + mm + '-' + dd;
+  } else if (value === 'yesterday') {
+    var y = new Date(today); y.setDate(today.getDate() - 1);
+    var yy = y.getFullYear(); var ym = String(y.getMonth()+1).padStart(2,'0'); var yd = String(y.getDate()).padStart(2,'0');
+    inputEl.value = yy + '-' + ym + '-' + yd;
+  } else if (value === '7days') {
+    var d7 = new Date(today); d7.setDate(today.getDate() - 6);
+    var y7 = d7.getFullYear(); var m7 = String(d7.getMonth()+1).padStart(2,'0'); var day7 = String(d7.getDate()).padStart(2,'0');
+    inputEl.value = y7 + '-' + m7 + '-' + day7;
+  } else if (value === 'all') {
+    inputEl.value = '';
+  }
+}
+
 function ql_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("ql-phieu");
   if (!selectEl) return;
@@ -412,7 +433,7 @@ function confirm_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("confirm-phieu");
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
-  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: document.getElementById("ql-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
+  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: document.getElementById("confirm-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
     var html = '<option value="">-- Chọn Phiếu --</option>';
     res.forEach(function(r) {
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
