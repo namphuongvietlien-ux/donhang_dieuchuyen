@@ -68,6 +68,9 @@
     .qty-control { display: flex; align-items: center; justify-content: center; gap: 6px; }
     .qty-btn { width: 34px; height: 34px; border: none; background: #f1f5f9; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 16px; color: var(--primary); }
     .qty-input { width: 60px !important; text-align: center; padding: 6px !important; border-radius:8px; }
+    .confirm-qty-input { width: 88px; text-align: center; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 15px; font-weight: 700; }
+    .confirm-qty-input.changed { background: #fef2f2; border-color: #f87171; color: #b91c1c; }
+    .confirm-qty-input.same { background: #f0fdf4; border-color: #86efac; color: #166534; }
     .action-footer { background: linear-gradient(135deg, #f8fbff 0%, #f1f5f9 100%); padding: 12px; display: flex; justify-content: space-between; align-items: center; border-radius: 0 0 12px 12px; margin: 12px -16px -16px -16px; gap:12px; }
     .total-qty { font-size: 15px; font-weight: 800; color: #dc2626; background: #fef2f2; padding: 8px 12px; border-radius: 999px; border: 1px solid #fecaca;}
     .scan-highlight { animation: flashSuccess 0.45s ease-out; }
@@ -152,9 +155,7 @@
   <div class="nav-tabs">
     <div class="nav-tab active" onclick="switchTab('tab-tao-phieu')">📝 Tạo Đơn</div>
     <div class="nav-tab" onclick="switchTab('tab-quan-ly')">🖨️ Quản Lý</div>
-    <div class="nav-tab" onclick="switchTab('tab-soan-hang')">📦 Soạn Hàng</div>
-    <div class="nav-tab" id="nav-tab-admin" style="display:none;" onclick="switchTab('tab-admin')">⚙️ Tài Khoản</div>
-  </div>
+    <div class="nav-tab" onclick="switchTab('tab-xac-nhan')">📥 Xác Nhận</div>
 
   <div class="container" id="main-container">
     <div class="card dashboard-hero">
@@ -167,6 +168,16 @@
         <div class="mini-stat"><span class="mini-label">Vai trò</span><strong id="hero-role">Guest</strong></div>
         <div class="mini-stat"><span class="mini-label">Kho quản lý</span><strong id="hero-store">-</strong></div>
       </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--primary);">🔐 Đổi mật khẩu</h3>
+      <div class="form-row">
+        <div class="form-group"><label>Mật khẩu hiện tại</label><input type="password" id="pw-current" placeholder="Nhập mật khẩu hiện tại"></div>
+        <div class="form-group"><label>Mật khẩu mới</label><input type="password" id="pw-new" placeholder="Nhập mật khẩu mới"></div>
+        <div class="form-group"><label>Xác nhận mật khẩu mới</label><input type="password" id="pw-confirm" placeholder="Nhập lại mật khẩu mới"></div>
+      </div>
+      <button class="btn-submit btn-success" type="button" onclick="doiMatKhau()">🔐 ĐỔI MẬT KHẨU</button>
     </div>
     
     <!-- TAB 1: TẠO ĐƠN HÀNG / ĐIỀU CHUYỂN -->
@@ -240,12 +251,7 @@
             <tbody id="ql-tbody"></tbody>
           </table>
         </div>
-        <div id="ql-receive-panel" style="display:none; margin-top:12px; padding:12px; border:1px solid #c8e6c9; border-radius:8px; background:#f7fbf7;">
-          <h4 style="margin-top:0; color:#137333;">✅ Xác nhận nhận hàng</h4>
-          <p style="margin-top:0; font-size:13px; color:gray;">Nhập số lượng thực nhận cho từng dòng để lưu xác nhận cho chi nhánh.</p>
-          <div id="ql-receive-list"></div>
-          <button class="btn-submit btn-success" type="button" onclick="ql_xacNhanNhanHang()">✅ XÁC NHẬN NHẬN HÀNG</button>
-        </div><br>
+        <br>
         <div class="btn-action-group">
           <button class="btn-submit" id="ql-btn-save" onclick="ql_luuSua()" style="background:#f29900; color:black;">💾 LƯU SỬA ĐỔI</button>
           <button class="btn-submit" onclick="ql_inWeb_FromEdit()">🖨️ XUẤT IN</button>
@@ -255,7 +261,31 @@
       </div>
     </div>
 
-    <!-- TAB 3: SOẠN HÀNG MOBILE -->
+    <!-- TAB 3: XÁC NHẬN NHẬN HÀNG -->
+    <div id="tab-xac-nhan" class="tab-content">
+      <div class="card">
+        <h3 style="margin-top:0; color:var(--primary);">📥 Xác nhận nhận hàng</h3>
+        <div class="form-group">
+          <label>📦 Chọn phiếu để xác nhận</label>
+          <select id="confirm-phieu" onchange="confirm_onSelectPhieu()" style="border:2px solid var(--primary); font-weight:bold; color:var(--primary);"><option value="">-- Chọn Phiếu --</option></select>
+        </div>
+      </div>
+      <div id="confirm-view" class="card" style="display:none; border:2px solid #34a853;">
+        <h3 style="margin-top:0;">Chi tiết xác nhận: <span id="confirm-lbl-sophieu" style="color:#d93025;"></span></h3>
+        <p style="font-size:13px; color:gray;" id="confirm-meta"></p>
+        <div style="overflow-x:auto;">
+          <table id="confirm-table">
+            <thead><tr><th width="5%">STT</th><th width="35%">Mã / Tên hàng</th><th width="12%">SL soạn</th><th width="12%">SL xác nhận</th></tr></thead>
+            <tbody id="confirm-tbody"></tbody>
+          </table>
+        </div>
+        <div class="btn-action-group" style="margin-top:16px;">
+          <button class="btn-submit btn-success" type="button" onclick="confirm_xacNhanNhanHang()">✅ LƯU XÁC NHẬN</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: SOẠN HÀNG MOBILE -->
     <div id="tab-soan-hang" class="tab-content">
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
@@ -272,7 +302,7 @@
       </div>
     </div>
 
-    <!-- TAB 4: ADMIN QUẢN LÝ TÀI KHOẢN -->
+    <!-- TAB 5: ADMIN QUẢN LÝ TÀI KHOẢN -->
     <div id="tab-admin" class="tab-content">
       <div class="card" style="border-left: 4px solid var(--primary);">
         <h3 style="margin-top:0;">Tạo Tài Khoản Mới</h3>

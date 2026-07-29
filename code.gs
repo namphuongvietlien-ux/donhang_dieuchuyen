@@ -56,6 +56,9 @@ function doPost(e) {
             requireAdminAction(action, payload.payload || {});
             result = taoTaiKhoanMoi(payload.payload || {});
             break;
+          case 'doiMatKhau':
+            result = doiMatKhau(payload.payload || {});
+            break;
           case 'luuSoSoanHangVaAnh':
             result = luuSoSoanHangVaAnh(payload.payload || {});
             break;
@@ -392,8 +395,9 @@ function sendTelegramTextToStores(storeNames, text) {
   });
 }
 
-function getOrderWebUrl(soPhieu) {
-  return WEB_APP_URL + "?tab=quan-ly&soPhieu=" + encodeURIComponent(soPhieu);
+function getOrderWebUrl(soPhieu, tabName) {
+  var tab = tabName || "quan-ly";
+  return WEB_APP_URL + "?tab=" + encodeURIComponent(tab) + "&soPhieu=" + encodeURIComponent(soPhieu);
 }
 
 function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
@@ -493,7 +497,7 @@ function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirm
              "*Số dòng xác nhận:* " + count + "\n" +
              "*Người xác nhận:* " + (actor || "Không xác định") + "\n" +
              "*Tổng số lượng đã xác nhận:* " + confirmedTotal + "\n\n" +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
+             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu, "xac-nhan");
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -583,6 +587,30 @@ function taoTaiKhoanMoi(payload) {
   for (var i = 1; i < data.length; i++) { if (String(data[i][0]).trim() === payload.user) return { success: false, msg: "Tên đăng nhập đã tồn tại!" }; }
   sheet.appendRow([payload.user, payload.pass, payload.role, payload.store]);
   return { success: true };
+}
+
+function doiMatKhau(payload) {
+  var user = String(payload && payload.user ? payload.user : "").trim();
+  var oldPassword = String(payload && payload.oldPassword ? payload.oldPassword : "").trim();
+  var newPassword = String(payload && payload.newPassword ? payload.newPassword : "").trim();
+  if (!user || !oldPassword || !newPassword) throw new Error("Thiếu thông tin mật khẩu.");
+  if (newPassword.length < 4) throw new Error("Mật khẩu mới phải có ít nhất 4 ký tự.");
+
+  var ss = getSS();
+  var sheet = getOrCreateUserSheet(ss);
+  var data = sheet.getDataRange().getValues();
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).trim() === user) {
+      if (String(data[i][1]).trim() !== oldPassword) {
+        return { success: false, msg: "Mật khẩu hiện tại không đúng." };
+      }
+      sheet.getRange(i + 1, 2).setValue(newPassword);
+      return { success: true, msg: "Đổi mật khẩu thành công." };
+    }
+  }
+
+  return { success: false, msg: "Không tìm thấy tài khoản." };
 }
 
 // --- API: LẤY DATA BAN ĐẦU ---

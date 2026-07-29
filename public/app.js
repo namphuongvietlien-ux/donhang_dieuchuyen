@@ -22,7 +22,7 @@ async function apiPost(action, payload) {
 // --- App logic (extracted from original webapp) ---
 var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
 var storeMap = {};
-var phieuData = []; var editRows = []; var currentPhieuObj = null;
+var phieuData = []; var editRows = []; var currentPhieuObj = null; var currentConfirmPhieuObj = null;
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
 var deepLinkTab = new URLSearchParams(location.search).get("tab");
@@ -105,6 +105,7 @@ function activateTab(tabId) {
 function switchTab(tabId) {
   activateTab(tabId);
   if(tabId === 'tab-quan-ly') ql_loadPhieu();
+  if(tabId === 'tab-xac-nhan') confirm_loadPhieu();
   if(tabId === 'tab-soan-hang') sh_taiDanhSachDon();
   if(tabId === 'tab-admin') loadDSUser();
 }
@@ -300,19 +301,19 @@ function actionCloseModal() { document.getElementById("modal-action").style.disp
 
 // ================= IN WEB (IFRAME ẨN) & XUẤT EXCEL =================
 function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
-  var typeTitle = soPhieu.indexOf("DH") !== -1 ? "ĐƠN ĐẶT HÀNG" : "LỆNH ĐIỀU CHUYỂN";
-  var styleStr = 'body{font-family: Arial, sans-serif; padding:20px;} h2{text-align:center;} table{width:100%; border-collapse:collapse; margin-top:20px;} th,td{border:1px solid #000; padding:8px; text-align:left;} th{background:#f0f0f0;} @media print { @page { margin: 1cm; } }';
+  var styleStr = 'body{font-family: Arial, sans-serif; padding:20px; font-size:12px;} table{width:100%; border-collapse:collapse; margin-top:12px;} th,td{border:1px solid #000; padding:7px; text-align:left; vertical-align:top;} th{background:#f0f0f0;} .title{font-size:16px; font-weight:bold; margin-bottom:8px;} .meta{margin-bottom:8px;} .code-cell{font-size:16px; font-weight:700;} .qty-cell{font-size:16px; font-weight:700; text-align:center;} .note-cell{width:72px;} @media print { @page { margin: 10mm; } }';
 
-  var htmlStr = '<h2>' + typeTitle + '</h2><p><b>Số:</b> ' + soPhieu + '<br><b>Kho xuất:</b> ' + khoXuat + '<br><b>Kho nhận:</b> ' + khoNhan + '</p>';
-  htmlStr += '<table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Số lượng</th></tr></thead><tbody>';
-  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td><b>Mã vạch: '+ (it.maVach || '') +'</b><br><small style="color:gray;">Mã hàng hóa: '+ (it.maHang || '') +'</small></td><td>'+it.tenHang+'</td><td>'+it.dvt+'</td><td style="text-align:center;"><b>'+it.sl+'</b></td></tr>'; }});
-  htmlStr += '</tbody></table><div style="display:flex; justify-content:space-between; margin-top:50px; text-align:center;"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div>';
+  var htmlStr = '<div class="title">Số: ' + soPhieu + '</div><div class="meta"><b>Kho xuất:</b> ' + khoXuat + '<br><b>Kho nhận:</b> ' + khoNhan + '</div>';
+  htmlStr += '<table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Số lượng</th><th class="note-cell"></th></tr></thead><tbody>';
+  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td class="code-cell">'+ ((it.maVach || '') + (it.maHang ? ' / ' + it.maHang : '')) +'</td><td>'+it.tenHang+'</td><td>'+it.dvt+'</td><td class="qty-cell">'+it.sl+'</td><td class="note-cell"></td></tr>'; }});
+  htmlStr += '</tbody></table><div style="display:flex; justify-content:space-between; margin-top:40px; text-align:center;"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div>';
 
   var iframe = document.createElement('iframe');
   iframe.style.display = 'none';
   document.body.appendChild(iframe);
 
   var iframeDoc = iframe.contentWindow.document;
+  iframeDoc.title = '';
   var styleEl = iframeDoc.createElement('style'); styleEl.innerHTML = styleStr; iframeDoc.head.appendChild(styleEl);
   iframeDoc.body.innerHTML = htmlStr;
 
@@ -358,11 +359,82 @@ function ql_onSelectPhieu() {
   ql_hienThiChiTiet(phieuData.find(x => x.soPhieu === val));
 }
 
+function confirm_loadPhieu(selectedSoPhieu) {
+  var selectEl = document.getElementById("confirm-phieu");
+  if (!selectEl) return;
+  selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
+  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: document.getElementById("ql-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
+    var html = '<option value="">-- Chọn Phiếu --</option>';
+    res.forEach(function(r) {
+      var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
+      html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
+    });
+    selectEl.innerHTML = html;
+    if (selectedSoPhieu) {
+      selectEl.value = selectedSoPhieu;
+      confirm_onSelectPhieu();
+    }
+  }).catch(function(err){ alert('Lỗi: '+err.message); });
+}
+
+function confirm_onSelectPhieu() {
+  var val = document.getElementById("confirm-phieu").value;
+  if (!val) { document.getElementById("confirm-view").style.display = "none"; return; }
+  showLoad("Đang tải dữ liệu nhận hàng...");
+  apiGet('getChiTietPhieu', { soPhieu: val, storeName: sessionUser.store }).then(function(rows) {
+    hideLoad();
+    currentConfirmPhieuObj = { soPhieu: val };
+    var viewEl = document.getElementById("confirm-view");
+    document.getElementById("confirm-lbl-sophieu").innerText = val;
+    document.getElementById("confirm-meta").innerText = "Đã tải " + rows.length + " dòng để xác nhận.";
+    var tbody = document.getElementById("confirm-tbody");
+    tbody.innerHTML = "";
+    rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
+      var packedQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? Number(r.slThucTe) : Number(r.slGoc || 0);
+      var inputValue = packedQty;
+      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td style="font-weight:700;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
+    });
+    viewEl.style.display = "block";
+  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function confirm_updateInput(inputEl) {
+  var packed = Number(inputEl.getAttribute("data-packed") || 0);
+  var current = Number(inputEl.value || 0);
+  inputEl.classList.toggle("changed", current !== packed);
+  inputEl.classList.toggle("same", current === packed);
+}
+
+function confirm_xacNhanNhanHang() {
+  if (!currentConfirmPhieuObj || !sessionUser.user) return alert("Vui lòng chọn phiếu và đăng nhập trước khi xác nhận.");
+  var confirmations = [];
+  document.querySelectorAll(".confirm-qty-input").forEach(function(inputEl) {
+    var row = parseInt(inputEl.getAttribute("data-row"));
+    var qty = Number(inputEl.value);
+    if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty });
+  });
+  if (!confirmations.length) return alert("Không có dữ liệu xác nhận.");
+  showLoad("Đang lưu xác nhận...");
+  apiPost('xacNhanNhanHang', { soPhieu: currentConfirmPhieuObj.soPhieu, actor: sessionUser.user, store: sessionUser.store, confirmations: confirmations }).then(function(res) {
+    hideLoad();
+    if (!res.success) throw new Error(res.error || "Không thể lưu xác nhận.");
+    alert("✅ Đã lưu xác nhận nhận hàng.");
+    confirm_onSelectPhieu();
+  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
 function openDeepLinkedOrder() {
   var params = getDeepLinkParams();
   var targetOrder = params.order || deepLinkOrder;
   var targetTab = params.tab || deepLinkTab;
-  if (!targetOrder || (targetTab && targetTab !== "quan-ly")) return;
+  if (!targetOrder) return;
+  if (targetTab === "xac-nhan" || targetTab === "nhan-hang") {
+    showLoad("Đang mở đơn hàng...");
+    activateTab('tab-xac-nhan');
+    confirm_loadPhieu(targetOrder);
+    return;
+  }
+  if (targetTab && targetTab !== "quan-ly") return;
   showLoad("Đang mở đơn hàng...");
   activateTab('tab-quan-ly');
   apiGet('getThongTinPhieu', { soPhieu: targetOrder }).then(function(phieu) {
@@ -385,7 +457,6 @@ function ql_hienThiChiTiet(phieu) {
   document.getElementById("ql-admin-column").style.display = canManageOrder ? "table-cell" : "none";
   document.getElementById("ql-btn-cancel-order").style.display = canManageOrder ? "block" : "none";
   document.getElementById("ql-btn-save").style.display = isAdmin ? "block" : "none";
-  document.getElementById("ql-receive-panel").style.display = canReceiveConfirm ? "block" : "none";
   document.getElementById("ql-order-meta").innerText = "";
   document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
   document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
@@ -401,14 +472,6 @@ function ql_hienThiChiTiet(phieu) {
       var cancelButton = sessionUser.user ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '';
       tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled?'<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>':'')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
     });
-    var receiveList = document.getElementById("ql-receive-list");
-    if (receiveList) {
-      var receiveHtml = rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).map(function(r){
-        var defaultQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
-        return '<div class="form-row" style="margin-bottom:8px; align-items:end;"><div class="form-group" style="flex:1;"><label>'+ (r.tenHang || r.maHang || r.maVach) +'</label><div style="font-size:12px; color:gray;">Mã: '+(r.maHang||'')+' | Vạch: '+(r.maVach||'')+'</div></div><div class="form-group" style="max-width:140px;"><label>SL nhận</label><input type="number" class="receive-qty-input" data-row="'+r.rowIndex+'" min="0" value="'+defaultQty+'"></div></div>';
-      }).join('');
-      receiveList.innerHTML = receiveHtml || '<div style="color:gray; font-size:13px;">Không có dòng nào cần xác nhận.</div>';
-    }
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     if (packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
     document.getElementById("ql-view-phieu").style.display = "block";
@@ -421,24 +484,6 @@ function ql_luuSua() {
   var inputs = document.querySelectorAll(".edit-sl-input"), updates = [];
   inputs.forEach(ip => { if (!ip.disabled) updates.push({ row: parseInt(ip.getAttribute("data-row")), valSl: ip.value }); });
   apiPost('luuChinhSuaPhieu', { updates: updates, actor: sessionUser.user }).then(function(res) { hideLoad(); if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi."); alert("✅ Đã lưu chỉnh sửa thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu."); ql_hienThiChiTiet(currentPhieuObj); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
-}
-
-function ql_xacNhanNhanHang() {
-  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
-  var confirmations = [];
-  document.querySelectorAll(".receive-qty-input").forEach(function(ip) {
-    var row = parseInt(ip.getAttribute("data-row"));
-    var qty = Number(ip.value);
-    if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty });
-  });
-  if (!confirmations.length) return alert("Không có dữ liệu xác nhận.");
-  showLoad("Đang lưu xác nhận nhận hàng...");
-  apiPost('xacNhanNhanHang', { soPhieu: currentPhieuObj.soPhieu, actor: sessionUser.user, store: sessionUser.store, confirmations: confirmations }).then(function(res) {
-    hideLoad();
-    if (!res.success) throw new Error(res.error || "Không thể lưu xác nhận.");
-    alert("✅ Đã lưu xác nhận nhận hàng.");
-    ql_hienThiChiTiet(currentPhieuObj);
-  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
 function ql_themMaHang(itemOverride) {
@@ -559,6 +604,25 @@ function taoTaiKhoan() {
     hideLoad();
     if(res.success) { alert("Tạo thành công!"); document.getElementById("adm-user").value=""; document.getElementById("adm-pass").value=""; loadDSUser(); }
     else alert(res.msg);
+  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function doiMatKhau() {
+  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi đổi mật khẩu.");
+  var currentPassword = document.getElementById("pw-current").value.trim();
+  var newPassword = document.getElementById("pw-new").value.trim();
+  var confirmPassword = document.getElementById("pw-confirm").value.trim();
+  if (!currentPassword || !newPassword || !confirmPassword) return alert("Vui lòng điền đầy đủ các trường mật khẩu.");
+  if (newPassword.length < 4) return alert("Mật khẩu mới phải có ít nhất 4 ký tự.");
+  if (newPassword !== confirmPassword) return alert("Xác nhận mật khẩu mới không khớp.");
+  showLoad("Đang đổi mật khẩu...");
+  apiPost('doiMatKhau', { user: sessionUser.user, oldPassword: currentPassword, newPassword: newPassword }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) throw new Error(res && res.msg ? res.msg : "Không thể đổi mật khẩu.");
+    alert("✅ Đổi mật khẩu thành công!");
+    document.getElementById("pw-current").value = "";
+    document.getElementById("pw-new").value = "";
+    document.getElementById("pw-confirm").value = "";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
