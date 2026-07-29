@@ -40,6 +40,16 @@ window.onload = function() {
   var pass = document.getElementById("lg-pass"); if(pass) pass.addEventListener("keypress", function(e){ if(e.key==="Enter") doLogin(); });
   document.addEventListener("click", function(){ closeUserMenu(); });
   hidePasswordSection();
+  var params = new URLSearchParams(location.search);
+  var hasDeepLink = !!(params.get("soPhieu") || params.get("tab"));
+  if (hasDeepLink) {
+    sessionUser = { user: "", role: "", store: "" };
+    document.getElementById("lbl-username").innerText = "Guest";
+    document.getElementById("login-screen").style.display = "none";
+    document.getElementById("main-container").style.display = "block";
+    updateDashboardHero();
+    initSystemData();
+  }
 };
 
 // ================= ĐĂNG NHẬP =================
@@ -524,10 +534,10 @@ function ql_hienThiChiTiet(phieu) {
   var isAdmin = sessionUser.role === "Admin";
   var canManageOrder = !!sessionUser.user;
   var canReceiveConfirm = !!sessionUser.user && (isAdmin || sessionUser.store === currentPhieuObj.khoNhan || sessionUser.store === "Tất cả" || sessionUser.store === currentPhieuObj.khoXuat);
-  document.getElementById("ql-admin-actions").style.display = canManageOrder ? "flex" : "none";
-  document.getElementById("ql-admin-column").style.display = canManageOrder ? "table-cell" : "none";
-  document.getElementById("ql-btn-cancel-order").style.display = canManageOrder ? "block" : "none";
-  document.getElementById("ql-btn-save").style.display = isAdmin ? "block" : "none";
+  document.getElementById("ql-admin-actions").style.display = "none";
+  document.getElementById("ql-admin-column").style.display = "none";
+  document.getElementById("ql-btn-cancel-order").style.display = "none";
+  document.getElementById("ql-btn-save").style.display = "none";
   document.getElementById("ql-order-meta").innerText = "";
   document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
   document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
@@ -535,16 +545,21 @@ function ql_hienThiChiTiet(phieu) {
   showLoad("Tải chi tiết...");
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
     hideLoad(); editRows = rows; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
+    var isReadOnlyOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
     rows.forEach((r, i) => {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
+      var isReadOnlyRow = isReadOnlyOrder || isCancelled;
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
       var latestQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
-      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+latestQty+'" '+(isCancelled || sessionUser.role !== "Admin" ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
-      var cancelButton = sessionUser.user ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '';
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled?'<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>':'')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
+      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+latestQty+'" '+(isReadOnlyRow || sessionUser.role !== "Admin" ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
+      var cancelButton = sessionUser.user && !isReadOnlyOrder ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled || isReadOnlyOrder ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
     });
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     if (packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
+    if (isReadOnlyOrder) {
+      document.getElementById("ql-order-meta").innerText += " | Chế độ chỉ xem sau khi xác nhận nhận hàng";
+    }
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }

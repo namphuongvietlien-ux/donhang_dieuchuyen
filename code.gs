@@ -1008,6 +1008,7 @@ function xacNhanNhanHang(payload) {
     var qty = Number(conf.receivedQty);
     if (!row || row < 2 || isNaN(qty) || qty < 0) continue;
     var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
+    historySheet.getRange(row, 13).setValue("Đã xác nhận nhận hàng");
     var requestedQty = Number(values[7]) || 0;
     var previousQty = Number(conf.previousQty) || 0;
     var actualChanged = qty !== previousQty;
