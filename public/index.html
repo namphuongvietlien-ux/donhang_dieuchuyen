@@ -15,6 +15,11 @@
     .nav-tabs { display: flex; overflow-x: auto; background: rgba(255,255,255,0.92); border: 1px solid rgba(226,232,240,0.95); -webkit-overflow-scrolling: touch; padding: 8px; gap: 8px; margin: 12px auto 0; max-width: 1180px; border-radius: 16px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05); }
     .nav-tab { flex: 0 0 auto; min-width: 112px; text-align: center; padding: 10px 12px; cursor: pointer; font-weight: 700; color: var(--muted); border: 1px solid transparent; transition: all 0.2s ease; white-space: nowrap; font-size: 14px; border-radius: 999px; }
     .nav-tab.active { color: white; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.16); }
+    #user-info-badge { position: absolute; right: 12px; top: 12px; font-size: 12px; background: rgba(255,255,255,0.16); padding: 6px 10px; border-radius: 999px; backdrop-filter: blur(8px); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+    #user-info-badge.active { background: rgba(255,255,255,0.24); }
+    .user-menu { position: absolute; top: calc(100% + 8px); right: 0; background: white; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14); min-width: 180px; display: none; z-index: 250; overflow: hidden; }
+    .user-menu button { width: 100%; border: none; background: white; text-align: left; padding: 12px 14px; font-size: 13px; font-weight: 600; cursor: pointer; color: #0f172a; }
+    .user-menu button:hover { background: #f8fafc; }
     .container { padding: 16px; max-width: 1180px; margin: 0 auto; padding-bottom: 130px; display: none; box-sizing: border-box; }
     .tab-content { display: none; animation: fadeIn 0.22s ease; }
     .tab-content.active { display: block; }
@@ -149,13 +154,24 @@
 
   <div class="header">
     <h2>⚡ Quản Lý Kho</h2>
-    <div id="user-info-badge">👤 <span id="lbl-username">Guest</span></div>
+    <div id="user-info-badge" onclick="toggleUserMenu(event)">
+      <span>👤</span>
+      <span id="lbl-username">Guest</span>
+      <span>▾</span>
+      <div id="user-menu" class="user-menu">
+        <button type="button" onclick="event.stopPropagation(); showPasswordSection()">🔐 Đổi mật khẩu</button>
+        <button type="button" onclick="event.stopPropagation(); logoutUser()">🚪 Đăng xuất</button>
+      </div>
+    </div>
   </div>
   
   <div class="nav-tabs">
     <div class="nav-tab active" onclick="switchTab('tab-tao-phieu')">📝 Tạo Đơn</div>
     <div class="nav-tab" onclick="switchTab('tab-quan-ly')">🖨️ Quản Lý</div>
     <div class="nav-tab" onclick="switchTab('tab-xac-nhan')">📥 Xác Nhận</div>
+    <div class="nav-tab" onclick="switchTab('tab-soan-hang')">📦 Soạn Hàng</div>
+    <div class="nav-tab" id="nav-tab-admin" style="display:none;" onclick="switchTab('tab-admin')">⚙️ Tài Khoản</div>
+  </div>
 
   <div class="container" id="main-container">
     <div class="card dashboard-hero">
@@ -170,7 +186,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div id="password-card" class="card">
       <h3 style="margin-top:0; color:var(--primary);">🔐 Đổi mật khẩu</h3>
       <div class="form-row">
         <div class="form-group"><label>Mật khẩu hiện tại</label><input type="password" id="pw-current" placeholder="Nhập mật khẩu hiện tại"></div>

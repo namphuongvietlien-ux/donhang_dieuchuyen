@@ -38,6 +38,7 @@ function getDeepLinkParams() {
 window.onload = function() {
   document.getElementById("loading-overlay").style.display = "none";
   var pass = document.getElementById("lg-pass"); if(pass) pass.addEventListener("keypress", function(e){ if(e.key==="Enter") doLogin(); });
+  document.addEventListener("click", function(){ closeUserMenu(); });
 };
 
 // ================= ĐĂNG NHẬP =================
@@ -92,6 +93,45 @@ function updateDashboardHero() {
   var heroStore = document.getElementById('hero-store');
   if (heroRole) heroRole.innerText = sessionUser.role || 'Guest';
   if (heroStore) heroStore.innerText = sessionUser.store && sessionUser.store !== 'Tất cả' ? (storeMap[sessionUser.store] || sessionUser.store) : 'Tất cả';
+}
+
+function toggleUserMenu(event) {
+  if (event) event.stopPropagation();
+  var menu = document.getElementById('user-menu');
+  var badge = document.getElementById('user-info-badge');
+  if (!menu || !badge) return;
+  var isOpen = menu.style.display === 'block';
+  menu.style.display = isOpen ? 'none' : 'block';
+  badge.classList.toggle('active', !isOpen);
+}
+
+function closeUserMenu() {
+  var menu = document.getElementById('user-menu');
+  var badge = document.getElementById('user-info-badge');
+  if (menu) menu.style.display = 'none';
+  if (badge) badge.classList.remove('active');
+}
+
+function showPasswordSection() {
+  closeUserMenu();
+  var card = document.getElementById('password-card');
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  var input = document.getElementById('pw-current');
+  if (input) input.focus();
+}
+
+function logoutUser() {
+  closeUserMenu();
+  sessionUser = { user: '', role: '', store: '' };
+  document.getElementById('lbl-username').innerText = 'Guest';
+  document.getElementById('hero-role').innerText = 'Guest';
+  document.getElementById('hero-store').innerText = '-';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('main-container').style.display = 'none';
+  document.getElementById('lg-user').value = '';
+  document.getElementById('lg-pass').value = '';
 }
 
 function activateTab(tabId) {
