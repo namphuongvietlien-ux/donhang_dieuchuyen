@@ -469,16 +469,19 @@ function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, 
   }
 }
 
-function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, totalRows, statusLabel, missingCount, actor) {
+function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, totalRows, statusLabel, missingCount, extraCount, actor) {
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
   var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var detailText = "*Kết quả:* " + statusLabel + "\n" +
+                   "*Thiếu hàng:* " + missingCount + " mã\n" +
+                   "*Thừa hàng:* " + extraCount + " mã\n" +
+                   "*Tổng dòng:* " + totalRows + " mã\n";
   var text = "📦 *ĐƠN ĐÃ SOẠN XONG*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
              "*Mã thay đổi:* " + changedCount + "\n" +
-             "*Kết quả:* " + statusLabel + "\n" +
-             "*Thiếu hàng:* " + missingCount + " mã / tổng " + totalRows + " mã\n" +
+             detailText +
              "*Người thực hiện:* " + (actor || "Không xác định") + "\n\n" +
              "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
   if (TELEGRAM_CHAT_ID) {
@@ -869,6 +872,8 @@ function luuChinhSuaPhieu(payload) {
   try {
     lock.waitLock(10000);
     var changeCount = 0;
+    var modifiedCount = 0;
+    var cancelledCount = 0;
     var shouldNotify = false;
     var orderInfo = null;
     for (var i = 0; i < payload.updates.length; i++) {
@@ -887,6 +892,7 @@ function luuChinhSuaPhieu(payload) {
          historySheet.getRange(u.row, 15).setValue("Quản lý");
          logOrderChange(ss, soPhieu, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
          changeCount += 1;
+         cancelledCount += 1;
          shouldNotify = true;
       } else {
          if (u.valSl !== "") {
@@ -900,6 +906,7 @@ function luuChinhSuaPhieu(payload) {
            if (Number(oldSl) !== newVal) {
              logOrderChange(ss, soPhieu, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, newVal, "");
              changeCount += 1;
+             modifiedCount += 1;
              shouldNotify = true;
            }
          }
@@ -907,7 +914,10 @@ function luuChinhSuaPhieu(payload) {
     }
     SpreadsheetApp.flush();
     if (orderInfo && shouldNotify && changeCount > 0) {
-      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, "Chỉnh sửa số lượng / hủy mã", changeCount, payload.actor, "Đơn đã thay đổi " + changeCount + " mã.");
+      var detailText = [];
+      if (modifiedCount > 0) detailText.push("Mã sửa số lượng: " + modifiedCount);
+      if (cancelledCount > 0) detailText.push("Mã hủy: " + cancelledCount);
+      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, "Chỉnh sửa số lượng / hủy mã", changeCount, payload.actor, detailText.join("; ") || ("Đơn đã thay đổi " + changeCount + " mã."));
     }
   } finally { lock.releaseLock(); }
   return { success: true };
@@ -931,10 +941,6 @@ function themChiTietPhieu(payload) {
   var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", item.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý"];
   historySheet.appendRow(row);
   logOrderChange(ss, payload.soPhieu, "Thêm mã vào đơn", payload.actor, item.maHang, item.maVach, "", quantity, item.tenHang || "");
-  var orderInfo = getThongTinPhieu(payload.soPhieu);
-  if (orderInfo) {
-    sendTelegramOrderChangeSummary(payload.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, "Thêm mã vào đơn", 1, payload.actor, "Đơn đã thêm 1 mã mới.");
-  }
   return { success: true };
 }
 
@@ -950,10 +956,6 @@ function huyDongChiTietPhieu(payload) {
   historySheet.getRange(row, 12).setValue("Đã hủy dòng");
   historySheet.getRange(row, 13).setValue("Đã hủy dòng");
   logOrderChange(ss, values[1], "Hủy mã khỏi đơn", payload.actor, values[4], values[5], values[7], 0, "Hủy từng dòng");
-  var orderInfo = getThongTinPhieu(values[1]);
-  if (orderInfo) {
-    sendTelegramOrderChangeSummary(values[1], orderInfo.khoXuat, orderInfo.khoNhan, "Hủy mã khỏi đơn", 1, payload.actor, "Đơn đã hủy 1 mã khỏi danh sách.");
-  }
   return { success: true };
 }
 
@@ -1142,6 +1144,7 @@ function luuSoSoanHangVaAnh(payload) {
     var khoNhan = "";
     var totalRows = 0;
     var missingCount = 0;
+    var extraCount = 0;
     for (var i = 0; i < updates.length; i++) {
       var row = updates[i].row;
       var currentSoPhieu = historySheet.getRange(row, 2).getValue();
@@ -1155,6 +1158,7 @@ function luuSoSoanHangVaAnh(payload) {
       var requestedQty = Number(allRows[i][7]) || 0;
       var actualQty = (allRows[i][8] !== "" && allRows[i][8] !== undefined) ? Number(allRows[i][8]) : requestedQty;
       if (actualQty < requestedQty) missingCount += 1;
+      if (actualQty > requestedQty) extraCount += 1;
       if (!khoXuat && allRows[i][2]) khoXuat = String(allRows[i][2]).trim();
       if (!khoNhan && allRows[i][3]) khoNhan = String(allRows[i][3]).trim();
     }
@@ -1163,8 +1167,8 @@ function luuSoSoanHangVaAnh(payload) {
       if (khoNhan) {
         sendTelegramOrderReady(soPhieu, khoNhan);
       }
-      var statusLabel = (totalRows > 0 && missingCount === 0) ? "Đủ hàng" : "Thiếu hàng";
-      sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, updates.length, totalRows, statusLabel, missingCount, payload.actor || "Chi nhánh");
+      var statusLabel = (totalRows > 0 && missingCount === 0 && extraCount === 0) ? "Đủ hàng" : (extraCount > 0 && missingCount > 0 ? "Thiếu và thừa hàng" : (extraCount > 0 ? "Thừa hàng" : "Thiếu hàng"));
+      sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, updates.length, totalRows, statusLabel, missingCount, extraCount, payload.actor || "Chi nhánh");
     }
 
     return "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!";
