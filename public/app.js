@@ -39,6 +39,7 @@ window.onload = function() {
   document.getElementById("loading-overlay").style.display = "none";
   var pass = document.getElementById("lg-pass"); if(pass) pass.addEventListener("keypress", function(e){ if(e.key==="Enter") doLogin(); });
   document.addEventListener("click", function(){ closeUserMenu(); });
+  hidePasswordSection();
 };
 
 // ================= ĐĂNG NHẬP =================
@@ -112,10 +113,16 @@ function closeUserMenu() {
   if (badge) badge.classList.remove('active');
 }
 
+function hidePasswordSection() {
+  var card = document.getElementById('password-card');
+  if (card) card.style.display = 'none';
+}
+
 function showPasswordSection() {
   closeUserMenu();
   var card = document.getElementById('password-card');
   if (card) {
+    card.style.display = 'block';
     card.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   var input = document.getElementById('pw-current');
@@ -124,6 +131,7 @@ function showPasswordSection() {
 
 function logoutUser() {
   closeUserMenu();
+  hidePasswordSection();
   sessionUser = { user: '', role: '', store: '' };
   document.getElementById('lbl-username').innerText = 'Guest';
   document.getElementById('hero-role').innerText = 'Guest';
@@ -143,6 +151,7 @@ function activateTab(tabId) {
 }
 
 function switchTab(tabId) {
+  hidePasswordSection();
   activateTab(tabId);
   if(tabId === 'tab-quan-ly') ql_loadPhieu();
   if(tabId === 'tab-xac-nhan') confirm_loadPhieu();
