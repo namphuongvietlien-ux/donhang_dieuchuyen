@@ -360,10 +360,12 @@ function ql_hienThiChiTiet(phieu) {
   currentPhieuObj = phieu;
   var isAdmin = sessionUser.role === "Admin";
   var canManageOrder = !!sessionUser.user;
+  var canReceiveConfirm = !!sessionUser.user && (isAdmin || sessionUser.store === currentPhieuObj.khoNhan || sessionUser.store === "Tất cả" || sessionUser.store === currentPhieuObj.khoXuat);
   document.getElementById("ql-admin-actions").style.display = canManageOrder ? "flex" : "none";
   document.getElementById("ql-admin-column").style.display = canManageOrder ? "table-cell" : "none";
   document.getElementById("ql-btn-cancel-order").style.display = canManageOrder ? "block" : "none";
   document.getElementById("ql-btn-save").style.display = isAdmin ? "block" : "none";
+  document.getElementById("ql-receive-panel").style.display = canReceiveConfirm ? "block" : "none";
   document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
   document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
   document.getElementById("ql-lbl-khonhan").innerText = currentPhieuObj.khoNhan + ' (' + (storeMap[currentPhieuObj.khoNhan] || '') + ')';
@@ -377,6 +379,14 @@ function ql_hienThiChiTiet(phieu) {
       var cancelButton = sessionUser.user ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '';
       tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled?'<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>':'')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
     });
+    var receiveList = document.getElementById("ql-receive-list");
+    if (receiveList) {
+      var receiveHtml = rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).map(function(r){
+        var defaultQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
+        return '<div class="form-row" style="margin-bottom:8px; align-items:end;"><div class="form-group" style="flex:1;"><label>'+ (r.tenHang || r.maHang || r.maVach) +'</label><div style="font-size:12px; color:gray;">Mã: '+(r.maHang||'')+' | Vạch: '+(r.maVach||'')+'</div></div><div class="form-group" style="max-width:140px;"><label>SL nhận</label><input type="number" class="receive-qty-input" data-row="'+r.rowIndex+'" min="0" value="'+defaultQty+'"></div></div>';
+      }).join('');
+      receiveList.innerHTML = receiveHtml || '<div style="color:gray; font-size:13px;">Không có dòng nào cần xác nhận.</div>';
+    }
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
@@ -387,6 +397,24 @@ function ql_luuSua() {
   var inputs = document.querySelectorAll(".edit-sl-input"), updates = [];
   inputs.forEach(ip => { if (!ip.disabled) updates.push({ row: parseInt(ip.getAttribute("data-row")), valSl: ip.value }); });
   apiPost('luuChinhSuaPhieu', { updates: updates, actor: sessionUser.user }).then(function(res) { hideLoad(); if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi."); alert("✅ Đã lưu chỉnh sửa thành công!"); ql_hienThiChiTiet(currentPhieuObj); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function ql_xacNhanNhanHang() {
+  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
+  var confirmations = [];
+  document.querySelectorAll(".receive-qty-input").forEach(function(ip) {
+    var row = parseInt(ip.getAttribute("data-row"));
+    var qty = Number(ip.value);
+    if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty });
+  });
+  if (!confirmations.length) return alert("Không có dữ liệu xác nhận.");
+  showLoad("Đang lưu xác nhận nhận hàng...");
+  apiPost('xacNhanNhanHang', { soPhieu: currentPhieuObj.soPhieu, actor: sessionUser.user, store: sessionUser.store, confirmations: confirmations }).then(function(res) {
+    hideLoad();
+    if (!res.success) throw new Error(res.error || "Không thể lưu xác nhận.");
+    alert("✅ Đã lưu xác nhận nhận hàng.");
+    ql_hienThiChiTiet(currentPhieuObj);
+  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
 function ql_themMaHang(itemOverride) {

@@ -238,6 +238,12 @@
             <thead><tr><th width="5%">STT</th><th width="20%">Mã</th><th width="40%">Tên SP</th><th width="10%">Tồn</th><th width="20%" style="background:#e8f0fe;">Số Lượng</th><th id="ql-admin-column" style="display:none;">Thao tác</th></tr></thead>
             <tbody id="ql-tbody"></tbody>
           </table>
+        </div>
+        <div id="ql-receive-panel" style="display:none; margin-top:12px; padding:12px; border:1px solid #c8e6c9; border-radius:8px; background:#f7fbf7;">
+          <h4 style="margin-top:0; color:#137333;">✅ Xác nhận nhận hàng</h4>
+          <p style="margin-top:0; font-size:13px; color:gray;">Nhập số lượng thực nhận cho từng dòng để lưu xác nhận cho chi nhánh.</p>
+          <div id="ql-receive-list"></div>
+          <button class="btn-submit btn-success" type="button" onclick="ql_xacNhanNhanHang()">✅ XÁC NHẬN NHẬN HÀNG</button>
         </div><br>
         <div class="btn-action-group">
           <button class="btn-submit" id="ql-btn-save" onclick="ql_luuSua()" style="background:#f29900; color:black;">💾 LƯU SỬA ĐỔI</button>
