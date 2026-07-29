@@ -588,7 +588,7 @@ function ql_xuatExcel_FromEdit() { executeExportExcel(currentPhieuObj.soPhieu, c
 // ================= SOẠN HÀNG MOBILE =================
 function sh_taiDanhSachDon() {
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
-  apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
+  apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }).then(function(res) {
     var countMoi = 0; var countDone = 0;
     var html = '<option value="">-- Chọn đơn ('+res.length+') --</option>';
     res.forEach(r => {

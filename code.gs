@@ -1049,7 +1049,7 @@ function taoFileExcelVaLayLink(payload) {
 }
 
 // --- API: SOẠN HÀNG MOBILE ---
-function getDonHangTheoNgay(ngayChon, userRole, userStore) {
+function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
@@ -1062,9 +1062,15 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore) {
     var rowNgay = new Date(data[i][0]); rowNgay.setHours(0,0,0,0);
     var rowSoPhieu = data[i][1] ? data[i][1].toString().trim() : "";
     var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
-    var rowKhoNhan = data[i][3] || "N/A";
-    
-    if (userRole !== "Admin") {
+    var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Đang xử lý";
+    var isCanceled = rowStatus === "Đã hủy đơn";
+
+    if (isCanceled) continue;
+
+    if (viewMode === "packing") {
+      if (userRole !== "Admin" && rowKhoXuat !== userStore) continue;
+    } else if (userRole !== "Admin") {
       if (rowKhoXuat !== userStore && rowKhoNhan !== userStore) continue;
     }
 
@@ -1076,7 +1082,7 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore) {
                 (ngayChon === 'all');
                 
     if (match && rowSoPhieu) { 
-      if(!map[rowSoPhieu]) map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoNhan: rowKhoNhan, trangThai: isDaXuLy ? "Đã xử lý" : "Mới" }; 
+      if(!map[rowSoPhieu]) map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, trangThai: isDaXuLy ? "Đã xử lý" : "Mới" }; 
       else if(isDaXuLy) map[rowSoPhieu].trangThai = "Đã xử lý";
     }
   }
