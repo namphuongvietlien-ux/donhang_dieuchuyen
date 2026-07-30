@@ -1006,9 +1006,9 @@ function requireAdmin(actor) {
   if (!account || String(account.role).trim() !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
 }
 
-function hasDuplicateItemInOrder(historySheet, soPhieu, item) {
+function hasDuplicateItemInOrder(historySheet, soPhieu, item, dataRows) {
   if (!historySheet || !soPhieu || !item) return false;
-  var data = historySheet.getDataRange().getValues();
+  var data = dataRows || historySheet.getDataRange().getValues();
   var target = String(soPhieu).trim().toLowerCase();
   var itemMaHang = String(item.maHang || "").trim().toUpperCase();
   var itemMaVach = String(item.maVach || "").trim().toUpperCase();
@@ -1022,9 +1022,9 @@ function hasDuplicateItemInOrder(historySheet, soPhieu, item) {
   return false;
 }
 
-function isOrderConfirmedForEditing(soPhieu, historySheet) {
+function isOrderConfirmedForEditing(soPhieu, historySheet, dataRows) {
   if (!soPhieu || !historySheet) return false;
-  var data = historySheet.getDataRange().getValues();
+  var data = dataRows || historySheet.getDataRange().getValues();
   var target = String(soPhieu).trim().toLowerCase();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][1]).trim().toLowerCase() === target) {
@@ -1042,12 +1042,13 @@ function luuChinhSuaPhieu(payload) {
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   requireAdmin(payload.actor);
   ensureHistoryStatusColumn(historySheet);
-  if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet)) {
-    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
-  }
   var lock = LockService.getDocumentLock();
   try {
     lock.waitLock(10000);
+    var historyData = historySheet.getDataRange().getValues();
+    if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet, historyData)) {
+      throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
+    }
     var changeCount = 0;
     var modifiedCount = 0;
     var cancelledCount = 0;
@@ -1055,62 +1056,71 @@ function luuChinhSuaPhieu(payload) {
     var orderInfo = null;
     var soPhieu = payload && payload.soPhieu ? String(payload.soPhieu).trim() : "";
     var orderBaseRow = null;
-    var data = historySheet.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][1]).trim().toLowerCase() === soPhieu.toLowerCase()) {
-        orderBaseRow = data[i];
+    for (var i = 1; i < historyData.length; i++) {
+      if (String(historyData[i][1]).trim().toLowerCase() === soPhieu.toLowerCase()) {
+        orderBaseRow = historyData[i];
         break;
       }
     }
+    var newRows = [];
     if (payload.newItems && payload.newItems.length) {
       for (var n = 0; n < payload.newItems.length; n++) {
         var newItem = payload.newItems[n];
-        if (hasDuplicateItemInOrder(historySheet, soPhieu, newItem)) {
+        if (hasDuplicateItemInOrder(historySheet, soPhieu, newItem, historyData)) {
           throw new Error("Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
         }
         var itemQty = Number(newItem.sl);
         if (!itemQty || itemQty < 1) continue;
-        var newRow = [new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, itemQty, newItem.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý", payload.actor || "", "Quản lý"];
-        historySheet.appendRow(newRow);
+        newRows.push([new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, itemQty, newItem.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý", payload.actor || "", "Quản lý"]);
         logOrderChange(ss, soPhieu, "Thêm mã vào đơn", payload.actor, newItem.maHang, newItem.maVach, "", itemQty, newItem.tenHang || "");
         changeCount += 1;
         shouldNotify = true;
       }
     }
+    var pendingUpdates = [];
     for (var i = 0; i < payload.updates.length; i++) {
       var u = payload.updates[i];
-      var oldSl = historySheet.getRange(u.row, 8).getValue();
-      var soPhieu = historySheet.getRange(u.row, 2).getValue();
-      var maHang = historySheet.getRange(u.row, 5).getValue();
-      var maVach = historySheet.getRange(u.row, 6).getValue();
-      if (!orderInfo) orderInfo = getThongTinPhieu(soPhieu);
+      var rowIndex = Number(u.row);
+      if (!rowIndex || rowIndex < 2) continue;
+      var currentRow = historyData[rowIndex - 1];
+      if (!currentRow) continue;
+      var oldSl = Number(currentRow[7]) || 0;
+      var soPhieuValue = currentRow[1] ? String(currentRow[1]).trim() : soPhieu;
+      var maHang = currentRow[4] ? String(currentRow[4]).trim() : "";
+      var maVach = currentRow[5] ? String(currentRow[5]).trim() : "";
+      if (!orderInfo) orderInfo = getThongTinPhieu(soPhieuValue);
       if (Number(u.valSl) === 0) {
-         historySheet.getRange(u.row, 8).setValue(0);
-         historySheet.getRange(u.row, 9).setValue(0);
-         historySheet.getRange(u.row, 12).setValue("Đã hủy dòng");
-         historySheet.getRange(u.row, 13).setValue("Đã hủy dòng");
-         historySheet.getRange(u.row, 14).setValue(payload.actor || "");
-         historySheet.getRange(u.row, 15).setValue("Quản lý");
-         logOrderChange(ss, soPhieu, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
-         changeCount += 1;
-         cancelledCount += 1;
-         shouldNotify = true;
-      } else {
-         if (u.valSl !== "") {
-           var newVal = Number(u.valSl);
-           historySheet.getRange(u.row, 8).setValue(newVal);
-           historySheet.getRange(u.row, 9).setValue(newVal);
-           historySheet.getRange(u.row, 12).clearContent();
-           historySheet.getRange(u.row, 13).setValue("Đang xử lý");
-           historySheet.getRange(u.row, 14).setValue(payload.actor || "");
-           historySheet.getRange(u.row, 15).setValue("Quản lý");
-           if (Number(oldSl) !== newVal) {
-             logOrderChange(ss, soPhieu, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, newVal, "");
-             changeCount += 1;
-             modifiedCount += 1;
-             shouldNotify = true;
-           }
-         }
+        pendingUpdates.push({row: rowIndex, sl8: 0, sl9: 0, note: "Đã hủy dòng", status: "Đã hủy dòng", actor: payload.actor || "", source: "Quản lý"});
+        logOrderChange(ss, soPhieuValue, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
+        changeCount += 1;
+        cancelledCount += 1;
+        shouldNotify = true;
+      } else if (u.valSl !== "") {
+        var newVal = Number(u.valSl);
+        pendingUpdates.push({row: rowIndex, sl8: newVal, sl9: newVal, note: "", status: "Đang xử lý", actor: payload.actor || "", source: "Quản lý"});
+        if (Number(oldSl) !== newVal) {
+          logOrderChange(ss, soPhieuValue, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, newVal, "");
+          changeCount += 1;
+          modifiedCount += 1;
+          shouldNotify = true;
+        }
+      }
+    }
+    if (newRows.length) {
+      var startRow = historySheet.getLastRow() + 1;
+      historySheet.getRange(startRow, 1, newRows.length, 15).setValues(newRows);
+    }
+    if (pendingUpdates.length) {
+      pendingUpdates.sort(function(a, b) { return a.row - b.row; });
+      var rangesToUpdate = [];
+      for (var g = 0; g < pendingUpdates.length; g++) {
+        var up = pendingUpdates[g];
+        rangesToUpdate.push({row: up.row, values8_9: [[up.sl8, up.sl9]], values12_15: [[up.note, up.status, up.actor, up.source]]});
+      }
+      for (var g = 0; g < rangesToUpdate.length; g++) {
+        var itemUpdate = rangesToUpdate[g];
+        historySheet.getRange(itemUpdate.row, 8, 1, 2).setValues(itemUpdate.values8_9);
+        historySheet.getRange(itemUpdate.row, 12, 1, 4).setValues(itemUpdate.values12_15);
       }
     }
     SpreadsheetApp.flush();
