@@ -851,6 +851,14 @@ function ql_xuatExcel_FromEdit() { executeExportExcel(currentPhieuObj.soPhieu, c
 
 // ================= SOẠN HÀNG MOBILE =================
 function sh_taiDanhSachDon() {
+  var createDateEl = document.getElementById("sh-create-date");
+  if (createDateEl && !createDateEl.value) {
+    var now = new Date();
+    var yyyy = now.getFullYear();
+    var mm = String(now.getMonth() + 1).padStart(2, '0');
+    var dd = String(now.getDate()).padStart(2, '0');
+    createDateEl.value = yyyy + '-' + mm + '-' + dd;
+  }
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
   apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }).then(function(res) {
     var countMoi = 0; var countDone = 0;
@@ -898,6 +906,34 @@ function sh_luuPhieu() {
   showLoad("Đang lưu kết quả lên hệ thống...");
   var inputs = document.querySelectorAll(".sl-thuc-te"), updates = []; inputs.forEach(ip => updates.push({ row: parseInt(ip.getAttribute("data-row")), val: ip.value }));
   apiPost('luuSoSoanHangVaAnh', { updates: updates, images: pendingImages, actor: sessionUser ? sessionUser.user : '' }).then(function(res) { hideLoad(); alert(res); pendingImages = {}; sh_taiDanhSachDon(); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function sh_taoBangSoanNgayMai() {
+  if (!sessionUser || !sessionUser.user) {
+    alert("Vui lòng đăng nhập trước khi tạo bảng soạn.");
+    return;
+  }
+  var createDateEl = document.getElementById("sh-create-date");
+  var ngay = createDateEl && createDateEl.value ? createDateEl.value : "";
+  showLoad("Đang tạo bảng tổng hợp soạn hàng ngày mai...");
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) {
+      alert("❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi"));
+      return;
+    }
+    var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
+      "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
+      "- Tổng mã: " + (res.totalItems || 0) + "\n" +
+      "- Mã thiếu: " + (res.missingItems || 0);
+    alert(msg);
+    if (res.url) {
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    }
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi: ' + err.message);
+  });
 }
 
 // ================= ADMIN: QUẢN LÝ TÀI KHOẢN =================

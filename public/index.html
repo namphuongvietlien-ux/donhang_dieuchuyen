@@ -389,6 +389,10 @@
           <div class="form-group"><label>Ngày xem đơn:</label><select id="sh-ngay" onchange="sh_taiDanhSachDon()"><option value="today">Hôm nay</option><option value="yesterday">Hôm qua</option><option value="all">Tất cả</option></select></div>
           <div class="form-group"><label>Số phiếu cần soạn:</label><select id="sh-phieu" onchange="sh_chonDonMobile()"><option value="">-- Đang tải --</option></select></div>
         </div>
+        <div class="form-row">
+          <div class="form-group"><label>Tạo bảng từ đơn ngày:</label><input type="date" id="sh-create-date"></div>
+          <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_taoBangSoanNgayMai()">🧾 TẠO BẢNG SOẠN NGÀY MAI</button></div>
+        </div>
         <div class="stats-bar" id="sh-stats"></div>
       </div>
       <div id="sh-list-container"><div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div></div>
