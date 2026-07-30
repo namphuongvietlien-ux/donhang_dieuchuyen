@@ -1,22 +1,52 @@
 // API helpers
+const GAS_EXEC_URL = 'https://script.google.com/macros/s/AKfycbwhqeAzzNrPTm1cH7KMmmj44btXb2OL835xxaItHByohT11sLDrdgfw7BrVlI5txqXonw/exec';
+
+async function callJsonApi(urls, options) {
+  let lastError = null;
+  for (const target of urls) {
+    try {
+      const res = await fetch(target, options);
+      const txt = await res.text();
+      if (!res.ok) {
+        lastError = new Error('HTTP ' + res.status + ': ' + txt);
+        continue;
+      }
+      try { return JSON.parse(txt); } catch(e) { return txt; }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('Không thể kết nối tới máy chủ');
+}
+
 async function apiGet(action, params) {
-  const url = new URL('/api/gas-proxy', location.origin);
-  url.searchParams.set('action', action);
+  const proxyUrl = new URL('/api/gas-proxy', location.origin);
+  proxyUrl.searchParams.set('action', action);
   if (params) {
     Object.keys(params).forEach(k => {
-      if (params[k] !== undefined && params[k] !== null) url.searchParams.set(k, params[k]);
+      if (params[k] !== undefined && params[k] !== null) proxyUrl.searchParams.set(k, params[k]);
     });
   }
-  const res = await fetch(url.toString(), { method: 'GET', headers: { 'Accept': 'application/json' } });
-  const txt = await res.text();
-  try { return JSON.parse(txt); } catch(e) { return txt; }
+
+  const directUrl = new URL(GAS_EXEC_URL);
+  directUrl.searchParams.set('action', action);
+  if (params) {
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
+    });
+  }
+
+  return callJsonApi([proxyUrl.toString(), directUrl.toString()], { method: 'GET', headers: { 'Accept': 'application/json' } });
 }
 
 async function apiPost(action, payload) {
   const body = { action: action, payload: payload };
-  const res = await fetch('/api/gas-proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const txt = await res.text();
-  try { return JSON.parse(txt); } catch(e) { return txt; }
+  const options = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  return callJsonApi(['/api/gas-proxy', GAS_EXEC_URL], options);
+}
+
+function showLoginError(message) {
+  alert(message || 'Đăng nhập thất bại.');
 }
 
 // --- App logic (extracted from original webapp) ---
@@ -26,6 +56,12 @@ var phieuData = []; var editRows = []; var currentPhieuObj = null; var currentCo
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
 var deepLinkTab = new URLSearchParams(location.search).get("tab");
+var INVENTORY_APP_URL = "https://my-inventory-app.vercel.app";
+
+function getEl(id) { return document.getElementById(id); }
+function safeText(id, value) { var el = getEl(id); if (el) el.innerText = value; }
+function safeDisplay(id, display) { var el = getEl(id); if (el) el.style.display = display; }
+function safeValue(id, value) { var el = getEl(id); if (el) el.value = value; }
 
 function getDeepLinkParams() {
   var params = new URLSearchParams(location.search);
@@ -35,18 +71,30 @@ function getDeepLinkParams() {
   };
 }
 
+function openInventoryApp() {
+  var targetUrl = new URL(INVENTORY_APP_URL);
+  if (sessionUser && sessionUser.user) targetUrl.searchParams.set("user", sessionUser.user);
+  var selectedStore = "";
+  var storeSelect = document.getElementById("select-kho-nhan");
+  if (storeSelect && storeSelect.value) selectedStore = storeSelect.value;
+  if (!selectedStore && sessionUser && sessionUser.store) selectedStore = sessionUser.store;
+  if (selectedStore) targetUrl.searchParams.set("store", selectedStore);
+  targetUrl.searchParams.set("from", "donhang");
+  window.open(targetUrl.toString(), "_blank", "noopener,noreferrer");
+}
+
 window.onload = function() {
-  document.getElementById("loading-overlay").style.display = "none";
-  var pass = document.getElementById("lg-pass"); if(pass) pass.addEventListener("keypress", function(e){ if(e.key==="Enter") doLogin(); });
+  var loadingOverlay = getEl("loading-overlay"); if (loadingOverlay) loadingOverlay.style.display = "none";
+  var pass = getEl("lg-pass"); if(pass) pass.addEventListener("keypress", function(e){ if(e.key==="Enter") doLogin(); });
   document.addEventListener("click", function(){ closeUserMenu(); });
   hidePasswordSection();
   var params = new URLSearchParams(location.search);
   var hasDeepLink = !!(params.get("soPhieu") || params.get("tab"));
   if (hasDeepLink) {
     sessionUser = { user: "", role: "", store: "" };
-    document.getElementById("lbl-username").innerText = "Guest";
-    document.getElementById("login-screen").style.display = "none";
-    document.getElementById("main-container").style.display = "block";
+    safeText("lbl-username", "Guest");
+    safeDisplay("login-screen", "none");
+    safeDisplay("main-container", "block");
     updateDashboardHero();
     initSystemData();
   }
@@ -54,8 +102,10 @@ window.onload = function() {
 
 // ================= ĐĂNG NHẬP =================
 function doLogin() {
-  var u = document.getElementById("lg-user").value.trim();
-  var p = document.getElementById("lg-pass").value.trim();
+  var uInput = getEl("lg-user"); var pInput = getEl("lg-pass");
+  if (!uInput || !pInput) return alert("Không tìm thấy form đăng nhập.");
+  var u = uInput.value.trim();
+  var p = pInput.value.trim();
   if(!u || !p) return alert("Vui lòng nhập đủ thông tin!");
   showLoad("Đang xác thực...");
   apiPost('loginUser', { username: u, password: p }).then(function(res) {
@@ -66,20 +116,20 @@ function doLogin() {
     }
     if(res.success) {
       sessionUser = { user: res.username, role: res.role, store: res.store };
-      document.getElementById("lbl-username").innerText = sessionUser.user + " (" + sessionUser.role + ")";
+      safeText("lbl-username", sessionUser.user + " (" + sessionUser.role + ")");
       updateDashboardHero();
-      document.getElementById("login-screen").style.display = "none";
-      document.getElementById("main-container").style.display = "block";
+      safeDisplay("login-screen", "none");
+      safeDisplay("main-container", "block");
       initSystemData();
     } else {
-      alert("❌ " + (res.msg || res.error || "Không thể đăng nhập."));
+      showLoginError("❌ " + (res.msg || res.error || "Không thể đăng nhập."));
     }
-  }).catch(function(err){ hideLoad(); alert('Lỗi kết nối: '+err.message); });
+  }).catch(function(err){ hideLoad(); showLoginError('Lỗi kết nối: '+err.message); });
 }
 
 function initSystemData() {
   showLoad("Đang tải dữ liệu hệ thống...");
-  document.getElementById("ql-ngay").valueAsDate = new Date();
+  var qlNgay = getEl("ql-ngay"); if (qlNgay) qlNgay.valueAsDate = new Date();
   apiGet('getInitialData').then(function(res) {
     hideLoad();
     if(!res.success) { alert("Lỗi tải data: " + (res.error||res)); return; }
@@ -95,15 +145,14 @@ function initSystemData() {
     if (sessionUser.role === "Admin") { var nav = document.getElementById("nav-tab-admin"); if(nav) nav.style.display = "block"; }
     updateDashboardHero();
     applyQuyenKho();
+    loadDashboardSummary();
     openDeepLinkedOrder();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
 function updateDashboardHero() {
-  var heroRole = document.getElementById('hero-role');
-  var heroStore = document.getElementById('hero-store');
-  if (heroRole) heroRole.innerText = sessionUser.role || 'Guest';
-  if (heroStore) heroStore.innerText = sessionUser.store && sessionUser.store !== 'Tất cả' ? (storeMap[sessionUser.store] || sessionUser.store) : 'Tất cả';
+  safeText('hero-role', sessionUser.role || 'Guest');
+  safeText('hero-store', sessionUser.store && sessionUser.store !== 'Tất cả' ? (storeMap[sessionUser.store] || sessionUser.store) : 'Tất cả');
 }
 
 function toggleUserMenu(event) {
@@ -143,21 +192,23 @@ function logoutUser() {
   closeUserMenu();
   hidePasswordSection();
   sessionUser = { user: '', role: '', store: '' };
-  document.getElementById('lbl-username').innerText = 'Guest';
-  document.getElementById('hero-role').innerText = 'Guest';
-  document.getElementById('hero-store').innerText = '-';
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('main-container').style.display = 'none';
-  document.getElementById('lg-user').value = '';
-  document.getElementById('lg-pass').value = '';
+  safeText('lbl-username', 'Guest');
+  safeText('hero-role', 'Guest');
+  safeText('hero-store', '-');
+  safeDisplay('login-screen', 'flex');
+  safeDisplay('main-container', 'none');
+  safeValue('lg-user', '');
+  safeValue('lg-pass', '');
 }
 
 function activateTab(tabId) {
   document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  var nav = Array.from(document.querySelectorAll('.nav-tab')).find(function(el) { return el.getAttribute('onclick').indexOf("'" + tabId + "'") !== -1; });
+  var targetTab = getEl(tabId);
+  if (!targetTab) return;
+  var nav = Array.from(document.querySelectorAll('.nav-tab')).find(function(el) { var onclick = el.getAttribute('onclick') || ''; return onclick.indexOf("'" + tabId + "'") !== -1; });
   if (nav) nav.classList.add('active');
-  document.getElementById(tabId).classList.add('active');
+  targetTab.classList.add('active');
 }
 
 function switchTab(tabId) {
@@ -166,7 +217,38 @@ function switchTab(tabId) {
   if(tabId === 'tab-quan-ly') ql_loadPhieu();
   if(tabId === 'tab-xac-nhan') confirm_loadPhieu();
   if(tabId === 'tab-soan-hang') sh_taiDanhSachDon();
+  if(tabId === 'tab-dashboard') loadDashboardSummary();
   if(tabId === 'tab-admin') loadDSUser();
+}
+
+function loadDashboardSummary() {
+  if (!sessionUser || !sessionUser.user) return;
+  var grid = document.getElementById('dashboard-summary-grid');
+  var recent = document.getElementById('dashboard-recent-orders');
+  if (!grid || !recent) return;
+  showLoad('Đang tải tổng quan...');
+  apiGet('getDashboardSummary', { userRole: sessionUser.role || '', userStore: sessionUser.store || '' }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success || !res.data) return;
+    var data = res.data;
+    grid.innerHTML = [
+      '<div class="card" style="margin:0; padding:14px; background:#eff6ff; border:1px solid #bfdbfe;"><div style="font-size:12px; color:#1d4ed8; font-weight:700; text-transform:uppercase;">Tổng đơn</div><div style="font-size:24px; font-weight:800; color:#1e3a8a;">' + data.totalOrders + '</div></div>',
+      '<div class="card" style="margin:0; padding:14px; background:#fefce8; border:1px solid #fde68a;"><div style="font-size:12px; color:#92400e; font-weight:700; text-transform:uppercase;">Đang chờ</div><div style="font-size:24px; font-weight:800; color:#92400e;">' + data.pendingOrders + '</div></div>',
+      '<div class="card" style="margin:0; padding:14px; background:#f0fdf4; border:1px solid #bbf7d0;"><div style="font-size:12px; color:#166534; font-weight:700; text-transform:uppercase;">Đã xử lý</div><div style="font-size:24px; font-weight:800; color:#166534;">' + data.processedOrders + '</div></div>',
+      '<div class="card" style="margin:0; padding:14px; background:#fef2f2; border:1px solid #fecaca;"><div style="font-size:12px; color:#b91c1c; font-weight:700; text-transform:uppercase;">Đã hủy</div><div style="font-size:24px; font-weight:800; color:#b91c1c;">' + data.canceledOrders + '</div></div>'
+    ].join('');
+
+    if (!data.recentOrders || !data.recentOrders.length) {
+      recent.innerHTML = '<div style="padding:12px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px; color:#64748b;">Chưa có đơn hàng nào trong phạm vi của bạn.</div>';
+      return;
+    }
+
+    var rows = data.recentOrders.map(function(order) {
+      return '<tr><td><b>' + order.soPhieu + '</b></td><td>' + (order.khoXuat || '-') + '</td><td>' + (order.khoNhan || '-') + '</td><td><span style="display:inline-block; padding:4px 8px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:700;">' + order.status + '</span></td><td>' + (order.thoiGian || '-') + '</td></tr>';
+    }).join('');
+
+    recent.innerHTML = '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;"><thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Số phiếu</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho xuất</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho nhận</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Trạng thái</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Cập nhật</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }).catch(function(err){ hideLoad(); console.error(err); });
 }
 
 // ================= PHÂN QUYỀN KHO =================
@@ -335,6 +417,13 @@ function renderTable() {
     tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>Mã vạch: ' + it.maVach + '</b><br><small style="color:gray;">Mã hàng hóa: ' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
   });
   document.getElementById("lbl-tong-sl").innerText = tongSl;
+  if (arrItems.length === 0) {
+    tbody.insertAdjacentHTML('beforeend', '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:24px;">Chưa có mặt hàng nào trong phiếu. Hãy tìm kiếm và thêm sản phẩm.</td></tr>');
+  }
+}
+
+function quickAddSuggestedItem(item) {
+  chonSanPham(item);
 }
 
 function submitPhieuMoi() {
@@ -350,6 +439,8 @@ function submitPhieuMoi() {
     else {
        currentPhieuObj = { soPhieu: res.soPhieu, khoXuat: khoXuat, khoNhan: khoNhan };
        document.getElementById("modal-sophieu").innerText = res.soPhieu; document.getElementById("modal-action").style.display = "flex";
+       arrItems = []; renderTable();
+       if (document.getElementById("input-scan")) document.getElementById("input-scan").focus();
     }
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
@@ -414,15 +505,15 @@ function ql_loadPhieu(selectedSoPhieu) {
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: document.getElementById("ql-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
-    phieuData = res; var countMoi = 0; var countDone = 0;
+    phieuData = res; var countMoi = 0; var countDone = 0; var countCancel = 0;
     var html = '<option value="">-- Chọn Đơn ('+res.length+') --</option>';
     res.forEach(r => {
-      if(r.trangThai === "Mới") countMoi++; else countDone++;
+      if(r.trangThai === "Mới") countMoi++; else if(r.trangThai === "Đã hủy") countCancel++; else countDone++;
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
     });
     selectEl.innerHTML = html; document.getElementById("ql-view-phieu").style.display = "none";
-    document.getElementById("ql-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 MỚI: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ XỬ LÝ: '+countDone+'</div>';
+    document.getElementById("ql-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 MỚI: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ XỬ LÝ: '+countDone+'</div> | <div class="stat-box" style="color:#8b5a2b;">🚫 HỦY: '+countCancel+'</div>';
     if (selectedSoPhieu) {
       var matched = res.find(function(item) { return item.soPhieu === selectedSoPhieu; });
       if (matched) {
@@ -712,5 +803,5 @@ function doiMatKhau() {
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
-function showLoad(text) { document.getElementById("loading-text").innerText = text; document.getElementById("loading-overlay").style.display = "flex"; }
-function hideLoad() { document.getElementById("loading-overlay").style.display = "none"; }
+function showLoad(text) { var loadingText = getEl("loading-text"); if (loadingText) loadingText.innerText = text; var overlay = getEl("loading-overlay"); if (overlay) overlay.style.display = "flex"; }
+function hideLoad() { var overlay = getEl("loading-overlay"); if (overlay) overlay.style.display = "none"; }

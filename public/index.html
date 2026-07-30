@@ -2,19 +2,26 @@
 <html>
 <head>
   <base target="_top">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hệ Thống Quản Lý Kho</title>
   <style>
-    :root { --primary: #2563eb; --primary-dark: #1d4ed8; --accent: #14b8a6; --bg: #f4f7fb; --text: #0f172a; --muted: #64748b; --card-bg: #ffffff; --line: #e2e8f0; }
+    :root { --primary: #2563eb; --primary-dark: #1d4ed8; --accent: #14b8a6; --bg: #f4f7fb; --text: #0f172a; --muted: #64748b; --card-bg: #ffffff; --line: #e2e8f0; --surface: #f8fbff; --shadow: 0 18px 36px rgba(15, 23, 42, 0.08); }
     * { box-sizing: border-box; }
-    body { font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: linear-gradient(135deg, #f8fbff 0%, #eef4ff 100%); color: var(--text); -webkit-font-smoothing: antialiased; }
-    .header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 18px 20px 24px; text-align: center; box-shadow: 0 10px 30px rgba(37, 99, 235, 0.16); position: sticky; top: 0; z-index: 20; }
+    body { font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: linear-gradient(135deg, #f8fbff 0%, #eef4ff 100%); color: var(--text); -webkit-font-smoothing: antialiased; min-height: 100vh; }
+    body::before { content: ''; position: fixed; inset: 0; background: radial-gradient(circle at top left, rgba(37,99,235,0.15), transparent 32%), radial-gradient(circle at top right, rgba(20,184,166,0.12), transparent 25%); pointer-events: none; z-index: -1; }
+    .header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 18px 20px 24px; box-shadow: 0 12px 30px rgba(37, 99, 235, 0.18); position: sticky; top: 0; z-index: 20; }
+    .header-inner { max-width: 1180px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .header-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .header-icon { width: 44px; height: 44px; border-radius: 14px; background: rgba(255,255,255,0.16); display: grid; place-items: center; font-size: 18px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.25); flex-shrink: 0; }
     .header h2 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.2px; }
+    .header-subtitle { margin-top: 4px; font-size: 12px; color: rgba(255,255,255,0.82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #user-info-badge { position:absolute; right:12px; top:12px; font-size:12px; background:rgba(255,255,255,0.16); padding:6px 10px; border-radius:999px; backdrop-filter: blur(8px); }
 
-    .nav-tabs { display: flex; overflow-x: auto; background: rgba(255,255,255,0.92); border: 1px solid rgba(226,232,240,0.95); -webkit-overflow-scrolling: touch; padding: 8px; gap: 8px; margin: 12px auto 0; max-width: 1180px; border-radius: 16px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05); }
+    .nav-tabs { display: flex; overflow-x: auto; background: rgba(255,255,255,0.94); border: 1px solid rgba(226,232,240,0.95); -webkit-overflow-scrolling: touch; padding: 8px; gap: 8px; margin: 12px auto 0; max-width: 1180px; border-radius: 16px; box-shadow: var(--shadow); backdrop-filter: blur(12px); }
     .nav-tab { flex: 0 0 auto; min-width: 112px; text-align: center; padding: 10px 12px; cursor: pointer; font-weight: 700; color: var(--muted); border: 1px solid transparent; transition: all 0.2s ease; white-space: nowrap; font-size: 14px; border-radius: 999px; }
-    .nav-tab.active { color: white; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.16); }
+    .nav-tab:hover { color: var(--primary); background: #f8fbff; border-color: #dbeafe; }
+    .nav-tab.active { color: white; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); box-shadow: 0 12px 22px rgba(37, 99, 235, 0.16); }
     #user-info-badge { position: absolute; right: 12px; top: 12px; font-size: 12px; background: rgba(255,255,255,0.16); padding: 6px 10px; border-radius: 999px; backdrop-filter: blur(8px); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
     #user-info-badge.active { background: rgba(255,255,255,0.24); }
     .user-menu { position: absolute; top: calc(100% + 8px); right: 0; background: white; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14); min-width: 180px; display: none; z-index: 250; overflow: hidden; }
@@ -25,10 +32,23 @@
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
-    .card { background: var(--card-bg); border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06); border: 1px solid rgba(226,232,240,0.9); transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
-    .card:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(15, 23, 42, 0.09); border-color: rgba(37, 99, 235, 0.2); }
+    .card { background: var(--card-bg); border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); border: 1px solid rgba(226,232,240,0.9); transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; position: relative; overflow: hidden; }
+    .card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--accent)); opacity: 0.9; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(15, 23, 42, 0.1); border-color: rgba(37, 99, 235, 0.2); }
     #password-card { display: none; }
-    .dashboard-hero { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; background: linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%); border: 1px solid rgba(37, 99, 235, 0.14); }
+    .dashboard-hero { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 22px; background: linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%); border: 1px solid rgba(37, 99, 235, 0.14); border-radius: 22px; }
+    .dashboard-hero::after { content: ''; position: absolute; inset: auto -20px -20px auto; width: 140px; height: 140px; background: radial-gradient(circle, rgba(37,99,235,0.16), transparent 70%); pointer-events: none; }
+    .hero-copy h3 { margin: 0 0 6px; font-size: 18px; color: var(--primary-dark); }
+    .hero-copy p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .hero-chip { display: inline-block; margin-bottom: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(37, 99, 235, 0.1); color: var(--primary); font-size: 12px; font-weight: 700; }
+    .hero-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+    .mini-stat { min-width: 120px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04); }
+    .mini-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .mini-stat strong { font-size: 14px; color: var(--text); }
+    .section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .section-title h3, .section-title h4 { margin: 0; color: var(--primary-dark); }
+    .section-subtitle { font-size: 13px; color: var(--muted); }
+    .soft-divider { height: 1px; background: linear-gradient(90deg, rgba(37,99,235,0.2), transparent); margin: 12px 0 14px; }
     .hero-copy h3 { margin: 0 0 6px; font-size: 18px; color: var(--primary-dark); }
     .hero-copy p { margin: 0; color: var(--muted); font-size: 14px; }
     .hero-chip { display: inline-block; margin-bottom: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(37, 99, 235, 0.1); color: var(--primary); font-size: 12px; font-weight: 700; }
@@ -48,14 +68,17 @@
     th { background: #f8fafc; font-weight: 700; color: #475569; }
     .row-error { background-color: #fef2f2; }
 
-    .btn-submit { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; border: none; padding: 12px 18px; font-size: 15px; font-weight: 700; border-radius: 999px; cursor: pointer; width: 100%; box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16); transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease; }
+    .btn-submit { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; border: none; padding: 12px 18px; font-size: 15px; font-weight: 700; border-radius: 999px; cursor: pointer; width: 100%; box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16); transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease; letter-spacing: 0.02em; }
     .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2); filter: brightness(1.02); }
     .btn-success { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); }
     .btn-action-group { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 
     #loading-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(248, 250, 252, 0.94); z-index: 9999; display: flex; justify-content: center; align-items: center; font-size: 18px; font-weight: bold; color: var(--primary); flex-direction: column; }
     #login-screen { position: fixed; top:0; left:0; right:0; bottom:0; background: radial-gradient(circle at top left, #ffffff 0%, #eff6ff 45%, #eef2ff 100%); z-index: 5000; display: flex; justify-content: center; align-items: center; padding: 20px; box-sizing:border-box; }
-    #login-screen .card { width: 360px; max-width: 100%; padding: 24px; border-radius: 20px; }
+    #login-screen .card { width: 380px; max-width: 100%; padding: 24px; border-radius: 24px; box-shadow: 0 24px 50px rgba(15, 23, 42, 0.12); }
+    .login-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; color: var(--primary-dark); font-weight: 800; }
+    .login-brand .icon { width: 42px; height: 42px; border-radius: 14px; background: linear-gradient(135deg, var(--primary), var(--accent)); color: white; display: grid; place-items: center; font-size: 20px; }
+    .login-copy { text-align: center; font-size: 13px; color: var(--muted); margin: 0 0 16px; line-height: 1.6; }
 
     .radio-group { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #f8fbff; flex-wrap: wrap; }
     .radio-group label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin:0; font-size:14px; color:var(--primary); font-weight:700;}
@@ -131,9 +154,12 @@
   
   <!-- Màn Hình Đăng Nhập -->
   <div id="login-screen">
-    <div class="card" style="width: 320px;">
-      <h2 style="text-align:center; color:var(--primary); margin-top:0;">ĐĂNG NHẬP</h2>
-      <p style="text-align:center; font-size:13px; color:gray;">Hệ thống Quản lý Kho</p>
+    <div class="card" style="width: 380px;">
+      <div class="login-brand">
+        <div class="icon">⚡</div>
+        <div>HỆ THỐNG VẬN HÀNH KHO</div>
+      </div>
+      <p class="login-copy">Đăng nhập để theo dõi đơn hàng, kiểm soát điều chuyển và tối ưu quy trình xuất nhập nhanh chóng.</p>
       <div class="form-group" style="margin-bottom:15px;"><label>Tài khoản</label><input type="text" id="lg-user" placeholder="Nhập tài khoản"></div>
       <div class="form-group" style="margin-bottom:20px;"><label>Mật khẩu</label><input type="password" id="lg-pass" placeholder="Nhập mật khẩu"></div>
       <button class="btn-submit" onclick="doLogin()">VÀO HỆ THỐNG</button>
@@ -154,20 +180,29 @@
   </div>
 
   <div class="header">
-    <h2>⚡ Quản Lý Kho</h2>
-    <div id="user-info-badge" onclick="toggleUserMenu(event)">
-      <span>👤</span>
-      <span id="lbl-username">Guest</span>
-      <span>▾</span>
-      <div id="user-menu" class="user-menu">
-        <button type="button" onclick="event.stopPropagation(); showPasswordSection()">🔐 Đổi mật khẩu</button>
-        <button type="button" onclick="event.stopPropagation(); logoutUser()">🚪 Đăng xuất</button>
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="header-icon">⚡</div>
+        <div>
+          <h2>Quản Lý Kho & Đơn Hàng</h2>
+          <div class="header-subtitle">Tối ưu vận hành, kiểm soát lô hàng và theo dõi trạng thái theo thời gian thực</div>
+        </div>
+      </div>
+      <div id="user-info-badge" onclick="toggleUserMenu(event)">
+        <span>👤</span>
+        <span id="lbl-username">Guest</span>
+        <span>▾</span>
+        <div id="user-menu" class="user-menu">
+          <button type="button" onclick="event.stopPropagation(); showPasswordSection()">🔐 Đổi mật khẩu</button>
+          <button type="button" onclick="event.stopPropagation(); logoutUser()">🚪 Đăng xuất</button>
+        </div>
       </div>
     </div>
   </div>
   
   <div class="nav-tabs">
     <div class="nav-tab active" onclick="switchTab('tab-tao-phieu')">📝 Tạo Đơn</div>
+    <div class="nav-tab" onclick="switchTab('tab-dashboard')">📊 Tổng Quan</div>
     <div class="nav-tab" onclick="switchTab('tab-quan-ly')">🖨️ Quản Lý</div>
     <div class="nav-tab" onclick="switchTab('tab-xac-nhan')">📥 Xác Nhận</div>
     <div class="nav-tab" onclick="switchTab('tab-soan-hang')">📦 Soạn Hàng</div>
@@ -184,6 +219,7 @@
       <div class="hero-stats">
         <div class="mini-stat"><span class="mini-label">Vai trò</span><strong id="hero-role">Guest</strong></div>
         <div class="mini-stat"><span class="mini-label">Kho quản lý</span><strong id="hero-store">-</strong></div>
+        <button type="button" class="btn-submit" onclick="openInventoryApp()" style="padding:10px 14px; width:auto; box-shadow:none; border-radius:12px; min-width:160px;">📦 Mở app kiểm kê</button>
       </div>
     </div>
 
@@ -197,6 +233,18 @@
       <button class="btn-submit btn-success" type="button" onclick="doiMatKhau()">🔐 ĐỔI MẬT KHẨU</button>
     </div>
     
+    <div id="tab-dashboard" class="tab-content">
+      <div class="card">
+        <h3 style="margin-top:0; color:var(--primary);">📊 Tổng quan hoạt động</h3>
+        <p style="margin-top:-4px; color:gray;">Theo dõi nhanh số lượng đơn, trạng thái và đơn mới gần đây.</p>
+        <div id="dashboard-summary-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px;"></div>
+      </div>
+      <div class="card">
+        <h4 style="margin-top:0; color:var(--primary);">🗂️ Đơn hàng gần đây</h4>
+        <div id="dashboard-recent-orders"></div>
+      </div>
+    </div>
+
     <!-- TAB 1: TẠO ĐƠN HÀNG / ĐIỀU CHUYỂN -->
     <div id="tab-tao-phieu" class="tab-content active">
       <div class="card">
@@ -214,8 +262,16 @@
       </div>
       
       <div class="card" style="padding-bottom: 20px; position: relative;">
-        <label>Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:</label>
-        <input type="text" id="input-scan" placeholder="Nhập để tìm kiếm hoặc quét mã..." autocomplete="off" onkeyup="handleSearchInput(event)" style="border: 2px solid var(--primary); font-size:16px; font-weight: bold; padding: 12px; background: #f8f9fa;">
+        <div class="form-row" style="margin-bottom:10px;">
+          <div class="form-group">
+            <label>Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:</label>
+            <input type="text" id="input-scan" placeholder="Nhập để tìm kiếm hoặc quét mã..." autocomplete="off" onkeyup="handleSearchInput(event)" style="border: 2px solid var(--primary); font-size:16px; font-weight: bold; padding: 12px; background: #f8f9fa;">
+          </div>
+          <div class="form-group" style="max-width:180px;">
+            <label>Thao tác nhanh</label>
+            <button class="btn-submit" type="button" onclick="submitPhieuMoi()" style="padding:10px 12px; width:100%; border-radius:12px;">💾 Lưu phiếu</button>
+          </div>
+        </div>
         
         <div id="suggest-box"></div>
 
