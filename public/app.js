@@ -685,8 +685,28 @@ function ql_themMaHang(itemOverride) {
     if (inputEl) inputEl.value = "";
     document.getElementById("ql-add-qty").value = "1";
     document.getElementById("ql-suggest-box").style.display = "none";
+
+    var tb = document.getElementById("ql-tbody");
+    if (tb) {
+      var latestQty = Number(quantity) || 1;
+      var rowIndex = editRows.length + 1;
+      editRows.push({
+        rowIndex: rowIndex,
+        maHang: item.maHang,
+        maVach: item.maVach,
+        tenHang: item.tenHang,
+        dvt: item.dvt,
+        slGoc: latestQty,
+        slThucTe: latestQty,
+        stock: 0,
+        ghiChu: "",
+        trangThai: "Đang xử lý",
+        nguoiSoanHang: ""
+      });
+      tb.insertAdjacentHTML('beforeend', '<tr><td>' + rowIndex + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + rowIndex + '" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><button type="button" onclick="ql_huyDong(' + rowIndex + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
+    }
+
     alert("✅ Đã thêm mã vào đơn thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu.");
-    ql_hienThiChiTiet(currentPhieuObj);
   }).catch(function(err) { hideLoad(); alert('Lỗi: ' + err.message); });
 }
 
