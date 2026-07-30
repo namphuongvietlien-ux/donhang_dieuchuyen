@@ -649,7 +649,7 @@ function ql_hienThiChiTiet(phieu) {
       var isReadOnlyRow = isReadOnlyOrder || isCancelled;
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
       var latestQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
-      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" value="'+latestQty+'" '+(isReadOnlyRow || !canEditRows ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
+      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+latestQty+'" '+(isReadOnlyRow || !canEditRows ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
       var cancelButton = canAddItems && !isReadOnlyOrder ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
       tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled || isReadOnlyOrder ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
     });
@@ -662,12 +662,48 @@ function ql_hienThiChiTiet(phieu) {
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
+function ql_isDuplicateOrderItem(item) {
+  if (!item) return false;
+  var itemMaHang = String(item.maHang || "").trim().toUpperCase();
+  var itemMaVach = String(item.maVach || "").trim().toUpperCase();
+  return editRows.some(function(existing) {
+    if (!existing) return false;
+    var existingMaHang = String(existing.maHang || "").trim().toUpperCase();
+    var existingMaVach = String(existing.maVach || "").trim().toUpperCase();
+    if (itemMaHang && existingMaHang && itemMaHang === existingMaHang) return true;
+    if (itemMaVach && existingMaVach && itemMaVach === existingMaVach) return true;
+    return false;
+  });
+}
+
 function ql_luuSua() {
   if (sessionUser.role !== "Admin") return alert("Chỉ quản trị viên được phép sửa đơn.");
+  var inputs = document.querySelectorAll(".edit-sl-input");
+  var updates = [];
+  var newItems = [];
+  inputs.forEach(function(ip) {
+    var isNew = ip.getAttribute("data-new") === "1";
+    var rowKey = ip.getAttribute("data-row");
+    var qtyValue = ip.value;
+    if (!ip.disabled && rowKey) {
+      if (isNew) {
+        var rowMeta = editRows.find(function(item) { return String(item.tempKey || item.rowIndex) === String(rowKey); });
+        if (rowMeta) {
+          newItems.push({ maHang: rowMeta.maHang, maVach: rowMeta.maVach, tenHang: rowMeta.tenHang, dvt: rowMeta.dvt, sl: qtyValue });
+        }
+      } else {
+        updates.push({ row: parseInt(rowKey), valSl: qtyValue });
+      }
+    }
+  });
+  if (!updates.length && !newItems.length) return alert("Không có thay đổi nào cần lưu.");
   showLoad("Đang lưu chỉnh sửa...");
-  var inputs = document.querySelectorAll(".edit-sl-input"), updates = [];
-  inputs.forEach(ip => { if (!ip.disabled) updates.push({ row: parseInt(ip.getAttribute("data-row")), valSl: ip.value }); });
-  apiPost('luuChinhSuaPhieu', { updates: updates, actor: sessionUser.user }).then(function(res) { hideLoad(); if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi."); alert("✅ Đã lưu chỉnh sửa thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu."); ql_hienThiChiTiet(currentPhieuObj); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+  apiPost('luuChinhSuaPhieu', { soPhieu: currentPhieuObj ? currentPhieuObj.soPhieu : "", updates: updates, newItems: newItems, actor: sessionUser.user }).then(function(res) {
+    hideLoad();
+    if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi.");
+    alert("✅ Đã lưu chỉnh sửa thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu.");
+    ql_hienThiChiTiet(currentPhieuObj);
+  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
 function ql_themMaHang(itemOverride) {
@@ -678,36 +714,35 @@ function ql_themMaHang(itemOverride) {
   var item = itemOverride || danhMucGoc[code] || filterProducts(code)[0];
   if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
   if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
-  showLoad("Đang thêm mã vào đơn...");
-  apiPost('themChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, item: { maHang: item.maHang, maVach: item.maVach, tenHang: item.tenHang, dvt: item.dvt, sl: quantity }, actor: sessionUser.user }).then(function(res) {
-    hideLoad();
-    if (!res.success) throw new Error(res.error || "Không thể thêm mã.");
-    if (inputEl) inputEl.value = "";
-    document.getElementById("ql-add-qty").value = "1";
-    document.getElementById("ql-suggest-box").style.display = "none";
+  if (ql_isDuplicateOrderItem(item)) {
+    alert("⚠️ Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
+    return;
+  }
+  if (inputEl) inputEl.value = "";
+  document.getElementById("ql-add-qty").value = "1";
+  document.getElementById("ql-suggest-box").style.display = "none";
 
-    var tb = document.getElementById("ql-tbody");
-    if (tb) {
-      var latestQty = Number(quantity) || 1;
-      var rowIndex = editRows.length + 1;
-      editRows.push({
-        rowIndex: rowIndex,
-        maHang: item.maHang,
-        maVach: item.maVach,
-        tenHang: item.tenHang,
-        dvt: item.dvt,
-        slGoc: latestQty,
-        slThucTe: latestQty,
-        stock: 0,
-        ghiChu: "",
-        trangThai: "Đang xử lý",
-        nguoiSoanHang: ""
-      });
-      tb.insertAdjacentHTML('beforeend', '<tr><td>' + rowIndex + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + rowIndex + '" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><button type="button" onclick="ql_huyDong(' + rowIndex + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
-    }
+  var tb = document.getElementById("ql-tbody");
+  if (tb) {
+    var latestQty = Number(quantity) || 1;
+    var tempKey = 'new-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    editRows.push({
+      tempKey: tempKey,
+      maHang: item.maHang,
+      maVach: item.maVach,
+      tenHang: item.tenHang,
+      dvt: item.dvt,
+      slGoc: latestQty,
+      slThucTe: latestQty,
+      stock: 0,
+      ghiChu: "",
+      trangThai: "Chưa lưu",
+      nguoiSoanHang: ""
+    });
+    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
+  }
 
-    alert("✅ Đã thêm mã vào đơn thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu.");
-  }).catch(function(err) { hideLoad(); alert('Lỗi: ' + err.message); });
+  alert("✅ Đã thêm mã vào bảng chỉnh sửa. Nhấn Lưu để ghi vào hệ thống.");
 }
 
 function ql_huyDong(row) {
@@ -735,7 +770,15 @@ function ql_huyPhieu() {
 }
 
 function layItemsTuBangSua() {
-  var items = []; document.querySelectorAll(".edit-sl-input").forEach((ip, idx) => { items.push({ maHang: editRows[idx].maHang, maVach: editRows[idx].maVach, tenHang: editRows[idx].tenHang, dvt: editRows[idx].dvt, sl: ip.value }); }); return items;
+  var items = [];
+  document.querySelectorAll(".edit-sl-input").forEach(function(ip) {
+    var rowKey = ip.getAttribute("data-row");
+    var rowMeta = editRows.find(function(item) { return String(item.tempKey || item.rowIndex) === String(rowKey); });
+    if (rowMeta) {
+      items.push({ maHang: rowMeta.maHang, maVach: rowMeta.maVach, tenHang: rowMeta.tenHang, dvt: rowMeta.dvt, sl: ip.value });
+    }
+  });
+  return items;
 }
 function ql_inWeb_FromEdit() { executePrintWeb(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsTuBangSua()); }
 function ql_xuatExcel_FromEdit() { executeExportExcel(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsTuBangSua()); }

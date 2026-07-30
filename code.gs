@@ -956,6 +956,22 @@ function requireAdmin(actor) {
   if (!account || String(account.role).trim() !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
 }
 
+function hasDuplicateItemInOrder(historySheet, soPhieu, item) {
+  if (!historySheet || !soPhieu || !item) return false;
+  var data = historySheet.getDataRange().getValues();
+  var target = String(soPhieu).trim().toLowerCase();
+  var itemMaHang = String(item.maHang || "").trim().toUpperCase();
+  var itemMaVach = String(item.maVach || "").trim().toUpperCase();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1]).trim().toLowerCase() !== target) continue;
+    var existingMaHang = String(data[i][4] || "").trim().toUpperCase();
+    var existingMaVach = String(data[i][5] || "").trim().toUpperCase();
+    if (itemMaHang && existingMaHang && itemMaHang === existingMaHang) return true;
+    if (itemMaVach && existingMaVach && itemMaVach === existingMaVach) return true;
+  }
+  return false;
+}
+
 function isOrderConfirmedForEditing(soPhieu, historySheet) {
   if (!soPhieu || !historySheet) return false;
   var data = historySheet.getDataRange().getValues();
@@ -987,6 +1003,30 @@ function luuChinhSuaPhieu(payload) {
     var cancelledCount = 0;
     var shouldNotify = false;
     var orderInfo = null;
+    var soPhieu = payload && payload.soPhieu ? String(payload.soPhieu).trim() : "";
+    var orderBaseRow = null;
+    var data = historySheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][1]).trim().toLowerCase() === soPhieu.toLowerCase()) {
+        orderBaseRow = data[i];
+        break;
+      }
+    }
+    if (payload.newItems && payload.newItems.length) {
+      for (var n = 0; n < payload.newItems.length; n++) {
+        var newItem = payload.newItems[n];
+        if (hasDuplicateItemInOrder(historySheet, soPhieu, newItem)) {
+          throw new Error("Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
+        }
+        var itemQty = Number(newItem.sl);
+        if (!itemQty || itemQty < 1) continue;
+        var newRow = [new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, itemQty, newItem.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý", payload.actor || "", "Quản lý"];
+        historySheet.appendRow(newRow);
+        logOrderChange(ss, soPhieu, "Thêm mã vào đơn", payload.actor, newItem.maHang, newItem.maVach, "", itemQty, newItem.tenHang || "");
+        changeCount += 1;
+        shouldNotify = true;
+      }
+    }
     for (var i = 0; i < payload.updates.length; i++) {
       var u = payload.updates[i];
       var oldSl = historySheet.getRange(u.row, 8).getValue();
