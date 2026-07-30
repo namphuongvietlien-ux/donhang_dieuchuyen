@@ -134,7 +134,15 @@ function initSystemData() {
   apiGet('getInitialData').then(function(res) {
     hideLoad();
     if(!res.success) { alert("Lỗi tải data: " + (res.error||res)); return; }
-    gStores = res.stores; danhMucGoc = res.danhMuc; danhMucArr = Object.values(danhMucGoc);
+    gStores = res.stores; danhMucGoc = res.danhMuc;
+    var seenCatalogKeys = {};
+    danhMucArr = Object.values(danhMucGoc).filter(function(item) {
+      if (!item) return false;
+      var key = String(item.maHang || "").trim().toUpperCase() + '|' + String(item.maVach || "").trim().toUpperCase() + '|' + String(item.tenHang || "").trim().toUpperCase();
+      if (!key || seenCatalogKeys[key]) return false;
+      seenCatalogKeys[key] = true;
+      return true;
+    });
     storeMap = res.storeMap || {};
 
     var htmlStores = ""; gStores.forEach(function(s) { var disp = storeMap[s] || s; htmlStores += '<option value="'+s+'">'+disp+'</option>'; });
@@ -337,7 +345,14 @@ function filterProducts(kw) {
   }).sort(function(a, b) {
     return b.score - a.score || String(a.item.tenHang || "").localeCompare(String(b.item.tenHang || ""));
   });
-  return scored.map(function(entry) { return entry.item; });
+  var seenResults = {};
+  return scored.filter(function(entry) {
+    var item = entry.item;
+    var key = String(item.maHang || "").trim().toUpperCase() + '|' + String(item.maVach || "").trim().toUpperCase() + '|' + String(item.tenHang || "").trim().toUpperCase();
+    if (!key || seenResults[key]) return false;
+    seenResults[key] = true;
+    return true;
+  }).map(function(entry) { return entry.item; });
 }
 
 function positionSuggestionBox(box, inputEl) {

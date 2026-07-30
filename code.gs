@@ -625,6 +625,29 @@ function doiMatKhau(payload) {
   return { success: false, msg: "Không tìm thấy tài khoản." };
 }
 
+function normalizeHeaderText(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
+}
+
+function findColumnIndexByAliases(row, aliases) {
+  if (!row) return -1;
+  for (var c = 0; c < row.length; c++) {
+    var normalized = normalizeHeaderText(row[c]);
+    for (var i = 0; i < aliases.length; i++) {
+      if (normalized.indexOf(aliases[i]) !== -1) return c;
+    }
+  }
+  return -1;
+}
+
+function getCellValue(row, index, fallback) {
+  if (!row || index === undefined || index === null || index < 0 || index >= row.length) return fallback;
+  var value = row[index];
+  if (value === null || value === undefined || value === "") return fallback;
+  return String(value).trim();
+}
+
 // --- API: LẤY DATA BAN ĐẦU ---
 function getInitialData() {
   try {
@@ -648,20 +671,47 @@ function getInitialData() {
     if (dataSheet) {
       var rawData = dataSheet.getDataRange().getValues();
       var tenHangChuanTheoMa = {};
-      for (var k = 2; k < rawData.length; k++) {
+      var headerRowIndex = -1;
+      var headerRow = null;
+      for (var hdr = 0; hdr < Math.min(rawData.length, 6); hdr++) {
+        if (!rawData[hdr]) continue;
+        var normalizedHeaderText = "";
+        for (var c = 0; c < rawData[hdr].length; c++) {
+          var cellText = normalizeHeaderText(rawData[hdr][c]);
+          if (cellText.indexOf("mahang") !== -1 || cellText.indexOf("mavach") !== -1 || cellText.indexOf("tenhang") !== -1 || cellText.indexOf("dvt") !== -1 || cellText.indexOf("donvi") !== -1 || cellText.indexOf("unit") !== -1) {
+            normalizedHeaderText = cellText;
+            break;
+          }
+        }
+        if (normalizedHeaderText) {
+          headerRowIndex = hdr;
+          headerRow = rawData[hdr];
+          break;
+        }
+      }
+      var maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
+      var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid']);
+      var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
+      var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+      var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
+      for (var k = startRow; k < rawData.length; k++) {
         if(!rawData[k]) continue;
-        var ma = rawData[k][0] ? rawData[k][0].toString().trim().toUpperCase() : "";
-        var ten = rawData[k][5] ? rawData[k][5].toString().trim() : "";
+        var ma = getCellValue(rawData[k], maHangIdx !== -1 ? maHangIdx : 0, "").toUpperCase();
+        var ten = getCellValue(rawData[k], tenHangIdx !== -1 ? tenHangIdx : 5, "");
         if (ma !== "" && ten !== "") tenHangChuanTheoMa[ma] = ten;
       }
-      for (var i = 2; i < rawData.length; i++) {
+      for (var i = startRow; i < rawData.length; i++) {
         if(!rawData[i]) continue;
-        var maHang = rawData[i][0] ? rawData[i][0].toString().trim() : "";
-        var maVach = rawData[i][2] ? rawData[i][2].toString().trim() : "";
-        var tenHang = rawData[i][5] ? rawData[i][5].toString().trim() : "";
-        var dvt = rawData[i][7] ? rawData[i][7].toString().trim() : "Cái";
+        var maHang = getCellValue(rawData[i], maHangIdx !== -1 ? maHangIdx : 0, "");
+        var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
+        var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
+        var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
+        if (dvt === "" && dvtIdx === -1) {
+          var fallbackDvt = getCellValue(rawData[i], 6, "");
+          if (fallbackDvt !== "") dvt = fallbackDvt;
+        }
         if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
-        var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt };
+        var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "Cái" };
         if (maVach !== "") danhMucHangHoa[maVach.toUpperCase()] = obj;
         if (maHang !== "" && !danhMucHangHoa[maHang.toUpperCase()]) danhMucHangHoa[maHang.toUpperCase()] = obj;
       }
