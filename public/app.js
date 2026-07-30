@@ -67,7 +67,8 @@ function getDeepLinkParams() {
   var params = new URLSearchParams(location.search);
   return {
     order: params.get("soPhieu"),
-    tab: params.get("tab")
+    tab: params.get("tab"),
+    public: params.get("public") === "1" || params.get("view") === "public"
   };
 }
 
@@ -516,6 +517,25 @@ function setQuickDateFilter(value, targetId) {
   }
 }
 
+function resetManagementViewAfterSave() {
+  var selectEl = document.getElementById("ql-phieu");
+  if (selectEl) selectEl.value = "";
+  var viewEl = document.getElementById("ql-view-phieu");
+  if (viewEl) viewEl.style.display = "none";
+  currentPhieuObj = null;
+  editRows = [];
+  ql_loadPhieu();
+}
+
+function resetConfirmViewAfterSave() {
+  var selectEl = document.getElementById("confirm-phieu");
+  if (selectEl) selectEl.value = "";
+  var viewEl = document.getElementById("confirm-view");
+  if (viewEl) viewEl.style.display = "none";
+  currentConfirmPhieuObj = null;
+  confirm_loadPhieu();
+}
+
 function ql_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("ql-phieu");
   if (!selectEl) return;
@@ -607,7 +627,7 @@ function confirm_xacNhanNhanHang() {
     hideLoad();
     if (!res.success) throw new Error(res.error || "Không thể lưu xác nhận.");
     alert("✅ Đã lưu xác nhận nhận hàng.");
-    confirm_onSelectPhieu();
+    resetConfirmViewAfterSave();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
@@ -615,7 +635,7 @@ function openDeepLinkedOrder() {
   var params = getDeepLinkParams();
   var targetOrder = params.order || deepLinkOrder;
   var targetTab = params.tab || deepLinkTab;
-  var isPublicView = params.tab === 'public' || params.order === 'public' || params.public === '1' || params.view === 'public';
+  var isPublicView = params.public || params.tab === 'public' || params.order === 'public' || params.view === 'public';
   if (!targetOrder) return;
   if (targetTab === "xac-nhan" || targetTab === "nhan-hang") {
     showLoad("Đang mở đơn hàng...");
@@ -623,7 +643,7 @@ function openDeepLinkedOrder() {
     confirm_loadPhieu(targetOrder);
     return;
   }
-  if (targetTab && targetTab !== "quan-ly") return;
+  if (targetTab && targetTab !== "quan-ly" && targetTab !== "public") return;
   showLoad("Đang mở đơn hàng...");
   activateTab('tab-quan-ly');
   apiGet('getThongTinPhieu', { soPhieu: targetOrder }).then(function(phieu) {
@@ -632,13 +652,24 @@ function openDeepLinkedOrder() {
       alert("Không tìm thấy đơn hàng: " + targetOrder);
       return;
     }
+    if (isPublicView) {
+      currentPhieuObj = phieu;
+      ql_hienThiChiTiet(phieu, { publicView: true });
+      setTimeout(function() {
+        if (currentPhieuObj && currentPhieuObj.soPhieu) {
+          ql_inWeb_FromEdit();
+        }
+      }, 800);
+      return;
+    }
     ql_loadPhieu(targetOrder);
   }).catch(function(err) { hideLoad(); alert('Lỗi mở đơn hàng: ' + err.message); });
 }
 
-function ql_hienThiChiTiet(phieu) {
+function ql_hienThiChiTiet(phieu, options) {
   if (!phieu) return;
   currentPhieuObj = phieu;
+  var isPublicView = !!(options && options.publicView);
   var isAdmin = sessionUser.role === "Admin";
   var canManageOrder = !!sessionUser.user;
   var canReceiveConfirm = !!sessionUser.user && (isAdmin || sessionUser.store === currentPhieuObj.khoNhan || sessionUser.store === "Tất cả" || sessionUser.store === currentPhieuObj.khoXuat);
@@ -646,14 +677,19 @@ function ql_hienThiChiTiet(phieu) {
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
     hideLoad(); editRows = rows; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     var isReadOnlyOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
-    var canEditRows = !!sessionUser.user && !isReadOnlyOrder && isAdmin;
-    var canAddItems = !!sessionUser.user && !isReadOnlyOrder;
-    var canCancelOrder = !!sessionUser.user && !isReadOnlyOrder && isAdmin;
+    var canEditRows = !!sessionUser.user && !isReadOnlyOrder && isAdmin && !isPublicView;
+    var canAddItems = !!sessionUser.user && !isReadOnlyOrder && !isPublicView;
+    var canCancelOrder = !!sessionUser.user && !isReadOnlyOrder && isAdmin && !isPublicView;
 
     document.getElementById("ql-admin-actions").style.display = canAddItems ? "flex" : "none";
     document.getElementById("ql-admin-column").style.display = canEditRows ? "table-cell" : "none";
     document.getElementById("ql-btn-cancel-order").style.display = canCancelOrder ? "inline-block" : "none";
     document.getElementById("ql-btn-save").style.display = canEditRows ? "inline-block" : "none";
+    document.getElementById("ql-btn-print").style.display = "inline-block";
+    document.getElementById("ql-btn-excel").style.display = "inline-block";
+    if (isPublicView) {
+      document.getElementById("ql-order-meta").innerText = "Chế độ xem công khai – chỉ đọc";
+    }
     document.getElementById("ql-order-meta").innerText = "";
     document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
     document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
@@ -666,11 +702,12 @@ function ql_hienThiChiTiet(phieu) {
       var latestQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
       var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+latestQty+'" '+(isReadOnlyRow || !canEditRows ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
       var cancelButton = canAddItems && !isReadOnlyOrder ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled || isReadOnlyOrder ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+quantityInput+'</td>'+cancelButton+'</tr>');
+      var displayQty = isPublicView ? (latestQty !== undefined && latestQty !== null && latestQty !== "" ? latestQty : "") : quantityInput;
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled || isReadOnlyOrder ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+displayQty+'</td>'+cancelButton+'</tr>');
     });
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
-    if (packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
-    if (isReadOnlyOrder) {
+    if (!isPublicView && packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
+    if (isReadOnlyOrder && !isPublicView) {
       document.getElementById("ql-order-meta").innerText += " | Chế độ chỉ xem sau khi xác nhận nhận hàng";
     }
     document.getElementById("ql-view-phieu").style.display = "block";
@@ -717,7 +754,7 @@ function ql_luuSua() {
     hideLoad();
     if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi.");
     alert("✅ Đã lưu chỉnh sửa thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu.");
-    ql_hienThiChiTiet(currentPhieuObj);
+    resetManagementViewAfterSave();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
