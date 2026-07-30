@@ -234,6 +234,9 @@ function doGet(e) {
         case 'getDonHangTheoNgay':
           res = getDonHangTheoNgay(e.parameter.ngay || 'today', e.parameter.userRole || '', e.parameter.userStore || '');
           break;
+        case 'getDashboardSummary':
+          res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '');
+          break;
         case 'getChiTietDonHangMobile':
           res = getChiTietDonHangMobile(e.parameter.soPhieu || '');
           break;
@@ -766,6 +769,90 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
   var res = []; for(var key in map) res.push(map[key]); 
   res.sort(function(a,b){ return b.thoiGian - a.thoiGian; }); 
   return res; 
+}
+
+function getDashboardSummary(userRole, userStore) {
+  try {
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { success: true, data: { totalOrders: 0, pendingOrders: 0, processedOrders: 0, canceledOrders: 0, recentOrders: [] } };
+    }
+
+    var data = historySheet.getDataRange().getValues();
+    var orderMap = {};
+    for (var i = 1; i < data.length; i++) {
+      var rowSoPhieu = data[i][1] ? data[i][1].toString().trim() : "";
+      if (!rowSoPhieu) continue;
+      var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
+      var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
+      if (userRole !== "Admin") {
+        if (rowKhoXuat !== userStore && rowKhoNhan !== userStore) continue;
+      }
+
+      var status = data[i][12] ? String(data[i][12]).trim() : "Đang xử lý";
+      var slThucTe = data[i][8];
+      var hasConfirmed = slThucTe !== "" && slThucTe !== undefined && slThucTe !== null && Number(slThucTe) > 0;
+      var entry = orderMap[rowSoPhieu];
+      if (!entry) {
+        entry = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: data[i][0], status: status, count: 0 };
+        orderMap[rowSoPhieu] = entry;
+      }
+
+      if (status === "Đã hủy đơn") entry.status = "Đã hủy";
+      else if (status === "Đã xác nhận nhận hàng") entry.status = "Đã xác nhận";
+      else if (hasConfirmed && entry.status !== "Đã hủy") entry.status = "Đã xử lý";
+      else if (entry.status !== "Đã hủy" && entry.status !== "Đã xử lý" && entry.status !== "Đã xác nhận") entry.status = "Mới";
+
+      entry.count += 1;
+      if (!entry.thoiGian || (data[i][0] instanceof Date && entry.thoiGian instanceof Date && data[i][0].getTime() > entry.thoiGian.getTime())) {
+        entry.thoiGian = data[i][0];
+      }
+    }
+
+    var orders = [];
+    for (var key in orderMap) orders.push(orderMap[key]);
+    orders.sort(function(a, b) {
+      var aTime = a.thoiGian instanceof Date ? a.thoiGian.getTime() : 0;
+      var bTime = b.thoiGian instanceof Date ? b.thoiGian.getTime() : 0;
+      return bTime - aTime;
+    });
+
+    var totalOrders = orders.length;
+    var pendingOrders = 0;
+    var processedOrders = 0;
+    var canceledOrders = 0;
+    for (var j = 0; j < orders.length; j++) {
+      var st = orders[j].status;
+      if (st === "Đã hủy") canceledOrders++;
+      else if (st === "Đã xử lý" || st === "Đã xác nhận") processedOrders++;
+      else pendingOrders++;
+    }
+
+    var recentOrders = orders.slice(0, 8).map(function(order) {
+      return {
+        soPhieu: order.soPhieu,
+        khoXuat: order.khoXuat,
+        khoNhan: order.khoNhan,
+        status: order.status,
+        thoiGian: formatDateTime(order.thoiGian)
+      };
+    });
+
+    return { success: true, data: { totalOrders: totalOrders, pendingOrders: pendingOrders, processedOrders: processedOrders, canceledOrders: canceledOrders, recentOrders: recentOrders } };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  try {
+    var d = value instanceof Date ? value : new Date(value);
+    return d.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch (e) {
+    return value;
+  }
 }
 
 function getChiTietPhieu(soPhieu, storeName) {
