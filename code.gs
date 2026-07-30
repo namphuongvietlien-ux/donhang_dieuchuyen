@@ -73,6 +73,10 @@ function doPost(e) {
             requireAuthenticatedAction(payload.payload || {});
             result = xacNhanNhanHang(payload.payload || {});
             break;
+          case 'taoBangSoanHangNgayMai':
+            requireAuthenticatedAction(payload.payload || {});
+            result = taoBangSoanHangNgayMai(payload.payload || {});
+            break;
           default:
             result = { error: 'Unknown action: ' + action };
         }
@@ -246,6 +250,9 @@ function doGet(e) {
           break;
         case 'getDanhSachTaiKhoan':
           res = getDanhSachTaiKhoan();
+          break;
+        case 'taoBangSoanHangNgayMai':
+          res = taoBangSoanHangNgayMai({ ngay: e.parameter.ngay || '' });
           break;
         default:
           res = { error: 'Unknown action' };
@@ -1625,4 +1632,247 @@ function luuSoSoanHangVaAnh(payload) {
 
     return "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!";
   } finally { lock.releaseLock(); }
+}
+
+function parseDateInputYYYYMMDD(value) {
+  var raw = String(value || "").trim();
+  if (!raw) return null;
+  var m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  var y = Number(m[1]);
+  var mm = Number(m[2]) - 1;
+  var d = Number(m[3]);
+  var date = new Date(y, mm, d);
+  if (isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function formatShortStoreLabel(storeName) {
+  var name = String(STORE_MAP[storeName] || storeName || "").trim();
+  var normalized = normalizeHeaderText(name);
+  if (normalized.indexOf("q7") !== -1 || normalized.indexOf("quan7") !== -1) return "Q7";
+  if (normalized.indexOf("q8") !== -1 || normalized.indexOf("quan8") !== -1) return "Q8";
+  if (normalized.indexOf("phamhung") !== -1) return "PH";
+  if (normalized.indexOf("q5") !== -1 || normalized.indexOf("quan5") !== -1) return "Q5";
+  if (normalized.indexOf("q1") !== -1 || normalized.indexOf("quan1") !== -1) return "Q1";
+  if (normalized.indexOf("q4") !== -1 || normalized.indexOf("quan4") !== -1) return "Q4";
+  return name || "Khác";
+}
+
+function getStockIndexByStore(stockData) {
+  var index = {};
+  for (var i = 4; i < stockData.length; i++) {
+    var row = stockData[i];
+    if (!row) continue;
+    var storeA = row[0] ? String(row[0]).trim() : "";
+    var storeB = row[7] ? String(row[7]).trim() : "";
+    var maHang = row[1] ? String(row[1]).trim().toUpperCase() : "";
+    var maVach = row[2] ? String(row[2]).trim().toUpperCase() : "";
+    var qty = Number(row[6]) || 0;
+    if (qty === 0) continue;
+
+    var stores = [];
+    if (storeA) stores.push(storeA);
+    if (storeB && stores.indexOf(storeB) === -1) stores.push(storeB);
+    if (!stores.length) continue;
+
+    for (var s = 0; s < stores.length; s++) {
+      var store = stores[s];
+      if (!index[store]) index[store] = {};
+      if (maHang) index[store][maHang] = (index[store][maHang] || 0) + qty;
+      if (maVach) index[store][maVach] = (index[store][maVach] || 0) + qty;
+    }
+  }
+  return index;
+}
+
+function taoBangSoanHangNgayMai(payload) {
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  if (!historySheet) throw new Error("Không tìm thấy sheet Lịch Sử Xuất Kho.");
+
+  var inputDate = parseDateInputYYYYMMDD(payload && payload.ngay ? payload.ngay : "");
+  var baseDate = inputDate || new Date();
+  baseDate.setHours(0, 0, 0, 0);
+  var tomorrow = new Date(baseDate);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  var data = historySheet.getDataRange().getValues();
+  if (!data || data.length < 2) throw new Error("Chưa có dữ liệu đơn hàng để tổng hợp.");
+
+  var itemMap = {};
+  var storeList = [];
+  var orderSeen = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    if (!row) continue;
+    var ngayTao = row[0] instanceof Date ? new Date(row[0]) : new Date(row[0]);
+    if (isNaN(ngayTao.getTime())) continue;
+    ngayTao.setHours(0, 0, 0, 0);
+    if (ngayTao.getTime() !== baseDate.getTime()) continue;
+
+    var soPhieu = row[1] ? String(row[1]).trim() : "";
+    var khoXuat = row[2] ? String(row[2]).trim() : "";
+    var khoNhan = row[3] ? String(row[3]).trim() : "";
+    var maHang = row[4] ? String(row[4]).trim() : "";
+    var maVach = row[5] ? String(row[5]).trim() : "";
+    var tenHang = row[6] ? String(row[6]).trim() : "";
+    var soLuong = Number(row[7]) || 0;
+    var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
+
+    if (!soPhieu || !khoNhan) continue;
+    if (status === "Đã hủy đơn" || status === "Đã hủy dòng") continue;
+    if (soLuong <= 0) continue;
+
+    var itemKey = (maHang ? maHang.toUpperCase() : "") || (maVach ? maVach.toUpperCase() : "");
+    if (!itemKey) continue;
+
+    if (!itemMap[itemKey]) {
+      itemMap[itemKey] = {
+        maHang: maHang,
+        maVach: maVach,
+        tenHang: tenHang,
+        totalQty: 0,
+        byStore: {},
+        sourceStores: {},
+        orders: {}
+      };
+    }
+
+    var item = itemMap[itemKey];
+    if (!item.tenHang && tenHang) item.tenHang = tenHang;
+    if (!item.maHang && maHang) item.maHang = maHang;
+    if (!item.maVach && maVach) item.maVach = maVach;
+    item.totalQty += soLuong;
+    item.byStore[khoNhan] = (item.byStore[khoNhan] || 0) + soLuong;
+    if (khoXuat) item.sourceStores[khoXuat] = true;
+    item.orders[soPhieu] = true;
+
+    if (storeList.indexOf(khoNhan) === -1) storeList.push(khoNhan);
+    orderSeen[soPhieu] = true;
+  }
+
+  var keys = [];
+  for (var key in itemMap) keys.push(key);
+  if (!keys.length) {
+    return { success: false, msg: "Không có đơn hợp lệ trong ngày đã chọn để tạo bảng soạn." };
+  }
+
+  storeList.sort(function(a, b) {
+    return formatShortStoreLabel(a).localeCompare(formatShortStoreLabel(b));
+  });
+
+  var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  var stockIndex = stockSheet ? getStockIndexByStore(stockSheet.getDataRange().getValues()) : {};
+
+  var sheetName = "SoanNgayMai_" + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "ddMMyyyy");
+  var existing = ss.getSheetByName(sheetName);
+  if (existing) ss.deleteSheet(existing);
+  var reportSheet = ss.insertSheet(sheetName);
+
+  var title = "BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy");
+  reportSheet.getRange("A1").setValue(title).setFontSize(14).setFontWeight("bold");
+  reportSheet.getRange("A2").setValue("Nguồn dữ liệu: Đơn tạo ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã để 1 lượt lấy đủ cho tất cả đơn.").setFontStyle("italic");
+  reportSheet.getRange("A3").setValue("Quy trình gợi ý: 1) In tab này 2) Đi theo từng mã từ trên xuống 3) Lấy đủ theo cột Tổng đặt 4) Chia theo cột Q7/Q8/PH... 5) Mã thiếu xử lý theo cột Đề xuất.");
+
+  var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "Stock khả dụng", "Tổng đặt"];
+  for (var h = 0; h < storeList.length; h++) {
+    headers.push(formatShortStoreLabel(storeList[h]));
+  }
+  headers.push("Cảnh báo");
+  headers.push("Đề xuất xử lý thiếu");
+  headers.push("Kho xuất");
+
+  var headerRow = 5;
+  reportSheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+  reportSheet.getRange(headerRow, 1, 1, headers.length).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
+  reportSheet.setFrozenRows(headerRow);
+
+  var rows = [];
+  var missingLines = 0;
+  for (var k = 0; k < keys.length; k++) {
+    var item = itemMap[keys[k]];
+    var sourceStores = [];
+    for (var src in item.sourceStores) sourceStores.push(src);
+
+    var stock = 0;
+    for (var s = 0; s < sourceStores.length; s++) {
+      var store = sourceStores[s];
+      var storeStockMap = stockIndex[store] || {};
+      var codeA = item.maHang ? item.maHang.toUpperCase() : "";
+      var codeB = item.maVach ? item.maVach.toUpperCase() : "";
+      var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
+      var qtyByMaVach = codeB ? (storeStockMap[codeB] || 0) : 0;
+      stock += qtyByMaHang > 0 ? qtyByMaHang : qtyByMaVach;
+    }
+
+    var thieu = item.totalQty - stock;
+    var canhBao = thieu > 0 ? ("THIẾU " + thieu) : "ĐỦ";
+    var deXuat = thieu > 0
+      ? ("Thiếu " + thieu + ": ưu tiên đơn gấp, điều chuyển nội bộ hoặc nhập bổ sung trước khi in phiếu giao.")
+      : "OK - có thể soạn gộp theo mã.";
+    if (thieu > 0) missingLines += 1;
+
+    var rowOut = [
+      0,
+      item.maHang || "",
+      item.maVach || "",
+      item.tenHang || "",
+      stock,
+      item.totalQty
+    ];
+
+    for (var c = 0; c < storeList.length; c++) {
+      rowOut.push(item.byStore[storeList[c]] || 0);
+    }
+
+    rowOut.push(canhBao);
+    rowOut.push(deXuat);
+    rowOut.push(sourceStores.map(function(name) { return STORE_MAP[name] || name; }).join(", "));
+    rows.push(rowOut);
+  }
+
+  rows.sort(function(a, b) {
+    var aWarn = String(a[6 + storeList.length]);
+    var bWarn = String(b[6 + storeList.length]);
+    if (aWarn !== bWarn) return aWarn.indexOf("THIẾU") === 0 ? -1 : 1;
+    var aName = String(a[3] || "");
+    var bName = String(b[3] || "");
+    return aName.localeCompare(bName);
+  });
+  for (var r = 0; r < rows.length; r++) rows[r][0] = r + 1;
+
+  reportSheet.getRange(4, 1).setValue("Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Mã thiếu: " + missingLines).setFontWeight("bold");
+
+  var startRow = headerRow + 1;
+  reportSheet.getRange(startRow, 1, rows.length, headers.length).setValues(rows);
+  reportSheet.getRange(startRow, 5, rows.length, 2 + storeList.length).setHorizontalAlignment("right");
+  reportSheet.getRange(startRow, 1, rows.length, headers.length).setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
+
+  var warningCol = 7 + storeList.length;
+  for (var x = 0; x < rows.length; x++) {
+    if (String(rows[x][warningCol - 1]).indexOf("THIẾU") === 0) {
+      reportSheet.getRange(startRow + x, warningCol).setBackground("#f4cccc").setFontWeight("bold");
+      reportSheet.getRange(startRow + x, 5).setBackground("#fff2cc");
+      reportSheet.getRange(startRow + x, 6).setBackground("#fce5cd");
+    } else {
+      reportSheet.getRange(startRow + x, warningCol).setBackground("#d9ead3");
+    }
+  }
+
+  reportSheet.autoResizeColumns(1, headers.length);
+  reportSheet.setColumnWidth(4, 260);
+  reportSheet.setColumnWidth(8 + storeList.length, 360);
+  SpreadsheetApp.flush();
+
+  return {
+    success: true,
+    sheetName: sheetName,
+    totalOrders: Object.keys(orderSeen).length,
+    totalItems: rows.length,
+    missingItems: missingLines,
+    url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId()
+  };
 }
