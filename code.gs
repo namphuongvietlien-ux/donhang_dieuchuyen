@@ -56,6 +56,10 @@ function doPost(e) {
             requireAdminAction(action, payload.payload || {});
             result = taoTaiKhoanMoi(payload.payload || {});
             break;
+          case 'nhapKhauCapNhatThongTin':
+            requireAdminAction(action, payload.payload || {});
+            result = nhapKhauCapNhatThongTin(payload.payload || {});
+            break;
           case 'doiMatKhau':
             result = doiMatKhau(payload.payload || {});
             break;
@@ -648,6 +652,196 @@ function getCellValue(row, index, fallback) {
   return String(value).trim();
 }
 
+function findHeaderRowIndex(data, maxScanRows) {
+  var limit = Math.min(data.length, maxScanRows || 8);
+  for (var r = 0; r < limit; r++) {
+    var row = data[r];
+    if (!row) continue;
+    var hasMarker = false;
+    for (var c = 0; c < row.length; c++) {
+      var token = normalizeHeaderText(row[c]);
+      if (!token) continue;
+      if (token.indexOf('mahang') !== -1 || token.indexOf('mavach') !== -1 || token.indexOf('tenhang') !== -1 || token.indexOf('tonkho') !== -1 || token.indexOf('soluongton') !== -1 || token === 'kho' || token.indexOf('cuahang') !== -1) {
+        hasMarker = true;
+        break;
+      }
+    }
+    if (hasMarker) return r;
+  }
+  return -1;
+}
+
+function getOrCreateCatalogSheet(ss) {
+  var sheet = ss.getSheetByName("Data_Excel");
+  if (!sheet) {
+    sheet = ss.insertSheet("Data_Excel");
+    sheet.getRange(1, 1, 1, 8).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT"]]);
+    sheet.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#d9ead3");
+  }
+  return sheet;
+}
+
+function getOrCreateStockSheet(ss) {
+  var sheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!sheet) {
+    sheet = ss.insertSheet("TỔNG HỢP TỒN KHO");
+    sheet.getRange(4, 1, 1, 8).setValues([["Kho", "Mã hàng", "Mã vạch", "Tên hàng hóa", "ĐVT", "", "Tồn kho", "Cửa hàng"]]);
+    sheet.getRange(4, 1, 1, 8).setFontWeight("bold").setBackground("#d9ead3");
+    sheet.setFrozenRows(4);
+  }
+  return sheet;
+}
+
+function parseImportRows(importData) {
+  var headerIndex = findHeaderRowIndex(importData, 10);
+  if (headerIndex < 0) throw new Error("Không tìm thấy dòng tiêu đề trong sheet nguồn nhập khẩu.");
+  var header = importData[headerIndex];
+  var idxMaHang = findColumnIndexByAliases(header, ['mahang', 'sku', 'mahh', 'code', 'itemcode']);
+  var idxMaVach = findColumnIndexByAliases(header, ['mavach', 'barcode', 'ean', 'barcodeid']);
+  var idxTenHang = findColumnIndexByAliases(header, ['tenhang', 'tensanpham', 'name', 'description']);
+  var idxDvt = findColumnIndexByAliases(header, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  var idxTonKho = findColumnIndexByAliases(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'qty']);
+  var idxKho = findColumnIndexByAliases(header, ['kho', 'cuahang', 'chinhanh', 'store', 'tenkho']);
+
+  if (idxMaHang === -1 && idxMaVach === -1) {
+    throw new Error("Sheet nguồn thiếu cột Mã hàng hoặc Mã vạch.");
+  }
+
+  var parsed = [];
+  for (var r = headerIndex + 1; r < importData.length; r++) {
+    var row = importData[r];
+    if (!row) continue;
+    var maHang = getCellValue(row, idxMaHang, "");
+    var maVach = getCellValue(row, idxMaVach, "");
+    var tenHang = getCellValue(row, idxTenHang, "");
+    var dvt = getCellValue(row, idxDvt, "Cái");
+    var kho = getCellValue(row, idxKho, "");
+    var tonRaw = idxTonKho !== -1 ? row[idxTonKho] : "";
+    var tonKho = (tonRaw === "" || tonRaw === null || tonRaw === undefined) ? "" : Number(tonRaw);
+
+    if (!maHang && !maVach && !tenHang) continue;
+
+    parsed.push({
+      maHang: maHang,
+      maVach: maVach,
+      tenHang: tenHang,
+      dvt: dvt || "Cái",
+      kho: kho,
+      tonKho: isNaN(tonKho) ? "" : tonKho
+    });
+  }
+  return parsed;
+}
+
+function nhapKhauCapNhatThongTin(payload) {
+  var actor = payload && payload.actor ? String(payload.actor).trim() : "";
+  requireAdmin(actor);
+
+  var sourceSheetName = payload && payload.sourceSheet ? String(payload.sourceSheet).trim() : "";
+  if (!sourceSheetName) throw new Error("Thiếu tên sheet nguồn nhập khẩu.");
+
+  var ss = getSS();
+  var sourceSheet = ss.getSheetByName(sourceSheetName);
+  if (!sourceSheet) throw new Error("Không tìm thấy sheet nguồn: " + sourceSheetName);
+
+  var sourceData = sourceSheet.getDataRange().getValues();
+  if (!sourceData || sourceData.length < 2) throw new Error("Sheet nguồn không có dữ liệu để nhập khẩu.");
+
+  var parsedRows = parseImportRows(sourceData);
+  if (!parsedRows.length) throw new Error("Không có dòng hợp lệ để cập nhật.");
+
+  var warnings = [];
+
+  var catalogMap = {};
+  for (var i = 0; i < parsedRows.length; i++) {
+    var item = parsedRows[i];
+    var key = (item.maVach ? item.maVach.toUpperCase() : "") || (item.maHang ? item.maHang.toUpperCase() : "");
+    if (!key) continue;
+    catalogMap[key] = {
+      maHang: item.maHang || "",
+      maVach: item.maVach || "",
+      tenHang: item.tenHang || "",
+      dvt: item.dvt || "Cái"
+    };
+  }
+  var catalogRows = [];
+  for (var key in catalogMap) catalogRows.push(catalogMap[key]);
+
+  var catalogSheet = getOrCreateCatalogSheet(ss);
+  var catalogData = catalogSheet.getDataRange().getValues();
+  var catalogHeaderIndex = findHeaderRowIndex(catalogData, 8);
+  if (catalogHeaderIndex < 0) catalogHeaderIndex = 0;
+  var catalogHeader = catalogData[catalogHeaderIndex] || [];
+  var cMaHang = findColumnIndexByAliases(catalogHeader, ['mahang', 'sku', 'code']);
+  var cMaVach = findColumnIndexByAliases(catalogHeader, ['mavach', 'barcode', 'ean']);
+  var cTenHang = findColumnIndexByAliases(catalogHeader, ['tenhang', 'name', 'description']);
+  var cDvt = findColumnIndexByAliases(catalogHeader, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  if (cMaHang === -1) cMaHang = 0;
+  if (cMaVach === -1) cMaVach = 2;
+  if (cTenHang === -1) cTenHang = 5;
+  if (cDvt === -1) cDvt = 7;
+
+  var catalogStartRow = catalogHeaderIndex + 2;
+  var catalogColumnCount = Math.max(catalogSheet.getLastColumn(), 8);
+  if (catalogSheet.getLastRow() >= catalogStartRow) {
+    catalogSheet.getRange(catalogStartRow, 1, catalogSheet.getLastRow() - catalogStartRow + 1, catalogColumnCount).clearContent();
+  }
+  if (catalogRows.length) {
+    var catalogWrite = [];
+    for (var c = 0; c < catalogRows.length; c++) {
+      var rowOut = [];
+      for (var z = 0; z < catalogColumnCount; z++) rowOut.push("");
+      rowOut[cMaHang] = catalogRows[c].maHang;
+      rowOut[cMaVach] = catalogRows[c].maVach;
+      rowOut[cTenHang] = catalogRows[c].tenHang;
+      rowOut[cDvt] = catalogRows[c].dvt;
+      catalogWrite.push(rowOut);
+    }
+    catalogSheet.getRange(catalogStartRow, 1, catalogWrite.length, catalogColumnCount).setValues(catalogWrite);
+  }
+
+  var stockRows = parsedRows.filter(function(r) {
+    return r.kho && r.tonKho !== "";
+  });
+  var stockUpdated = 0;
+  if (!stockRows.length) {
+    warnings.push("Không tìm thấy đủ dữ liệu Kho + Tồn kho trong sheet nguồn, nên chỉ cập nhật danh mục.");
+  } else {
+    var stockSheet = getOrCreateStockSheet(ss);
+    var stockStartRow = 5;
+    var stockColumnCount = Math.max(stockSheet.getLastColumn(), 8);
+    if (stockSheet.getLastRow() >= stockStartRow) {
+      stockSheet.getRange(stockStartRow, 1, stockSheet.getLastRow() - stockStartRow + 1, stockColumnCount).clearContent();
+    }
+
+    var stockWrite = [];
+    for (var s = 0; s < stockRows.length; s++) {
+      var rowStock = [];
+      for (var q = 0; q < stockColumnCount; q++) rowStock.push("");
+      rowStock[0] = stockRows[s].kho;
+      rowStock[1] = stockRows[s].maHang;
+      rowStock[2] = stockRows[s].maVach;
+      rowStock[3] = stockRows[s].tenHang;
+      rowStock[4] = stockRows[s].dvt;
+      rowStock[6] = stockRows[s].tonKho;
+      rowStock[7] = stockRows[s].kho;
+      stockWrite.push(rowStock);
+    }
+    stockSheet.getRange(stockStartRow, 1, stockWrite.length, stockColumnCount).setValues(stockWrite);
+    stockUpdated = stockWrite.length;
+  }
+
+  SpreadsheetApp.flush();
+
+  return {
+    success: true,
+    catalogUpdated: catalogRows.length,
+    stockUpdated: stockUpdated,
+    sourceSheet: sourceSheetName,
+    warnings: warnings
+  };
+}
+
 // --- API: LẤY DATA BAN ĐẦU ---
 function getInitialData() {
   try {
@@ -995,7 +1189,7 @@ function requireAuthenticatedAction(payload) {
 }
 
 function requireAdminAction(action, payload) {
-  var adminActions = ['luuChinhSuaPhieu', 'taoTaiKhoanMoi'];
+  var adminActions = ['luuChinhSuaPhieu', 'taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin'];
   if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
     throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
   }

@@ -896,7 +896,7 @@ function loadDSUser() {
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 function taoTaiKhoan() {
-  var payload = { user: document.getElementById("adm-user").value.trim(), pass: document.getElementById("adm-pass").value.trim(), role: document.getElementById("adm-role").value, store: document.getElementById("adm-store").value };
+  var payload = { user: document.getElementById("adm-user").value.trim(), pass: document.getElementById("adm-pass").value.trim(), role: document.getElementById("adm-role").value, store: document.getElementById("adm-store").value, actor: sessionUser.user };
   if(!payload.user || !payload.pass || !payload.store) return alert("Vui lòng điền đủ thông tin!");
   showLoad("Đang tạo...");
   apiPost('taoTaiKhoanMoi', payload).then(function(res) {
@@ -904,6 +904,29 @@ function taoTaiKhoan() {
     if(res.success) { alert("Tạo thành công!"); document.getElementById("adm-user").value=""; document.getElementById("adm-pass").value=""; loadDSUser(); }
     else alert(res.msg);
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function importDanhMucTonKho() {
+  if (!sessionUser || sessionUser.role !== "Admin") return alert("Chỉ Admin mới được phép nhập khẩu dữ liệu.");
+  var sourceName = (document.getElementById("imp-sheet-name").value || "").trim();
+  if (!sourceName) return alert("Vui lòng nhập tên sheet nguồn.");
+  showLoad("Đang nhập khẩu dữ liệu...");
+  apiPost('nhapKhauCapNhatThongTin', { sourceSheet: sourceName, actor: sessionUser.user }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) {
+      alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi"));
+      return;
+    }
+    var msg = "✅ Nhập khẩu thành công!\n" +
+      "- Danh mục cập nhật: " + (res.catalogUpdated || 0) + " dòng\n" +
+      "- Tồn kho cập nhật: " + (res.stockUpdated || 0) + " dòng";
+    if (res.warnings && res.warnings.length) msg += "\n\n⚠️ Ghi chú:\n- " + res.warnings.join("\n- ");
+    alert(msg);
+    initSystemData();
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi: ' + err.message);
+  });
 }
 
 function doiMatKhau() {

@@ -234,6 +234,15 @@
 
     <!-- TAB 4: ADMIN QUẢN LÝ TÀI KHOẢN -->
     <div id="tab-admin" class="tab-content">
+      <div class="card" style="border-left: 4px solid #f29900;">
+        <h3 style="margin-top:0;">Nhập khẩu thông tin (Danh mục + Tồn kho)</h3>
+        <p style="font-size:13px; color:#5f6368; margin-top:-4px;">Tự động đọc dữ liệu từ sheet nguồn và cập nhật đúng cột vào <b>Data_Excel</b> và <b>TỔNG HỢP TỒN KHO</b> theo định dạng đang dùng.</p>
+        <div class="form-row">
+          <div class="form-group"><label>Tên sheet nguồn nhập khẩu</label><input type="text" id="imp-sheet-name" placeholder="Ví dụ: Nhap_khau_thong_tin" value="Nhap_khau_thong_tin"></div>
+        </div>
+        <button class="btn-submit" onclick="importDanhMucTonKho()">⬆️ CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET</button>
+      </div>
+
       <div class="card" style="border-left: 4px solid var(--primary);">
         <h3 style="margin-top:0;">Tạo Tài Khoản Mới</h3>
         <div class="form-row">
@@ -580,6 +589,26 @@
         if(res.success) { alert("Tạo thành công!"); document.getElementById("adm-user").value=""; document.getElementById("adm-pass").value=""; loadDSUser(); } 
         else alert(res.msg);
       }).taoTaiKhoanMoi(payload);
+    }
+
+    function importDanhMucTonKho() {
+      if (sessionUser.role !== "Admin") return alert("Chỉ Admin mới được phép nhập khẩu dữ liệu.");
+      var sourceName = (document.getElementById("imp-sheet-name").value || "").trim();
+      if (!sourceName) return alert("Vui lòng nhập tên sheet nguồn.");
+      showLoad("Đang nhập khẩu dữ liệu...");
+      google.script.run.withSuccessHandler(function(res) {
+        hideLoad();
+        if (!res || !res.success) {
+          alert("❌ Nhập khẩu thất bại: " + ((res && res.error) || "Không rõ lỗi"));
+          return;
+        }
+        var msg = "✅ Nhập khẩu thành công!\n" +
+          "- Danh mục cập nhật: " + (res.catalogUpdated || 0) + " dòng\n" +
+          "- Tồn kho cập nhật: " + (res.stockUpdated || 0) + " dòng";
+        if (res.warnings && res.warnings.length) msg += "\n\n⚠️ Ghi chú:\n- " + res.warnings.join("\n- ");
+        alert(msg);
+        initSystemData();
+      }).nhapKhauCapNhatThongTin({ sourceSheet: sourceName, actor: sessionUser.user });
     }
 
     function showLoad(text) { document.getElementById("loading-text").innerText = text; document.getElementById("loading-overlay").style.display = "flex"; }

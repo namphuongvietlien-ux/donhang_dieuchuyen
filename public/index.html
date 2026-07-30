@@ -400,6 +400,15 @@
 
     <!-- TAB 5: ADMIN QUẢN LÝ TÀI KHOẢN -->
     <div id="tab-admin" class="tab-content">
+      <div class="card" style="border-left: 4px solid #f29900;">
+        <h3 style="margin-top:0;">Nhập khẩu thông tin (Danh mục + Tồn kho)</h3>
+        <p style="font-size:13px; color:#5f6368; margin-top:-4px;">Tự động đọc dữ liệu từ sheet nguồn và cập nhật đúng cột vào <b>Data_Excel</b> và <b>TỔNG HỢP TỒN KHO</b> theo định dạng đang dùng.</p>
+        <div class="form-row">
+          <div class="form-group"><label>Tên sheet nguồn nhập khẩu</label><input type="text" id="imp-sheet-name" placeholder="Ví dụ: Nhap_khau_thong_tin" value="Nhap_khau_thong_tin"></div>
+        </div>
+        <button class="btn-submit" onclick="importDanhMucTonKho()">⬆️ CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET</button>
+      </div>
+
       <div class="card" style="border-left: 4px solid var(--primary);">
         <h3 style="margin-top:0;">Tạo Tài Khoản Mới</h3>
         <div class="form-row">
