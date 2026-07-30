@@ -398,9 +398,13 @@ function sendTelegramTextToStores(storeNames, text) {
   });
 }
 
-function getOrderWebUrl(soPhieu, tabName) {
+function getOrderWebUrl(soPhieu, tabName, isPublic) {
   var tab = tabName || "quan-ly";
-  return WEB_APP_URL + "?tab=" + encodeURIComponent(tab) + "&soPhieu=" + encodeURIComponent(soPhieu);
+  var url = WEB_APP_URL + "?tab=" + encodeURIComponent(tab) + "&soPhieu=" + encodeURIComponent(soPhieu);
+  if (isPublic) {
+    url += "&public=1";
+  }
+  return url;
 }
 
 function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
@@ -505,7 +509,7 @@ function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirm
              "*Người xác nhận:* " + (actor || "Không xác định") + "\n" +
              "*Tổng số lượng đã xác nhận:* " + confirmedTotal + "\n" +
              detailText +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu, "xac-nhan");
+             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu, "quan-ly", true);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -952,11 +956,29 @@ function requireAdmin(actor) {
   if (!account || String(account.role).trim() !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
 }
 
+function isOrderConfirmedForEditing(soPhieu, historySheet) {
+  if (!soPhieu || !historySheet) return false;
+  var data = historySheet.getDataRange().getValues();
+  var target = String(soPhieu).trim().toLowerCase();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1]).trim().toLowerCase() === target) {
+      var status = String(data[i][12] || "").trim();
+      if (status === "Đã xác nhận nhận hàng") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function luuChinhSuaPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   requireAdmin(payload.actor);
   ensureHistoryStatusColumn(historySheet);
+  if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet)) {
+    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
+  }
   var lock = LockService.getDocumentLock();
   try {
     lock.waitLock(10000);
@@ -1017,6 +1039,9 @@ function themChiTietPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet || !payload.soPhieu || !payload.item) throw new Error("Thiếu dữ liệu đơn hàng hoặc sản phẩm.");
+  if (isOrderConfirmedForEditing(payload.soPhieu, historySheet)) {
+    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
+  }
   ensureHistoryStatusColumn(historySheet);
   var data = historySheet.getDataRange().getValues();
   var baseRow = null;
@@ -1038,6 +1063,10 @@ function huyDongChiTietPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   ensureHistoryStatusColumn(historySheet);
+  var soPhieu = payload && payload.soPhieu ? payload.soPhieu : "";
+  if (soPhieu && isOrderConfirmedForEditing(soPhieu, historySheet)) {
+    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
+  }
   var row = Number(payload.row);
   if (!row || row < 2) throw new Error("Dòng đơn hàng không hợp lệ.");
   var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
@@ -1053,6 +1082,9 @@ function huyPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   ensureHistoryStatusColumn(historySheet);
+  if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet)) {
+    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể hủy hoặc chỉnh sửa nữa.");
+  }
   var data = historySheet.getDataRange().getValues();
   var found = false;
   var orderInfo = getThongTinPhieu(payload.soPhieu);

@@ -89,9 +89,10 @@ window.onload = function() {
   document.addEventListener("click", function(){ closeUserMenu(); });
   hidePasswordSection();
   var params = new URLSearchParams(location.search);
-  var hasDeepLink = !!(params.get("soPhieu") || params.get("tab"));
+  var isPublicView = params.get("public") === "1" || params.get("view") === "public";
+  var hasDeepLink = !!(params.get("soPhieu") || params.get("tab") || isPublicView);
   if (hasDeepLink) {
-    sessionUser = { user: "", role: "", store: "" };
+    sessionUser = { user: "", role: "Guest", store: "" };
     safeText("lbl-username", "Guest");
     safeDisplay("login-screen", "none");
     safeDisplay("main-container", "block");
@@ -599,6 +600,7 @@ function openDeepLinkedOrder() {
   var params = getDeepLinkParams();
   var targetOrder = params.order || deepLinkOrder;
   var targetTab = params.tab || deepLinkTab;
+  var isPublicView = params.tab === 'public' || params.order === 'public' || params.public === '1' || params.view === 'public';
   if (!targetOrder) return;
   if (targetTab === "xac-nhan" || targetTab === "nhan-hang") {
     showLoad("Đang mở đơn hàng...");
