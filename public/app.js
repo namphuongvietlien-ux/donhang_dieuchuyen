@@ -52,7 +52,7 @@ function showLoginError(message) {
 // --- App logic (extracted from original webapp) ---
 var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
 var storeMap = {};
-var phieuData = []; var editRows = []; var currentPhieuObj = null; var currentConfirmPhieuObj = null;
+var phieuData = []; var editRows = []; var currentLoadedRows = []; var currentPhieuObj = null; var currentConfirmPhieuObj = null;
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
 var deepLinkTab = new URLSearchParams(location.search).get("tab");
@@ -675,7 +675,7 @@ function ql_hienThiChiTiet(phieu, options) {
   var canReceiveConfirm = !!sessionUser.user && (isAdmin || sessionUser.store === currentPhieuObj.khoNhan || sessionUser.store === "Tất cả" || sessionUser.store === currentPhieuObj.khoXuat);
   showLoad("Tải chi tiết...");
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
-    hideLoad(); editRows = rows; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
+    hideLoad(); editRows = rows; currentLoadedRows = rows || []; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     var isReadOnlyOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
     var canEditRows = !!sessionUser.user && !isReadOnlyOrder && isAdmin && !isPublicView;
     var canAddItems = !!sessionUser.user && !isReadOnlyOrder && !isPublicView;
@@ -689,8 +689,9 @@ function ql_hienThiChiTiet(phieu, options) {
     document.getElementById("ql-btn-excel").style.display = "inline-block";
     if (isPublicView) {
       document.getElementById("ql-order-meta").innerText = "Chế độ xem công khai – chỉ đọc";
+    } else {
+      document.getElementById("ql-order-meta").innerText = "";
     }
-    document.getElementById("ql-order-meta").innerText = "";
     document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
     document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
     document.getElementById("ql-lbl-khonhan").innerText = currentPhieuObj.khoNhan + ' (' + (storeMap[currentPhieuObj.khoNhan] || '') + ')';
@@ -832,8 +833,21 @@ function layItemsTuBangSua() {
   });
   return items;
 }
-function ql_inWeb_FromEdit() { executePrintWeb(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsTuBangSua()); }
-function ql_xuatExcel_FromEdit() { executeExportExcel(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsTuBangSua()); }
+function layItemsForOutput() {
+  var isPublicView = new URLSearchParams(location.search).get("public") === "1" || new URLSearchParams(location.search).get("view") === "public";
+  if (!isPublicView) return layItemsTuBangSua();
+  return (currentLoadedRows || []).map(function(row) {
+    return {
+      maHang: row.maHang,
+      maVach: row.maVach,
+      tenHang: row.tenHang,
+      dvt: row.dvt,
+      sl: (row.slThucTe !== undefined && row.slThucTe !== null && row.slThucTe !== "") ? row.slThucTe : row.slGoc
+    };
+  });
+}
+function ql_inWeb_FromEdit() { executePrintWeb(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsForOutput()); }
+function ql_xuatExcel_FromEdit() { executeExportExcel(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsForOutput()); }
 
 // ================= SOẠN HÀNG MOBILE =================
 function sh_taiDanhSachDon() {
