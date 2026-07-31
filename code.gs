@@ -949,13 +949,30 @@ function writeImportedDataToSheet(sheet, fileData) {
   return { rows: newRowCount, cols: newColCount };
 }
 
+function looksLikeStoreHeaderName(value) {
+  var text = normalizeHeaderText(String(value || ""));
+  if (!text) return false;
+  if (text.indexOf('mahang') !== -1 || text.indexOf('mavach') !== -1 || text.indexOf('tenhang') !== -1 || text.indexOf('dvt') !== -1 || text.indexOf('donvi') !== -1 || text.indexOf('unit') !== -1 || text.indexOf('tonkho') !== -1 || text.indexOf('soluongton') !== -1 || text.indexOf('stock') !== -1 || text.indexOf('qty') !== -1) {
+    return false;
+  }
+  if (text.indexOf('kho') !== -1 || text.indexOf('cuahang') !== -1 || text.indexOf('chinhanh') !== -1 || text.indexOf('store') !== -1 || text.indexOf('tenkho') !== -1) return true;
+  if (text.indexOf('q7') !== -1 || text.indexOf('q8') !== -1 || text.indexOf('q1') !== -1 || text.indexOf('q4') !== -1 || text.indexOf('q5') !== -1 || text.indexOf('ph') !== -1 || text.indexOf('k9') !== -1 || text.indexOf('quan') !== -1) return true;
+  if (text.indexOf('quận') !== -1 || text.indexOf('quan') !== -1) return true;
+  return false;
+}
+
 function getStockSheetConfig(stockData) {
   var headerIndex = findHeaderRowIndex(stockData, 10);
   if (headerIndex < 0) {
-    return { startRow: 4, storeIndexes: [0, 7], maHangIdx: 1, maVachIdx: 2, tonKhoIdx: 6, requireStoreRowPrefix: false };
+    return { startRow: 4, headerIndex: 0, storeIndexes: [0, 7], storeHeaderIndexes: [], maHangIdx: 1, maVachIdx: 2, tonKhoIdx: 6, requireStoreRowPrefix: false };
   }
   var header = stockData[headerIndex] || [];
   var storeIndexes = findAllColumnIndicesByAliases(header, ['kho', 'cuahang', 'chinhanh', 'store', 'tenkho']);
+  var storeHeaderIndexes = [];
+  for (var c = 0; c < header.length; c++) {
+    if (storeIndexes.indexOf(c) !== -1) continue;
+    if (looksLikeStoreHeaderName(header[c])) storeHeaderIndexes.push(c);
+  }
   var maHangIdx = findColumnIndexByAliases(header, ['mahang', 'mahanghoa', 'sku', 'mahh', 'code', 'itemcode']);
   var maVachIdx = findColumnIndexByAliases(header, ['mavach', 'barcode', 'ean', 'barcodeid']);
   var tonKhoIdx = findColumnIndexByAliases(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'qty', 'cuoiky']);
@@ -976,7 +993,9 @@ function getStockSheetConfig(stockData) {
 
   return {
     startRow: startRow,
+    headerIndex: headerIndex,
     storeIndexes: storeIndexes.length ? storeIndexes : [0, 7],
+    storeHeaderIndexes: storeHeaderIndexes,
     maHangIdx: maHangIdx === -1 ? 1 : maHangIdx,
     maVachIdx: maVachIdx === -1 ? 2 : maVachIdx,
     tonKhoIdx: tonKhoIdx === -1 ? 6 : tonKhoIdx,
@@ -1516,6 +1535,7 @@ function getStockMapForStore(ss, storeName) {
 
   var tkData = tonKhoSheet.getDataRange().getValues();
   var stockConfig = getStockSheetConfig(tkData);
+  var header = tkData[stockConfig.headerIndex] || [];
   var currentMaHang = "";
   var currentMaVach = "";
   for (var k = stockConfig.startRow; k < tkData.length; k++) {
@@ -1535,6 +1555,21 @@ function getStockMapForStore(ss, storeName) {
 
     var rowStores = getRowStoreNames(row, stockConfig);
     var match = false;
+    if (stockConfig.storeHeaderIndexes && stockConfig.storeHeaderIndexes.length) {
+      for (var c = 0; c < stockConfig.storeHeaderIndexes.length; c++) {
+        var storeHeaderIdx = stockConfig.storeHeaderIndexes[c];
+        var storeNameCandidate = getCellValue(header, storeHeaderIdx, "");
+        var qty = parseQuantityValue(row[storeHeaderIdx]);
+        if (!storeNameCandidate) continue;
+        if (isStoreNameMatch(storeNameCandidate, storeName) && qty !== 0) {
+          match = true;
+          if (maHangTon) addStockValueByCode(tonKhoMap, "MH:", maHangTon, qty);
+          if (maVachTon) addStockValueByCode(tonKhoMap, "MV:", maVachTon, qty);
+        }
+      }
+    }
+    if (match) continue;
+
     for (var s = 0; s < rowStores.length; s++) {
       if (isStoreNameMatch(rowStores[s], storeName)) {
         match = true;
@@ -2492,6 +2527,7 @@ function getStockMapByStoreName(stockIndex, storeName) {
 function getStockIndexByStore(stockData) {
   var index = {};
   var stockConfig = getStockSheetConfig(stockData);
+  var header = stockData[stockConfig.headerIndex] || [];
   var currentMaHang = "";
   var currentMaVach = "";
   for (var i = stockConfig.startRow; i < stockData.length; i++) {
@@ -2504,9 +2540,36 @@ function getStockIndexByStore(stockData) {
       currentMaHang = rowMaHangRaw;
       currentMaVach = rowMaVachRaw;
     }
-    var stores = getRowStoreNames(row, stockConfig);
     var maHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
     var maVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
+
+    var storedAny = false;
+    if (stockConfig.storeHeaderIndexes && stockConfig.storeHeaderIndexes.length) {
+      for (var c = 0; c < stockConfig.storeHeaderIndexes.length; c++) {
+        var storeHeaderIdx = stockConfig.storeHeaderIndexes[c];
+        var store = getCellValue(header, storeHeaderIdx, "");
+        if (!store) continue;
+        var qty = parseQuantityValue(row[storeHeaderIdx]);
+        if (qty === 0) continue;
+        var storeKey = getCanonicalStoreKey(store);
+        if (!storeKey) continue;
+        if (!index[storeKey]) index[storeKey] = {};
+        if (maHang) {
+          index[storeKey][maHang] = (index[storeKey][maHang] || 0) + qty;
+          var maHangCompact = normalizeNumericCode(maHang);
+          if (maHangCompact && maHangCompact !== maHang) index[storeKey][maHangCompact] = (index[storeKey][maHangCompact] || 0) + qty;
+        }
+        if (maVach) {
+          index[storeKey][maVach] = (index[storeKey][maVach] || 0) + qty;
+          var maVachCompact = normalizeNumericCode(maVach);
+          if (maVachCompact && maVachCompact !== maVach) index[storeKey][maVachCompact] = (index[storeKey][maVachCompact] || 0) + qty;
+        }
+        storedAny = true;
+      }
+    }
+    if (storedAny) continue;
+
+    var stores = getRowStoreNames(row, stockConfig);
     var qty = parseQuantityValue(row[stockConfig.tonKhoIdx]);
     if (qty === 0) continue;
     if (!stores.length) continue;
