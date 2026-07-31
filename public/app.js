@@ -11,7 +11,13 @@ async function callJsonApi(urls, options) {
         lastError = new Error('HTTP ' + res.status + ': ' + txt);
         continue;
       }
-      try { return JSON.parse(txt); } catch(e) { return txt; }
+      try {
+        return JSON.parse(txt);
+      } catch (e) {
+        // GAS can return plain "OK" when payload is invalid; treat as failure and try fallback endpoint.
+        lastError = new Error('Invalid JSON response from ' + target + ': ' + txt);
+        continue;
+      }
     } catch (err) {
       lastError = err;
     }

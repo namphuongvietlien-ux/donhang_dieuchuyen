@@ -1558,13 +1558,36 @@ function parseQuantityValue(value) {
   if (typeof value === "number") return isNaN(value) ? 0 : value;
   var text = String(value).trim();
   if (!text) return 0;
-  var normalized = text.replace(/\s+/g, "").replace(/,/g, "");
+  var normalized = text.replace(/\s+/g, "").replace(/\u00A0/g, "");
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(normalized)) {
+    normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+  } else if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(normalized)) {
+    normalized = normalized.replace(/,/g, "");
+  } else if (/^\d+,\d+$/.test(normalized) && normalized.indexOf(".") === -1) {
+    normalized = normalized.replace(/,/g, ".");
+  } else {
+    normalized = normalized.replace(/,/g, "");
+  }
   var n = Number(normalized);
   return isNaN(n) ? 0 : n;
 }
 
 function normalizeProductCode(value) {
-  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (value === null || value === undefined) return "";
+  var text = String(value).trim().toUpperCase();
+  if (!text) return "";
+
+  if (text.charAt(0) === "'") text = text.slice(1);
+  text = text.replace(/\u00A0/g, "").replace(/\s+/g, "");
+
+  if (/^\d+\.0+$/.test(text)) {
+    text = text.replace(/\.0+$/, "");
+  }
+  if (/^\d{1,3}(\.\d{3})+$/.test(text)) {
+    text = text.replace(/\./g, "");
+  }
+
+  return text.replace(/[^A-Z0-9]/g, "");
 }
 
 function normalizeNumericCode(value) {
@@ -2450,6 +2473,22 @@ function formatShortStoreLabel(storeName) {
   return name || "Khác";
 }
 
+function getCanonicalStoreKey(storeName) {
+  var normalizedStore = normalizeStoreName(storeName || "");
+  if (!normalizedStore) return "";
+  var shortLabel = formatShortStoreLabel(normalizedStore);
+  var key = normalizeHeaderText(shortLabel);
+  if (key) return key;
+  return normalizeHeaderText(normalizedStore);
+}
+
+function getStockMapByStoreName(stockIndex, storeName) {
+  if (!stockIndex) return {};
+  var key = getCanonicalStoreKey(storeName);
+  if (key && stockIndex[key]) return stockIndex[key];
+  return {};
+}
+
 function getStockIndexByStore(stockData) {
   var index = {};
   var stockConfig = getStockSheetConfig(stockData);
@@ -2474,16 +2513,18 @@ function getStockIndexByStore(stockData) {
 
     for (var s = 0; s < stores.length; s++) {
       var store = stores[s];
-      if (!index[store]) index[store] = {};
+      var storeKey = getCanonicalStoreKey(store);
+      if (!storeKey) continue;
+      if (!index[storeKey]) index[storeKey] = {};
       if (maHang) {
-        index[store][maHang] = (index[store][maHang] || 0) + qty;
+        index[storeKey][maHang] = (index[storeKey][maHang] || 0) + qty;
         var maHangCompact = normalizeNumericCode(maHang);
-        if (maHangCompact && maHangCompact !== maHang) index[store][maHangCompact] = (index[store][maHangCompact] || 0) + qty;
+        if (maHangCompact && maHangCompact !== maHang) index[storeKey][maHangCompact] = (index[storeKey][maHangCompact] || 0) + qty;
       }
       if (maVach) {
-        index[store][maVach] = (index[store][maVach] || 0) + qty;
+        index[storeKey][maVach] = (index[storeKey][maVach] || 0) + qty;
         var maVachCompact = normalizeNumericCode(maVach);
-        if (maVachCompact && maVachCompact !== maVach) index[store][maVachCompact] = (index[store][maVachCompact] || 0) + qty;
+        if (maVachCompact && maVachCompact !== maVach) index[storeKey][maVachCompact] = (index[storeKey][maVachCompact] || 0) + qty;
       }
     }
   }
@@ -2714,7 +2755,7 @@ function taoBangSoanHangNgayMai(payload) {
     var stock = 0;
     for (var s = 0; s < sourceStores.length; s++) {
       var store = sourceStores[s];
-      var storeStockMap = stockIndex[store] || {};
+      var storeStockMap = getStockMapByStoreName(stockIndex, store);
       var codeA = item.maHang ? item.maHang.toUpperCase() : "";
       var codeB = item.maVach ? item.maVach.toUpperCase() : "";
       var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
