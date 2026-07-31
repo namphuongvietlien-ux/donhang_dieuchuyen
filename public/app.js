@@ -655,15 +655,19 @@ function confirm_loadPhieu(selectedSoPhieu) {
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: document.getElementById("confirm-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
+    var confirmableOrders = (res || []).filter(function(r) { return r.trangThai === "Đã soạn"; });
     var html = '<option value="">-- Chọn Phiếu --</option>';
-    res.forEach(function(r) {
+    confirmableOrders.forEach(function(r) {
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
     });
     selectEl.innerHTML = html;
     if (selectedSoPhieu) {
-      selectEl.value = selectedSoPhieu;
-      confirm_onSelectPhieu();
+      var found = confirmableOrders.some(function(item) { return item.soPhieu === selectedSoPhieu; });
+      if (found) {
+        selectEl.value = selectedSoPhieu;
+        confirm_onSelectPhieu();
+      }
     }
   }).catch(function(err){ alert('Lỗi: '+err.message); });
 }
@@ -786,7 +790,9 @@ function ql_hienThiChiTiet(phieu, options) {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
       var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
+      var rowKey = String(r.tempKey || r.rowIndex);
       var dvtDisplay = r.dvt || "Cái";
+      var variantHtml = ql_renderVariantSelector(r, rowKey, isReadOnlyRow);
       var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
       var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
       var requestedDisplay = (!isReadOnlyRow && !isPublicView)
@@ -796,7 +802,7 @@ function ql_hienThiChiTiet(phieu, options) {
       var receivedDisplay = hasReceivedQty
         ? ('<b style="color:#166534;">' + Number(r.slThucTe) + '</b>')
         : '<span style="color:#94a3b8;">-</span>';
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+dvtDisplay+'</td><td>'+r.stock+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td>'+variantHtml+'<br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td id="ql-dvt-'+rowKey+'">'+dvtDisplay+'</td><td>'+r.stock+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
     });
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     if (!isPublicView && packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
@@ -807,6 +813,72 @@ function ql_hienThiChiTiet(phieu, options) {
     }
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function ql_getVariantOptions(rowMeta) {
+  var maHang = String(rowMeta && rowMeta.maHang ? rowMeta.maHang : '').trim().toUpperCase();
+  var tenHang = String(rowMeta && rowMeta.tenHang ? rowMeta.tenHang : '').trim().toUpperCase();
+  var seen = {};
+  var variants = [];
+  danhMucArr.forEach(function(item) {
+    if (!item) return;
+    var itemMaHang = String(item.maHang || '').trim().toUpperCase();
+    var itemTen = String(item.tenHang || '').trim().toUpperCase();
+    var sameGroup = (maHang && itemMaHang === maHang) || (tenHang && itemTen === tenHang);
+    if (!sameGroup) return;
+    var key = String(item.maVach || '').trim().toUpperCase() + '|' + String(item.dvt || 'Cái').trim().toUpperCase();
+    if (!key || seen[key]) return;
+    seen[key] = true;
+    variants.push({
+      maVach: item.maVach || '',
+      dvt: item.dvt || 'Cái',
+      tenHang: item.tenHang || rowMeta.tenHang || '',
+      maHang: item.maHang || rowMeta.maHang || ''
+    });
+  });
+
+  var currentKey = String(rowMeta.maVach || '').trim().toUpperCase() + '|' + String(rowMeta.dvt || 'Cái').trim().toUpperCase();
+  if (!seen[currentKey]) {
+    variants.unshift({
+      maVach: rowMeta.maVach || '',
+      dvt: rowMeta.dvt || 'Cái',
+      tenHang: rowMeta.tenHang || '',
+      maHang: rowMeta.maHang || ''
+    });
+  }
+  return variants;
+}
+
+function ql_renderVariantSelector(rowMeta, rowKey, isReadOnlyRow) {
+  var variants = ql_getVariantOptions(rowMeta);
+  var currentMaVach = String(rowMeta.maVach || '').trim().toUpperCase();
+  if (isReadOnlyRow || variants.length <= 1) {
+    return '<b>Mã vạch: ' + (rowMeta.maVach || '') + '</b>';
+  }
+  var optionsHtml = '';
+  variants.forEach(function(v) {
+    var selected = String(v.maVach || '').trim().toUpperCase() === currentMaVach ? ' selected' : '';
+    var payload = encodeURIComponent(JSON.stringify(v));
+    optionsHtml += '<option value="' + payload + '"' + selected + '>' + (v.maVach || '-') + ' | ĐVT: ' + (v.dvt || 'Cái') + '</option>';
+  });
+  return '<select class="ql-variant-select" data-row="' + rowKey + '" onchange="ql_onVariantChange(this)">' + optionsHtml + '</select>';
+}
+
+function ql_onVariantChange(selectEl) {
+  if (!selectEl) return;
+  var rowKey = String(selectEl.getAttribute('data-row') || '');
+  var raw = selectEl.value ? decodeURIComponent(selectEl.value) : '';
+  if (!rowKey || !raw) return;
+  var variant = null;
+  try { variant = JSON.parse(raw); } catch(e) { return; }
+  var rowMeta = editRows.find(function(item) { return String(item.tempKey || item.rowIndex) === rowKey; });
+  if (!rowMeta || !variant) return;
+  rowMeta.maVach = variant.maVach || rowMeta.maVach;
+  rowMeta.dvt = variant.dvt || rowMeta.dvt || 'Cái';
+  rowMeta.tenHang = variant.tenHang || rowMeta.tenHang;
+  if (variant.maHang) rowMeta.maHang = variant.maHang;
+  var dvtCell = document.getElementById('ql-dvt-' + rowKey);
+  if (dvtCell) dvtCell.innerText = rowMeta.dvt || 'Cái';
 }
 
 function ql_isDuplicateOrderItem(item) {
@@ -827,6 +899,15 @@ function ql_luuSua() {
   var inputs = document.querySelectorAll(".edit-sl-input");
   var updates = [];
   var newItems = [];
+  var variantByRow = {};
+  document.querySelectorAll('.ql-variant-select').forEach(function(selectEl) {
+    var rowKey = String(selectEl.getAttribute('data-row') || '');
+    if (!rowKey || !selectEl.value) return;
+    try {
+      var variant = JSON.parse(decodeURIComponent(selectEl.value));
+      variantByRow[rowKey] = variant;
+    } catch(e) {}
+  });
   inputs.forEach(function(ip) {
     var isNew = ip.getAttribute("data-new") === "1";
     var rowKey = ip.getAttribute("data-row");
@@ -838,7 +919,14 @@ function ql_luuSua() {
           newItems.push({ maHang: rowMeta.maHang, maVach: rowMeta.maVach, tenHang: rowMeta.tenHang, dvt: rowMeta.dvt, sl: qtyValue });
         }
       } else {
-        updates.push({ row: parseInt(rowKey), valSl: qtyValue });
+        var variant = variantByRow[String(rowKey)] || null;
+        updates.push({
+          row: parseInt(rowKey),
+          valSl: qtyValue,
+          valMaVach: variant ? (variant.maVach || '') : '',
+          valDvt: variant ? (variant.dvt || '') : '',
+          valTenHang: variant ? (variant.tenHang || '') : ''
+        });
       }
     }
   });
@@ -976,7 +1064,8 @@ function sh_chonDonMobile() {
   apiGet('getChiTietDonHangMobile', { soPhieu: sp }).then(function(items) {
     var html = "";
     items.forEach((it, j) => {
-      html += '<div class="item-card"><b>'+it.tenHang+'</b><br><small><b>Mã vạch: '+it.maVach+'</b> | Mã hàng hóa: '+(it.maHang||'')+' | ĐVT: '+it.dvt+'</small><div class="action-row"><div>SL Yêu Cầu: <b>'+it.slGoc+'</b><br>Thực tế: <input type="number" class="sl-thuc-te" data-row="'+it.rowIndex+'" value="'+it.slThucTe+'"></div><div style="text-align:right;"><label class="btn-camera" for="c-'+j+'">📷 Ảnh</label><input type="file" id="c-'+j+'" accept="image/*" capture="environment" style="display:none;" data-row="'+it.rowIndex+'" data-j="'+j+'" onchange="nenAnh(this)"><img id="p-'+j+'" src="'+(it.anhXacNhan||'')+'" style="display:'+(it.anhXacNhan?'block':'none')+'; width:50px; height:50px; margin-top:5px;"><small id="st-'+j+'"></small></div></div></div>';
+      var stockDisplay = (it.stock !== undefined && it.stock !== null) ? Number(it.stock) : 0;
+      html += '<div class="item-card"><b>'+it.tenHang+'</b><br><small><b>Mã vạch: '+it.maVach+'</b> | Mã hàng hóa: '+(it.maHang||'')+' | ĐVT: '+it.dvt+' | Tồn hiện tại: <b style="color:#1d4ed8;">'+stockDisplay+'</b></small><div class="action-row"><div>SL Yêu Cầu: <b>'+it.slGoc+'</b><br>Thực tế: <input type="number" class="sl-thuc-te" data-row="'+it.rowIndex+'" value="'+it.slThucTe+'"></div><div style="text-align:right;"><label class="btn-camera" for="c-'+j+'">📷 Ảnh</label><input type="file" id="c-'+j+'" accept="image/*" capture="environment" style="display:none;" data-row="'+it.rowIndex+'" data-j="'+j+'" onchange="nenAnh(this)"><img id="p-'+j+'" src="'+(it.anhXacNhan||'')+'" style="display:'+(it.anhXacNhan?'block':'none')+'; width:50px; height:50px; margin-top:5px;"><small id="st-'+j+'"></small></div></div></div>';
     });
     document.getElementById("sh-list-container").innerHTML = html; document.getElementById("sh-footer").style.display = "block";
   }).catch(function(err){ alert('Lỗi: '+err.message); });

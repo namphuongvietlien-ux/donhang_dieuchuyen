@@ -1416,26 +1416,65 @@ function getChiTietPhieu(soPhieu, storeName) {
       matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: data[i][9] || "Cái", ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
     }
   }
-  var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-  var tonKhoMap = {};
-  if(tonKhoSheet) {
-    var tkData = tonKhoSheet.getDataRange().getValues();
-    var stockConfig = getStockSheetConfig(tkData);
-    for (var k = stockConfig.startRow; k < tkData.length; k++) {
-      var rowStores = getRowStoreNames(tkData[k], stockConfig);
-      var match = false;
-      for (var s = 0; s < rowStores.length; s++) {
-        if (rowStores[s].indexOf(storeName) !== -1 || storeName.indexOf(rowStores[s]) !== -1) {
-          match = true;
-          break;
-        }
-      }
-      var maHangTon = getCellValue(tkData[k], stockConfig.maHangIdx, "");
-      if(match && maHangTon) tonKhoMap[maHangTon.toUpperCase()] = Number(tkData[k][stockConfig.tonKhoIdx])||0;
-    }
+  var tonKhoMap = getStockMapForStore(ss, storeName);
+  for (var j = 0; j < matchedRows.length; j++) {
+    matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach);
   }
-  for (var j = 0; j < matchedRows.length; j++) { matchedRows[j].stock = tonKhoMap[matchedRows[j].maHang.toUpperCase()] || 0; }
   return matchedRows;
+}
+
+function getStockMapForStore(ss, storeName) {
+  var tonKhoMap = {};
+  if (!storeName) return tonKhoMap;
+  var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!tonKhoSheet) return tonKhoMap;
+
+  var tkData = tonKhoSheet.getDataRange().getValues();
+  var stockConfig = getStockSheetConfig(tkData);
+  for (var k = stockConfig.startRow; k < tkData.length; k++) {
+    var rowStores = getRowStoreNames(tkData[k], stockConfig);
+    var match = false;
+    for (var s = 0; s < rowStores.length; s++) {
+      if (isStoreNameMatch(rowStores[s], storeName)) {
+        match = true;
+        break;
+      }
+    }
+    if (!match) continue;
+    var maHangTon = getCellValue(tkData[k], stockConfig.maHangIdx, "");
+    var maVachTon = getCellValue(tkData[k], stockConfig.maVachIdx, "");
+    var ton = Number(tkData[k][stockConfig.tonKhoIdx]) || 0;
+    if (maHangTon) tonKhoMap["MH:" + maHangTon.toUpperCase()] = ton;
+    if (maVachTon) tonKhoMap["MV:" + maVachTon.toUpperCase()] = ton;
+  }
+  return tonKhoMap;
+}
+
+function getStockValueForItem(tonKhoMap, maHang, maVach) {
+  if (!tonKhoMap) return 0;
+  var maHangKey = "MH:" + String(maHang || "").trim().toUpperCase();
+  var maVachKey = "MV:" + String(maVach || "").trim().toUpperCase();
+  if (Object.prototype.hasOwnProperty.call(tonKhoMap, maHangKey)) return Number(tonKhoMap[maHangKey]) || 0;
+  if (Object.prototype.hasOwnProperty.call(tonKhoMap, maVachKey)) return Number(tonKhoMap[maVachKey]) || 0;
+  return 0;
+}
+
+function isStoreNameMatch(stockStoreName, targetStoreName) {
+  var left = String(stockStoreName || "").trim();
+  var right = String(targetStoreName || "").trim();
+  if (!left || !right) return false;
+
+  if (left === right) return true;
+
+  var leftNorm = normalizeHeaderText(left);
+  var rightNorm = normalizeHeaderText(right);
+  if (leftNorm && rightNorm && (leftNorm === rightNorm || leftNorm.indexOf(rightNorm) !== -1 || rightNorm.indexOf(leftNorm) !== -1)) {
+    return true;
+  }
+
+  var leftShort = formatShortStoreLabel(left);
+  var rightShort = formatShortStoreLabel(right);
+  return normalizeHeaderText(leftShort) === normalizeHeaderText(rightShort);
 }
 
 function ensureHistoryStatusColumn(historySheet) {
@@ -1643,22 +1682,42 @@ function luuChinhSuaPhieu(payload) {
       if (!currentRow) continue;
       var oldSl = Number(currentRow[7]) || 0;
       var soPhieuValue = currentRow[1] ? String(currentRow[1]).trim() : soPhieu;
+      var oldTenHang = currentRow[6] ? String(currentRow[6]).trim() : "";
       var maHang = currentRow[4] ? String(currentRow[4]).trim() : "";
       var maVach = currentRow[5] ? String(currentRow[5]).trim() : "";
+      var oldDvt = currentRow[9] ? String(currentRow[9]).trim() : "";
+      var newMaVach = u.valMaVach !== undefined && u.valMaVach !== null && String(u.valMaVach).trim() !== "" ? String(u.valMaVach).trim() : maVach;
+      var newDvt = u.valDvt !== undefined && u.valDvt !== null && String(u.valDvt).trim() !== "" ? String(u.valDvt).trim() : oldDvt;
+      var newTenHang = u.valTenHang !== undefined && u.valTenHang !== null && String(u.valTenHang).trim() !== "" ? String(u.valTenHang).trim() : oldTenHang;
       if (!orderInfo) orderInfo = getThongTinPhieu(soPhieuValue);
       if (u.valSl !== "" && Number(u.valSl) === 0) {
-        pendingUpdates.push({row: rowIndex, requestedQty: 0, actualQty: 0, note: "Đã hủy dòng", status: "Đã hủy dòng", actor: payload.actor || "", source: "Quản lý"});
+        pendingUpdates.push({row: rowIndex, requestedQty: 0, actualQty: 0, note: "Đã hủy dòng", status: "Đã hủy dòng", actor: payload.actor || "", source: "Quản lý", maVach: newMaVach, dvt: newDvt, tenHang: newTenHang});
         logOrderChange(ss, soPhieuValue, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
         changeCount += 1;
         cancelledCount += 1;
         shouldNotify = true;
       } else if (u.valSl !== "") {
         var newVal = Number(u.valSl);
-        pendingUpdates.push({row: rowIndex, requestedQty: newVal, actualQty: wasPacked ? "" : currentRow[8], note: wasPacked ? "Cần soạn lại sau khi chỉnh sửa" : "", status: "Mới", actor: payload.actor || "", source: "Quản lý"});
+        pendingUpdates.push({row: rowIndex, requestedQty: newVal, actualQty: wasPacked ? "" : currentRow[8], note: wasPacked ? "Cần soạn lại sau khi chỉnh sửa" : "", status: "Mới", actor: payload.actor || "", source: "Quản lý", maVach: newMaVach, dvt: newDvt, tenHang: newTenHang});
         if (Number(oldSl) !== newVal) {
           logOrderChange(ss, soPhieuValue, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, newVal, "");
           changeCount += 1;
           modifiedCount += 1;
+          shouldNotify = true;
+        }
+        if (String(newMaVach || "").trim() !== String(maVach || "").trim()) {
+          logOrderChange(ss, soPhieuValue, "Đổi mã vạch", payload.actor, maHang, maVach, maVach, newMaVach, "Đổi giữa mã lẻ/mã thùng");
+          changeCount += 1;
+          shouldNotify = true;
+        }
+        if (String(newDvt || "").trim() !== String(oldDvt || "").trim()) {
+          logOrderChange(ss, soPhieuValue, "Đổi đơn vị tính", payload.actor, maHang, newMaVach || maVach, oldDvt, newDvt, "Đổi ĐVT theo mã vạch");
+          changeCount += 1;
+          shouldNotify = true;
+        }
+        if (String(newTenHang || "").trim() !== String(oldTenHang || "").trim()) {
+          logOrderChange(ss, soPhieuValue, "Cập nhật tên hàng", payload.actor, maHang, newMaVach || maVach, oldTenHang, newTenHang, "Đồng bộ theo mã vạch mới");
+          changeCount += 1;
           shouldNotify = true;
         }
       }
@@ -1674,6 +1733,15 @@ function luuChinhSuaPhieu(payload) {
         historySheet.getRange(itemUpdate.row, 8).setValue(itemUpdate.requestedQty);
         if (itemUpdate.actualQty === "") historySheet.getRange(itemUpdate.row, 9).clearContent();
         else historySheet.getRange(itemUpdate.row, 9).setValue(itemUpdate.actualQty);
+        if (itemUpdate.maVach !== undefined && itemUpdate.maVach !== null && String(itemUpdate.maVach).trim() !== "") {
+          historySheet.getRange(itemUpdate.row, 6).setValue(itemUpdate.maVach);
+        }
+        if (itemUpdate.tenHang !== undefined && itemUpdate.tenHang !== null && String(itemUpdate.tenHang).trim() !== "") {
+          historySheet.getRange(itemUpdate.row, 7).setValue(itemUpdate.tenHang);
+        }
+        if (itemUpdate.dvt !== undefined && itemUpdate.dvt !== null && String(itemUpdate.dvt).trim() !== "") {
+          historySheet.getRange(itemUpdate.row, 10).setValue(itemUpdate.dvt);
+        }
         historySheet.getRange(itemUpdate.row, 12, 1, 4).setValues([[itemUpdate.note, itemUpdate.status, itemUpdate.actor, itemUpdate.source]]);
       }
     }
@@ -1783,6 +1851,36 @@ function xacNhanNhanHang(payload) {
   }
   var confirmations = payload.confirmations || [];
   if (!confirmations.length) throw new Error("Không có dữ liệu xác nhận.");
+
+  var invalidRows = [];
+  for (var c = 0; c < confirmations.length; c++) {
+    var confCheck = confirmations[c];
+    var rowCheck = Number(confCheck.row);
+    if (!rowCheck || rowCheck < 2) continue;
+    var checkValues = historySheet.getRange(rowCheck, 1, 1, 13).getValues()[0];
+    var rowSoPhieu = checkValues[1] ? String(checkValues[1]).trim() : "";
+    var rowStatus = checkValues[12] ? String(checkValues[12]).trim() : "Mới";
+    var hasPackedQty = checkValues[8] !== "" && checkValues[8] !== null && checkValues[8] !== undefined;
+    if (!rowSoPhieu || rowSoPhieu.toLowerCase() !== String(payload.soPhieu || "").trim().toLowerCase()) {
+      invalidRows.push(rowCheck + " (sai số phiếu)");
+      continue;
+    }
+    if (rowStatus === "Đã hủy dòng" || rowStatus === "Đã hủy đơn") {
+      invalidRows.push(rowCheck + " (đã hủy)");
+      continue;
+    }
+    if (rowStatus === "Đã xác nhận nhận hàng") {
+      invalidRows.push(rowCheck + " (đã xác nhận)");
+      continue;
+    }
+    if (!hasPackedQty && rowStatus !== "Đã soạn hàng") {
+      invalidRows.push(rowCheck + " (chưa soạn)");
+    }
+  }
+  if (invalidRows.length) {
+    throw new Error("Không thể xác nhận đơn chưa soạn xong. Dòng lỗi: " + invalidRows.join(", "));
+  }
+
   var confirmedTotal = 0;
   var changedCount = 0;
   var changedQtyTotal = 0;
@@ -1807,6 +1905,10 @@ function xacNhanNhanHang(payload) {
     logOrderChange(ss, payload.soPhieu, "Xác nhận nhận hàng", payload.actor, values[4], values[5], values[7], qty, "Xác nhận bởi chi nhánh");
     confirmedTotal += qty;
   }
+
+  // Trừ tồn kho ngay khi xác nhận nhận hàng để đơn kế tiếp nhìn thấy tồn thực tế.
+  applyStockDeductionAfterReceive(historySheet, confirmations, payload.soPhieu);
+
   var orderInfo = getThongTinPhieu(payload.soPhieu);
   if (orderInfo) {
     SpreadsheetApp.flush();
@@ -1814,6 +1916,56 @@ function xacNhanNhanHang(payload) {
     sendTelegramReceiveConfirmation(payload.soPhieu, orderInfo.khoNhan || expectedStore, payload.actor, confirmations.length, confirmedTotal, changedCount, changedQtyTotal, receivePdfUrl);
   }
   return { success: true, count: confirmations.length };
+}
+
+function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu) {
+  var ss = getSS();
+  var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!stockSheet) return;
+
+  var stockData = stockSheet.getDataRange().getValues();
+  var stockConfig = getStockSheetConfig(stockData);
+
+  for (var i = 0; i < confirmations.length; i++) {
+    var conf = confirmations[i];
+    var row = Number(conf.row);
+    var qty = Number(conf.receivedQty);
+    if (!row || row < 2 || isNaN(qty) || qty <= 0) continue;
+
+    var orderRow = historySheet.getRange(row, 1, 1, 9).getValues()[0];
+    var rowSoPhieu = orderRow[1] ? String(orderRow[1]).trim() : "";
+    if (!rowSoPhieu || rowSoPhieu.toLowerCase() !== String(soPhieu || "").trim().toLowerCase()) continue;
+
+    var khoXuat = orderRow[2] ? String(orderRow[2]).trim() : "";
+    var maHang = orderRow[4] ? String(orderRow[4]).trim().toUpperCase() : "";
+    var maVach = orderRow[5] ? String(orderRow[5]).trim().toUpperCase() : "";
+    if (!khoXuat || (!maHang && !maVach)) continue;
+
+    for (var k = stockConfig.startRow; k < stockData.length; k++) {
+      var rowStock = stockData[k];
+      if (!rowStock) continue;
+      var rowStores = getRowStoreNames(rowStock, stockConfig);
+      var isSameStore = false;
+      for (var s = 0; s < rowStores.length; s++) {
+        if (isStoreNameMatch(rowStores[s], khoXuat)) {
+          isSameStore = true;
+          break;
+        }
+      }
+      if (!isSameStore) continue;
+
+      var rowMaHang = getCellValue(rowStock, stockConfig.maHangIdx, "").toUpperCase();
+      var rowMaVach = getCellValue(rowStock, stockConfig.maVachIdx, "").toUpperCase();
+      var codeMatch = (maHang && rowMaHang && maHang === rowMaHang) || (maVach && rowMaVach && maVach === rowMaVach);
+      if (!codeMatch) continue;
+
+      var oldStock = Number(rowStock[stockConfig.tonKhoIdx]) || 0;
+      var newStock = oldStock - qty;
+      stockData[k][stockConfig.tonKhoIdx] = newStock;
+      stockSheet.getRange(k + 1, stockConfig.tonKhoIdx + 1).setValue(newStock);
+      break;
+    }
+  }
 }
 
 function cleanupLegacyGeneratedSheets(ss, prefixes) {
@@ -1937,12 +2089,18 @@ function getChiTietDonHangMobile(soPhieu) {
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   var data = historySheet.getDataRange().getValues();
   var items = [];
+  var khoXuat = "";
   for (var i = 1; i < data.length; i++) {
     if (data[i][1] && data[i][1].toString().trim().toLowerCase() === soPhieu.toLowerCase()) {
+      if (!khoXuat && data[i][2]) khoXuat = String(data[i][2]).trim();
       var slGoc = Number(data[i][7]) || 0;
       var slThucTe = (data[i][8] !== "" && data[i][8] !== undefined) ? Number(data[i][8]) : slGoc;
       items.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], dvt: data[i][9] || "Cái", slGoc: slGoc, slThucTe: slThucTe, anhXacNhan: (data[i][10]||""), nguoiSoanHang: data[i][13] || "" });
     }
+  }
+  var tonKhoMap = getStockMapForStore(ss, khoXuat);
+  for (var j = 0; j < items.length; j++) {
+    items[j].stock = getStockValueForItem(tonKhoMap, items[j].maHang, items[j].maVach);
   }
   return items;
 }
