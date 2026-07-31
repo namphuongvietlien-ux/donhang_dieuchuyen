@@ -344,12 +344,12 @@
             <input type="text" id="ql-add-code" placeholder="Nhập mã hàng hóa / mã vạch" oninput="ql_handleAddCodeInput(event)" onkeydown="if(event.key === 'Enter'){ event.preventDefault(); ql_themMaHang(); }" autocomplete="off">
             <div id="ql-suggest-box"></div>
           </div>
-          <div class="form-group" style="max-width:130px;"><label>Số lượng</label><input type="number" id="ql-add-qty" min="1" value="1"></div>
+          <div class="form-group" style="max-width:130px;"><label>Số lượng</label><input type="number" id="ql-add-qty" min="1" value="1" onkeydown="ql_handleAddQtyKeydown(event)"></div>
           <div class="form-group" style="max-width:180px;"><button class="btn-submit btn-success" type="button" onclick="ql_themMaHang()">+ THÊM MÃ</button></div>
         </div>
         <div style="overflow-x: auto;">
           <table id="ql-table">
-            <thead><tr><th width="5%">STT</th><th width="18%">Mã</th><th width="34%">Tên SP</th><th width="10%">Tồn</th><th width="12%" style="background:#e8f0fe;">SL Đặt</th><th width="12%" style="background:#ecfdf3;">SL Thực nhận</th><th id="ql-admin-column" style="display:none;">Thao tác</th></tr></thead>
+            <thead><tr><th width="5%">STT</th><th width="16%">Mã</th><th width="28%">Tên SP</th><th width="8%">ĐVT</th><th width="10%">Tồn</th><th width="11%" style="background:#e8f0fe;">SL Đặt</th><th width="11%" style="background:#ecfdf3;">SL Thực nhận</th><th id="ql-admin-column" style="display:none;">Thao tác</th></tr></thead>
             <tbody id="ql-tbody"></tbody>
           </table>
         </div>
@@ -393,7 +393,7 @@
         <p style="font-size:13px; color:gray;" id="confirm-meta"></p>
         <div style="overflow-x:auto;">
           <table id="confirm-table">
-            <thead><tr><th width="5%">STT</th><th width="35%">Mã / Tên hàng</th><th width="12%">SL soạn</th><th width="12%">SL xác nhận</th></tr></thead>
+            <thead><tr><th width="5%">STT</th><th width="34%">Mã / Tên hàng</th><th width="9%">ĐVT</th><th width="12%">SL soạn</th><th width="12%">SL xác nhận</th></tr></thead>
             <tbody id="confirm-tbody"></tbody>
           </table>
         </div>
@@ -432,6 +432,7 @@
             <table style="min-width:700px; margin:0;">
               <thead>
                 <tr>
+                  <th style="width:56px; text-align:center;">STT</th>
                   <th style="width:64px; text-align:center;">Chọn</th>
                   <th>Số phiếu</th>
                   <th>Kho xuất</th>
@@ -440,7 +441,7 @@
                 </tr>
               </thead>
               <tbody id="sh-order-picker-body">
-                <tr><td colspan="5" style="text-align:center; color:#64748b;">Nhấn nút tạo bảng soạn hàng để tải danh sách đơn.</td></tr>
+                <tr><td colspan="6" style="text-align:center; color:#64748b;">Nhấn nút tạo bảng soạn hàng để tải danh sách đơn.</td></tr>
               </tbody>
             </table>
           </div>

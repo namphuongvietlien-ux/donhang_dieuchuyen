@@ -391,7 +391,7 @@ function handleSearchInput(e) {
   var html = "";
   results.slice(0, 10).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + '</div></div>';
+    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
@@ -423,11 +423,23 @@ function positionSuggestionBox(box, inputEl) {
   box.style.top = (inputEl.offsetTop + inputEl.offsetHeight + 6) + "px";
 }
 
+var qlSelectedSuggestedItem = null;
+
+function ql_isItemMatchedWithCode(item, code) {
+  if (!item) return false;
+  var query = String(code || "").trim().toUpperCase();
+  if (!query) return false;
+  var maHang = String(item.maHang || "").trim().toUpperCase();
+  var maVach = String(item.maVach || "").trim().toUpperCase();
+  return query === maHang || query === maVach;
+}
+
 function ql_handleAddCodeInput(e) {
   var inputEl = document.getElementById("ql-add-code");
   var box = document.getElementById("ql-suggest-box");
   if (!inputEl || !box) return;
   var val = inputEl.value.trim();
+  qlSelectedSuggestedItem = null;
   positionSuggestionBox(box, inputEl);
 
   if (val.length < 1) { box.style.display = "none"; return; }
@@ -448,19 +460,30 @@ function ql_handleAddCodeInput(e) {
   var html = '';
   results.slice(0, 8).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + '</div></div>';
+    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
   });
   box.innerHTML = html;
   box.style.display = "block";
+}
+
+function ql_handleAddQtyKeydown(e) {
+  if (!e || e.key !== "Enter") return;
+  e.preventDefault();
+  ql_themMaHang();
 }
 
 function ql_pickSuggestedItem(itemStr) {
   var item = JSON.parse(decodeURIComponent(itemStr));
   var input = document.getElementById("ql-add-code");
   var box = document.getElementById("ql-suggest-box");
-  if (input) input.value = item.maHang;
+  var qtyInput = document.getElementById("ql-add-qty");
+  qlSelectedSuggestedItem = item;
+  if (input) input.value = item.maHang || item.maVach || "";
   if (box) box.style.display = "none";
-  ql_themMaHang(item);
+  if (qtyInput) {
+    qtyInput.focus();
+    qtyInput.select();
+  }
 }
 
 function chonSanPhamFromSuggest(itemStr) {
@@ -660,7 +683,7 @@ function confirm_onSelectPhieu() {
     rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
       var packedQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? Number(r.slThucTe) : Number(r.slGoc || 0);
       var inputValue = packedQty;
-      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td style="font-weight:700;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
+      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td>' + (r.dvt || 'Cái') + '</td><td style="font-weight:700;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
     });
     viewEl.style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
@@ -763,6 +786,7 @@ function ql_hienThiChiTiet(phieu, options) {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
       var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
+      var dvtDisplay = r.dvt || "Cái";
       var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
       var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
       var requestedDisplay = (!isReadOnlyRow && !isPublicView)
@@ -772,7 +796,7 @@ function ql_hienThiChiTiet(phieu, options) {
       var receivedDisplay = hasReceivedQty
         ? ('<b style="color:#166534;">' + Number(r.slThucTe) + '</b>')
         : '<span style="color:#94a3b8;">-</span>';
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+dvtDisplay+'</td><td>'+r.stock+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
     });
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     if (!isPublicView && packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
@@ -833,13 +857,15 @@ function ql_themMaHang(itemOverride) {
   var inputEl = document.getElementById("ql-add-code");
   var code = (inputEl ? inputEl.value : "").trim().toUpperCase();
   var quantity = Number(document.getElementById("ql-add-qty").value);
-  var item = itemOverride || danhMucGoc[code] || filterProducts(code)[0];
+  var selectedItem = qlSelectedSuggestedItem && ql_isItemMatchedWithCode(qlSelectedSuggestedItem, code) ? qlSelectedSuggestedItem : null;
+  var item = itemOverride || selectedItem || danhMucGoc[code] || filterProducts(code)[0];
   if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
   if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
   if (ql_isDuplicateOrderItem(item)) {
     alert("⚠️ Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
     return;
   }
+  qlSelectedSuggestedItem = null;
   if (inputEl) inputEl.value = "";
   document.getElementById("ql-add-qty").value = "1";
   document.getElementById("ql-suggest-box").style.display = "none";
@@ -853,7 +879,7 @@ function ql_themMaHang(itemOverride) {
       maHang: item.maHang,
       maVach: item.maVach,
       tenHang: item.tenHang,
-      dvt: item.dvt,
+      dvt: item.dvt || "Cái",
       slGoc: latestQty,
       slThucTe: latestQty,
       stock: 0,
@@ -861,7 +887,7 @@ function ql_themMaHang(itemOverride) {
       trangThai: "Chưa lưu",
       nguoiSoanHang: ""
     });
-    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><span style="color:#94a3b8;">-</span></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
+    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>' + (item.dvt || 'Cái') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><span style="color:#94a3b8;">-</span></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
   }
 
   alert("✅ Đã thêm mã vào bảng chỉnh sửa. Nhấn Lưu để ghi vào hệ thống.");
@@ -993,13 +1019,14 @@ function sh_renderDanhSachDonSoan(candidates) {
   var bodyEl = document.getElementById('sh-order-picker-body');
   if (!bodyEl) return;
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ trong ngày này để phân tích.</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ trong ngày này để phân tích.</td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
   var html = '';
   candidates.forEach(function(order, idx) {
     html += '<tr>' +
+      '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
       '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + order.soPhieu + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
       '<td><b>' + order.soPhieu + '</b></td>' +
       '<td>' + (order.khoXuat || '-') + '</td>' +
@@ -1017,7 +1044,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl) pickerEl.style.display = 'block';
   var bodyEl = document.getElementById('sh-order-picker-body');
-  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
+  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
 
   apiGet('getDanhSachDonSoanHang', {
     ngay: ngay,
@@ -1031,7 +1058,7 @@ function sh_taiDanhSachDonSoanChoBang() {
     sh_renderDanhSachDonSoan(shOrderCandidates);
   }).catch(function(err) {
     shOrderCandidates = [];
-    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + err.message + '</td></tr>';
+    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + err.message + '</td></tr>';
     sh_capNhatTomTatChonDonSoan();
   });
 }

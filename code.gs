@@ -419,7 +419,122 @@ function getOrderWebUrl(soPhieu, tabName, isPublic) {
   return url;
 }
 
-function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
+function sanitizeFileNamePart(value) {
+  var text = String(value || "").trim();
+  if (!text) return "don_hang";
+  return text.replace(/[\\/:*?"<>|#%&{}\[\]~]/g, "_").replace(/\s+/g, "_");
+}
+
+function normalizeOrderCodeText(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function taoPdfDonHangVaLayLink(soPhieu) {
+  try {
+    var target = String(soPhieu || "").trim();
+    if (!target) return "";
+    var targetNormalized = normalizeOrderCodeText(target);
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) return "";
+    var data = historySheet.getDataRange().getValues();
+    if (!data || data.length < 2) return "";
+
+    var rows = [];
+    var khoXuat = "";
+    var khoNhan = "";
+    var createdAt = "";
+    for (var i = 1; i < data.length; i++) {
+      var rowSoPhieu = data[i][1] ? String(data[i][1]).trim() : "";
+      if (!rowSoPhieu) continue;
+      var rowNormalized = normalizeOrderCodeText(rowSoPhieu);
+      if (rowSoPhieu.toLowerCase() !== target.toLowerCase() && rowNormalized !== targetNormalized) continue;
+      var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
+      if (rowStatus === "Đã hủy dòng") continue;
+      if (!khoXuat && data[i][2]) khoXuat = String(data[i][2]).trim();
+      if (!khoNhan && data[i][3]) khoNhan = String(data[i][3]).trim();
+      if (!createdAt && data[i][0]) createdAt = data[i][0];
+      var slDat = Number(data[i][7]) || 0;
+      var hasActual = data[i][8] !== "" && data[i][8] !== null && data[i][8] !== undefined;
+      var slThucNhan = hasActual ? Number(data[i][8]) : "";
+      rows.push([
+        rows.length + 1,
+        data[i][4] || "",
+        data[i][5] || "",
+        data[i][6] || "",
+        data[i][9] || "Cái",
+        slDat,
+        hasActual ? slThucNhan : "",
+        rowStatus || "Mới"
+      ]);
+    }
+    if (!rows.length) return "";
+
+    var tempSheet = recreateTempSheet(ss, "__TMP_TELE_PDF_DON", ["Pdf_", "__TMP_TELE_PDF_DON"]);
+    var title = "PHIẾU CHI TIẾT ĐƠN: " + target;
+    tempSheet.getRange("A1:H1").merge().setValue(title).setFontSize(14).setFontWeight("bold").setHorizontalAlignment("center");
+    var ngayText = createdAt ? Utilities.formatDate(new Date(createdAt), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm") : "";
+    tempSheet.getRange("A2:H2").merge().setValue("Kho xuất: " + khoXuat + " | Kho nhận: " + khoNhan + (ngayText ? " | Thời gian tạo: " + ngayText : "")).setFontStyle("italic");
+
+    var headers = [["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "SL đặt", "SL thực nhận", "Trạng thái dòng"]];
+    tempSheet.getRange(4, 1, 1, 8).setValues(headers).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
+    tempSheet.getRange(5, 1, rows.length, 8).setValues(rows);
+    tempSheet.getRange(4, 1, rows.length + 1, 8).setBorder(true, true, true, true, true, true, "#000000", SpreadsheetApp.BorderStyle.SOLID);
+    tempSheet.getRange(5, 6, rows.length, 2).setHorizontalAlignment("right");
+    tempSheet.setColumnWidth(1, 45);
+    tempSheet.setColumnWidth(2, 110);
+    tempSheet.setColumnWidth(3, 120);
+    tempSheet.setColumnWidth(4, 280);
+    tempSheet.setColumnWidth(5, 60);
+    tempSheet.setColumnWidth(6, 70);
+    tempSheet.setColumnWidth(7, 90);
+    tempSheet.setColumnWidth(8, 140);
+    SpreadsheetApp.flush();
+
+    var exportUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/export?format=pdf&size=A4&portrait=true&fitw=true&sheetnames=false&printtitle=false&pagenumbers=false&gridlines=false&fzr=true&gid=" + tempSheet.getSheetId();
+    var response = UrlFetchApp.fetch(exportUrl, {
+      headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    if (response.getResponseCode() !== 200) {
+      Logger.log("PDF export error " + response.getResponseCode() + ": " + response.getContentText());
+      return "";
+    }
+
+    var pdfFolder;
+    var folderName = "dieuchuyenhanghoa_pdf";
+    var folders = DriveApp.getFoldersByName(folderName);
+    if (folders.hasNext()) pdfFolder = folders.next();
+    else pdfFolder = DriveApp.createFolder(folderName);
+
+    var fileName = "Phieu_" + sanitizeFileNamePart(target) + "_" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss") + ".pdf";
+    var file = pdfFolder.createFile(response.getBlob().setName(fileName));
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      Logger.log("PDF share warning: " + shareErr.message);
+    }
+    return file.getUrl();
+  } catch (err) {
+    Logger.log("taoPdfDonHangVaLayLink error: " + err.message);
+    return "";
+  }
+}
+
+function buildTelegramOrderLinkText(soPhieu, pdfUrl) {
+  var publicWebUrl = getOrderWebUrl(soPhieu, "quan-ly", true);
+  if (pdfUrl) {
+    return "Xem phiếu PDF: " + pdfUrl;
+  }
+  return "Mở chi tiết đơn: " + publicWebUrl;
+}
+
+function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount, pdfUrl) {
   var typeLabel = soPhieu.indexOf("DH") !== -1 ? "ĐƠN HÀNG MỚI" : "LỆNH ĐIỀU CHUYỂN MỚI";
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
   var knShort = STORE_MAP[khoNhan] || khoNhan;
@@ -429,20 +544,20 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
              "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
              "*Số mặt hàng:* " + itemCount + "\n\n" +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
+             buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
   sendTelegramTextToStores([khoNhan, khoXuat], "📌 Có đơn mới dành cho kho của bạn:\n" + text);
 }
 
-function sendTelegramOrderReady(soPhieu, khoNhan) {
+function sendTelegramOrderReady(soPhieu, khoNhan, pdfUrl) {
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var text = "✅ *ĐÃ HOÀN THÀNH SOẠN HÀNG*\n" +
              "*Trạng thái:* Đã soạn\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n\n" +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
+             buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -472,7 +587,7 @@ function sendTelegramOrderCancelled(soPhieu, khoXuat, khoNhan, actor, reason) {
   }
 }
 
-function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, changeCount, actor, extraText) {
+function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, changeCount, actor, extraText, pdfUrl) {
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var text = "🔄 *ĐƠN ĐÃ THAY ĐỔI*\n" +
@@ -481,7 +596,7 @@ function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, 
              "*Số mã thay đổi:* " + changeCount + "\n" +
              "*Người thực hiện:* " + (actor || "Không xác định") + "\n" +
              (extraText ? "*Chi tiết:* " + extraText + "\n" : "") +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
+             buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -490,7 +605,7 @@ function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, 
   }
 }
 
-function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, totalRows, statusLabel, missingCount, extraCount, actor) {
+function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, totalRows, statusLabel, missingCount, extraCount, actor, pdfUrl) {
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var detailText = "*Kết quả:* " + statusLabel + "\n" +
@@ -505,7 +620,7 @@ function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, tot
              "*Mã thay đổi:* " + changedCount + "\n" +
              detailText +
              "*Người thực hiện:* " + (actor || "Không xác định") + "\n\n" +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
+             buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -514,7 +629,7 @@ function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, tot
   }
 }
 
-function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirmedTotal, changedCount, changedQtyTotal) {
+function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirmedTotal, changedCount, changedQtyTotal, pdfUrl) {
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var detailText = changedCount > 0 ? "*Dòng có thay đổi số thực nhận:* " + changedCount + "\n" + "*Tổng số lượng thay đổi:* " + changedQtyTotal + "\n" : "*Không có dòng nào thay đổi số thực nhận.*\n";
   var text = "📥 *XÁC NHẬN NHẬN HÀNG*\n" +
@@ -525,7 +640,7 @@ function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirm
              "*Người xác nhận:* " + (actor || "Không xác định") + "\n" +
              "*Tổng số lượng đã xác nhận:* " + confirmedTotal + "\n" +
              detailText +
-             "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu, "quan-ly", true);
+             buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
   }
@@ -1118,7 +1233,8 @@ function luuPhieuTuWebApp(payload) {
   } finally { lock.releaseLock(); }
   
   if (!coLoiCanDieuChinh) {
-    sendTelegramMessage(soPhieu, payload.khoXuat, payload.khoNhan, payload.items.length);
+    var createPdfUrl = taoPdfDonHangVaLayLink(soPhieu);
+    sendTelegramMessage(soPhieu, payload.khoXuat, payload.khoNhan, payload.items.length, createPdfUrl);
   }
   return { success: true, soPhieu: soPhieu, coLoi: coLoiCanDieuChinh };
 }
@@ -1297,7 +1413,7 @@ function getChiTietPhieu(soPhieu, storeName) {
       var slGoc = Number(data[i][7]) || 0;
       var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
       var slThucTe = hasActualQty ? Number(data[i][8]) : "";
-      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: data[i][9], ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
+      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: data[i][9] || "Cái", ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
     }
   }
   var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
@@ -1571,7 +1687,8 @@ function luuChinhSuaPhieu(payload) {
       if (wasPacked && actorRole === "Admin") {
         extraSummary = "Trạng thái mới: Mới, cần soạn lại. " + extraSummary;
       }
-      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, actionLabel, changeCount, payload.actor, extraSummary);
+      var editPdfUrl = taoPdfDonHangVaLayLink(orderInfo.soPhieu);
+      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, actionLabel, changeCount, payload.actor, extraSummary, editPdfUrl);
     }
   } finally { lock.releaseLock(); }
   return { success: true };
@@ -1692,7 +1809,9 @@ function xacNhanNhanHang(payload) {
   }
   var orderInfo = getThongTinPhieu(payload.soPhieu);
   if (orderInfo) {
-    sendTelegramReceiveConfirmation(payload.soPhieu, orderInfo.khoNhan || expectedStore, payload.actor, confirmations.length, confirmedTotal, changedCount, changedQtyTotal);
+    SpreadsheetApp.flush();
+    var receivePdfUrl = taoPdfDonHangVaLayLink(payload.soPhieu);
+    sendTelegramReceiveConfirmation(payload.soPhieu, orderInfo.khoNhan || expectedStore, payload.actor, confirmations.length, confirmedTotal, changedCount, changedQtyTotal, receivePdfUrl);
   }
   return { success: true, count: confirmations.length };
 }
@@ -1893,12 +2012,13 @@ function luuSoSoanHangVaAnh(payload) {
       if (!khoNhan && allRows[i][3]) khoNhan = String(allRows[i][3]).trim();
     }
     if (soPhieu) {
+      var packedPdfUrl = taoPdfDonHangVaLayLink(soPhieu);
       if (!khoNhan) khoNhan = getKhoNhanBySoPhieu(soPhieu);
       if (khoNhan) {
-        sendTelegramOrderReady(soPhieu, khoNhan);
+        sendTelegramOrderReady(soPhieu, khoNhan, packedPdfUrl);
       }
       var statusLabel = (totalRows > 0 && missingCount === 0 && extraCount === 0) ? "Đủ hàng" : (extraCount > 0 && missingCount > 0 ? "Thiếu và thừa hàng" : (extraCount > 0 ? "Thừa hàng" : "Thiếu hàng"));
-      sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, updates.length, totalRows, statusLabel, missingCount, extraCount, payload.actor || "Chi nhánh");
+      sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, updates.length, totalRows, statusLabel, missingCount, extraCount, payload.actor || "Chi nhánh", packedPdfUrl);
     }
 
     return "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!";
@@ -2095,6 +2215,7 @@ function taoBangSoanHangNgayMai(payload) {
     var maVach = row[5] ? String(row[5]).trim() : "";
     var tenHang = row[6] ? String(row[6]).trim() : "";
     var soLuong = Number(row[7]) || 0;
+    var dvt = row[9] ? String(row[9]).trim() : "Cái";
     var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
 
     if (!soPhieu || !khoNhan) continue;
@@ -2110,6 +2231,7 @@ function taoBangSoanHangNgayMai(payload) {
         maHang: maHang,
         maVach: maVach,
         tenHang: tenHang,
+        dvt: dvt || "Cái",
         totalQty: 0,
         byStore: {},
         sourceStores: {},
@@ -2121,6 +2243,7 @@ function taoBangSoanHangNgayMai(payload) {
     if (!item.tenHang && tenHang) item.tenHang = tenHang;
     if (!item.maHang && maHang) item.maHang = maHang;
     if (!item.maVach && maVach) item.maVach = maVach;
+    if (!item.dvt && dvt) item.dvt = dvt;
     item.totalQty += soLuong;
     item.byStore[khoNhan] = (item.byStore[khoNhan] || 0) + soLuong;
     if (khoXuat) item.sourceStores[khoXuat] = true;
@@ -2151,7 +2274,7 @@ function taoBangSoanHangNgayMai(payload) {
   reportSheet.getRange("A2").setValue("Nguồn dữ liệu: Đơn tạo ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã để 1 lượt lấy đủ cho tất cả đơn.").setFontStyle("italic");
   reportSheet.getRange("A3").setValue("Quy trình gợi ý: 1) In tab này 2) Đi theo từng mã từ trên xuống 3) Lấy đủ theo cột Tổng đặt 4) Chia theo cột Q7/Q8/PH... 5) Mã thiếu xử lý theo cột Đề xuất.");
 
-  var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "Stock khả dụng", "Tổng đặt"];
+  var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock khả dụng", "Tổng đặt"];
   for (var h = 0; h < storeList.length; h++) {
     headers.push(formatShortStoreLabel(storeList[h]));
   }
@@ -2194,6 +2317,7 @@ function taoBangSoanHangNgayMai(payload) {
       item.maHang || "",
       item.maVach || "",
       item.tenHang || "",
+      item.dvt || "Cái",
       stock,
       item.totalQty
     ];
@@ -2209,8 +2333,8 @@ function taoBangSoanHangNgayMai(payload) {
   }
 
   rows.sort(function(a, b) {
-    var aWarn = String(a[6 + storeList.length]);
-    var bWarn = String(b[6 + storeList.length]);
+    var aWarn = String(a[7 + storeList.length]);
+    var bWarn = String(b[7 + storeList.length]);
     if (aWarn !== bWarn) return aWarn.indexOf("THIẾU") === 0 ? -1 : 1;
     var aName = String(a[3] || "");
     var bName = String(b[3] || "");
@@ -2222,15 +2346,15 @@ function taoBangSoanHangNgayMai(payload) {
 
   var startRow = headerRow + 1;
   reportSheet.getRange(startRow, 1, rows.length, headers.length).setValues(rows);
-  reportSheet.getRange(startRow, 5, rows.length, 2 + storeList.length).setHorizontalAlignment("right");
+  reportSheet.getRange(startRow, 6, rows.length, 2 + storeList.length).setHorizontalAlignment("right");
   reportSheet.getRange(startRow, 1, rows.length, headers.length).setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
 
-  var warningCol = 7 + storeList.length;
+  var warningCol = 8 + storeList.length;
   for (var x = 0; x < rows.length; x++) {
     if (String(rows[x][warningCol - 1]).indexOf("THIẾU") === 0) {
       reportSheet.getRange(startRow + x, warningCol).setBackground("#f4cccc").setFontWeight("bold");
-      reportSheet.getRange(startRow + x, 5).setBackground("#fff2cc");
-      reportSheet.getRange(startRow + x, 6).setBackground("#fce5cd");
+      reportSheet.getRange(startRow + x, 6).setBackground("#fff2cc");
+      reportSheet.getRange(startRow + x, 7).setBackground("#fce5cd");
     } else {
       reportSheet.getRange(startRow + x, warningCol).setBackground("#d9ead3");
     }
@@ -2238,7 +2362,8 @@ function taoBangSoanHangNgayMai(payload) {
 
   reportSheet.autoResizeColumns(1, headers.length);
   reportSheet.setColumnWidth(4, 260);
-  reportSheet.setColumnWidth(8 + storeList.length, 360);
+  reportSheet.setColumnWidth(5, 80);
+  reportSheet.setColumnWidth(9 + storeList.length, 360);
   SpreadsheetApp.flush();
 
   return {
