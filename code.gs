@@ -751,6 +751,19 @@ function normalizeImportedMatrix(fileData) {
   return rows;
 }
 
+function removeColumnFromMatrix(fileData, columnIndex) {
+  var rows = normalizeImportedMatrix(fileData);
+  var result = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i].slice();
+    if (columnIndex >= 0 && columnIndex < row.length) {
+      row.splice(columnIndex, 1);
+    }
+    result.push(row);
+  }
+  return result;
+}
+
 function writeImportedDataToSheet(sheet, fileData) {
   var rows = normalizeImportedMatrix(fileData);
   var oldLastRow = sheet.getLastRow();
@@ -857,7 +870,8 @@ function nhapKhauCapNhatThongTin(payload) {
     }
     if (importType === 'catalog') {
       var catalogSheetDirect = getOrCreateCatalogSheet(ss);
-      var catalogWriteInfo = writeImportedDataToSheet(catalogSheetDirect, fileData);
+      var adjustedCatalogData = removeColumnFromMatrix(fileData, 3);
+      var catalogWriteInfo = writeImportedDataToSheet(catalogSheetDirect, adjustedCatalogData);
       SpreadsheetApp.flush();
       return {
         success: true,
@@ -865,7 +879,7 @@ function nhapKhauCapNhatThongTin(payload) {
         targetSheet: 'Data_Excel',
         updatedRows: catalogWriteInfo.rows,
         updatedCols: catalogWriteInfo.cols,
-        msg: 'Đã cập nhật file nhập khẩu thông tin lên sheet Data_Excel.'
+        msg: 'Đã cập nhật file nhập khẩu thông tin lên sheet Data_Excel sau khi bỏ cột D của file tải lên.'
       };
     }
     throw new Error('Loại cập nhật không hợp lệ.');
