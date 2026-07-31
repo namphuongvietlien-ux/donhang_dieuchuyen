@@ -285,8 +285,7 @@ function sendTelegramText(chatId, text) {
   var url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage";
   var payload = {
     chat_id: chatId,
-    text: text,
-    parse_mode: "Markdown"
+    text: text
   };
   var options = {
     method: "post",
@@ -521,7 +520,8 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     } catch (shareErr) {
       Logger.log("PDF share warning: " + shareErr.message);
     }
-    return file.getUrl();
+    // Use a stable direct file URL by ID so Telegram recipients open the exact PDF file.
+    return "https://drive.google.com/file/d/" + file.getId() + "/view?usp=sharing";
   } catch (err) {
     Logger.log("taoPdfDonHangVaLayLink error: " + err.message);
     return "";
@@ -530,8 +530,9 @@ function taoPdfDonHangVaLayLink(soPhieu) {
 
 function buildTelegramOrderLinkText(soPhieu, pdfUrl) {
   var publicWebUrl = getOrderWebUrl(soPhieu, "quan-ly", true);
+  // Always provide the webapp link as a reliable fallback even when PDF link is invalid or expired.
   if (pdfUrl) {
-    return "Xem phiếu PDF: " + pdfUrl;
+    return "Mở chi tiết đơn: " + publicWebUrl + "\nXem phiếu PDF: " + pdfUrl;
   }
   return "Mở chi tiết đơn: " + publicWebUrl;
 }
@@ -1489,8 +1490,24 @@ function getStockMapForStore(ss, storeName) {
 
   var tkData = tonKhoSheet.getDataRange().getValues();
   var stockConfig = getStockSheetConfig(tkData);
+  var currentMaHang = "";
+  var currentMaVach = "";
   for (var k = stockConfig.startRow; k < tkData.length; k++) {
-    var rowStores = getRowStoreNames(tkData[k], stockConfig);
+    var row = tkData[k];
+    if (!row) continue;
+    var rowMaHangRaw = getCellValue(row, stockConfig.maHangIdx, "");
+    var rowMaVachRaw = getCellValue(row, stockConfig.maVachIdx, "");
+    var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
+    if (hasOwnCode) {
+      currentMaHang = rowMaHangRaw;
+      currentMaVach = rowMaVachRaw;
+    }
+
+    var maHangTon = (hasOwnCode ? rowMaHangRaw : currentMaHang) || "";
+    var maVachTon = (hasOwnCode ? rowMaVachRaw : currentMaVach) || "";
+    if (!maHangTon && !maVachTon) continue;
+
+    var rowStores = getRowStoreNames(row, stockConfig);
     var match = false;
     for (var s = 0; s < rowStores.length; s++) {
       if (isStoreNameMatch(rowStores[s], storeName)) {
@@ -1499,21 +1516,75 @@ function getStockMapForStore(ss, storeName) {
       }
     }
     if (!match) continue;
-    var maHangTon = getCellValue(tkData[k], stockConfig.maHangIdx, "");
-    var maVachTon = getCellValue(tkData[k], stockConfig.maVachIdx, "");
-    var ton = Number(tkData[k][stockConfig.tonKhoIdx]) || 0;
-    if (maHangTon) tonKhoMap["MH:" + maHangTon.toUpperCase()] = ton;
-    if (maVachTon) tonKhoMap["MV:" + maVachTon.toUpperCase()] = ton;
+    var ton = parseQuantityValue(row[stockConfig.tonKhoIdx]);
+    if (maHangTon) {
+      addStockValueByCode(tonKhoMap, "MH:", maHangTon, ton);
+    }
+    if (maVachTon) {
+      addStockValueByCode(tonKhoMap, "MV:", maVachTon, ton);
+    }
   }
   return tonKhoMap;
 }
 
+function parseQuantityValue(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return isNaN(value) ? 0 : value;
+  var text = String(value).trim();
+  if (!text) return 0;
+  var normalized = text.replace(/\s+/g, "").replace(/,/g, "");
+  var n = Number(normalized);
+  return isNaN(n) ? 0 : n;
+}
+
+function normalizeProductCode(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function normalizeNumericCode(value) {
+  var code = normalizeProductCode(value);
+  if (!code) return "";
+  if (!/^\d+$/.test(code)) return "";
+  var compact = code.replace(/^0+/, "");
+  return compact || "0";
+}
+
+function addStockValueByCode(tonKhoMap, prefix, code, ton) {
+  var norm = normalizeProductCode(code);
+  if (!norm) return;
+  var key = prefix + norm;
+  tonKhoMap[key] = (tonKhoMap[key] || 0) + ton;
+  var compact = normalizeNumericCode(norm);
+  if (compact && compact !== norm) {
+    var compactKey = prefix + compact;
+    tonKhoMap[compactKey] = (tonKhoMap[compactKey] || 0) + ton;
+  }
+}
+
+function areCodesEquivalent(leftCode, rightCode) {
+  var left = normalizeProductCode(leftCode);
+  var right = normalizeProductCode(rightCode);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  var leftCompact = normalizeNumericCode(left);
+  var rightCompact = normalizeNumericCode(right);
+  return !!(leftCompact && rightCompact && leftCompact === rightCompact);
+}
+
 function getStockValueForItem(tonKhoMap, maHang, maVach) {
   if (!tonKhoMap) return 0;
-  var maHangKey = "MH:" + String(maHang || "").trim().toUpperCase();
-  var maVachKey = "MV:" + String(maVach || "").trim().toUpperCase();
-  if (Object.prototype.hasOwnProperty.call(tonKhoMap, maHangKey)) return Number(tonKhoMap[maHangKey]) || 0;
-  if (Object.prototype.hasOwnProperty.call(tonKhoMap, maVachKey)) return Number(tonKhoMap[maVachKey]) || 0;
+  var maHangNorm = normalizeProductCode(maHang);
+  var maVachNorm = normalizeProductCode(maVach);
+  var maHangKey = "MH:" + maHangNorm;
+  var maVachKey = "MV:" + maVachNorm;
+  if (maHangNorm && Object.prototype.hasOwnProperty.call(tonKhoMap, maHangKey)) return Number(tonKhoMap[maHangKey]) || 0;
+  if (maVachNorm && Object.prototype.hasOwnProperty.call(tonKhoMap, maVachKey)) return Number(tonKhoMap[maVachKey]) || 0;
+  var maHangCompact = normalizeNumericCode(maHangNorm);
+  var maVachCompact = normalizeNumericCode(maVachNorm);
+  var maHangCompactKey = "MH:" + maHangCompact;
+  var maVachCompactKey = "MV:" + maVachCompact;
+  if (maHangCompact && Object.prototype.hasOwnProperty.call(tonKhoMap, maHangCompactKey)) return Number(tonKhoMap[maHangCompactKey]) || 0;
+  if (maVachCompact && Object.prototype.hasOwnProperty.call(tonKhoMap, maVachCompactKey)) return Number(tonKhoMap[maVachCompactKey]) || 0;
   return 0;
 }
 
@@ -2020,13 +2091,22 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu) {
     if (!rowSoPhieu || rowSoPhieu.toLowerCase() !== String(soPhieu || "").trim().toLowerCase()) continue;
 
     var khoXuat = orderRow[2] ? String(orderRow[2]).trim() : "";
-    var maHang = orderRow[4] ? String(orderRow[4]).trim().toUpperCase() : "";
-    var maVach = orderRow[5] ? String(orderRow[5]).trim().toUpperCase() : "";
+    var maHang = orderRow[4] ? normalizeProductCode(orderRow[4]) : "";
+    var maVach = orderRow[5] ? normalizeProductCode(orderRow[5]) : "";
     if (!khoXuat || (!maHang && !maVach)) continue;
 
+    var currentMaHang = "";
+    var currentMaVach = "";
     for (var k = stockConfig.startRow; k < stockData.length; k++) {
       var rowStock = stockData[k];
       if (!rowStock) continue;
+      var rowMaHangRaw = getCellValue(rowStock, stockConfig.maHangIdx, "");
+      var rowMaVachRaw = getCellValue(rowStock, stockConfig.maVachIdx, "");
+      var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
+      if (hasOwnCode) {
+        currentMaHang = rowMaHangRaw;
+        currentMaVach = rowMaVachRaw;
+      }
       var rowStores = getRowStoreNames(rowStock, stockConfig);
       var isSameStore = false;
       for (var s = 0; s < rowStores.length; s++) {
@@ -2037,12 +2117,12 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu) {
       }
       if (!isSameStore) continue;
 
-      var rowMaHang = getCellValue(rowStock, stockConfig.maHangIdx, "").toUpperCase();
-      var rowMaVach = getCellValue(rowStock, stockConfig.maVachIdx, "").toUpperCase();
-      var codeMatch = (maHang && rowMaHang && maHang === rowMaHang) || (maVach && rowMaVach && maVach === rowMaVach);
+      var rowMaHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
+      var rowMaVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
+      var codeMatch = (maHang && rowMaHang && areCodesEquivalent(maHang, rowMaHang)) || (maVach && rowMaVach && areCodesEquivalent(maVach, rowMaVach));
       if (!codeMatch) continue;
 
-      var oldStock = Number(rowStock[stockConfig.tonKhoIdx]) || 0;
+      var oldStock = parseQuantityValue(rowStock[stockConfig.tonKhoIdx]);
       var newStock = oldStock - qty;
       stockData[k][stockConfig.tonKhoIdx] = newStock;
       stockSheet.getRange(k + 1, stockConfig.tonKhoIdx + 1).setValue(newStock);
@@ -2297,21 +2377,38 @@ function formatShortStoreLabel(storeName) {
 function getStockIndexByStore(stockData) {
   var index = {};
   var stockConfig = getStockSheetConfig(stockData);
+  var currentMaHang = "";
+  var currentMaVach = "";
   for (var i = stockConfig.startRow; i < stockData.length; i++) {
     var row = stockData[i];
     if (!row) continue;
+    var rowMaHangRaw = getCellValue(row, stockConfig.maHangIdx, "");
+    var rowMaVachRaw = getCellValue(row, stockConfig.maVachIdx, "");
+    var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
+    if (hasOwnCode) {
+      currentMaHang = rowMaHangRaw;
+      currentMaVach = rowMaVachRaw;
+    }
     var stores = getRowStoreNames(row, stockConfig);
-    var maHang = getCellValue(row, stockConfig.maHangIdx, "").toUpperCase();
-    var maVach = getCellValue(row, stockConfig.maVachIdx, "").toUpperCase();
-    var qty = Number(row[stockConfig.tonKhoIdx]) || 0;
+    var maHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
+    var maVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
+    var qty = parseQuantityValue(row[stockConfig.tonKhoIdx]);
     if (qty === 0) continue;
     if (!stores.length) continue;
 
     for (var s = 0; s < stores.length; s++) {
       var store = stores[s];
       if (!index[store]) index[store] = {};
-      if (maHang) index[store][maHang] = (index[store][maHang] || 0) + qty;
-      if (maVach) index[store][maVach] = (index[store][maVach] || 0) + qty;
+      if (maHang) {
+        index[store][maHang] = (index[store][maHang] || 0) + qty;
+        var maHangCompact = normalizeNumericCode(maHang);
+        if (maHangCompact && maHangCompact !== maHang) index[store][maHangCompact] = (index[store][maHangCompact] || 0) + qty;
+      }
+      if (maVach) {
+        index[store][maVach] = (index[store][maVach] || 0) + qty;
+        var maVachCompact = normalizeNumericCode(maVach);
+        if (maVachCompact && maVachCompact !== maVach) index[store][maVachCompact] = (index[store][maVachCompact] || 0) + qty;
+      }
     }
   }
   return index;
