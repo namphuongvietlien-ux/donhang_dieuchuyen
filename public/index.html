@@ -349,7 +349,7 @@
         </div>
         <div style="overflow-x: auto;">
           <table id="ql-table">
-            <thead><tr><th width="5%">STT</th><th width="20%">Mã</th><th width="40%">Tên SP</th><th width="10%">Tồn</th><th width="20%" style="background:#e8f0fe;">Số Lượng</th><th id="ql-admin-column" style="display:none;">Thao tác</th></tr></thead>
+            <thead><tr><th width="5%">STT</th><th width="18%">Mã</th><th width="34%">Tên SP</th><th width="10%">Tồn</th><th width="12%" style="background:#e8f0fe;">SL Đặt</th><th width="12%" style="background:#ecfdf3;">SL Thực nhận</th><th id="ql-admin-column" style="display:none;">Thao tác</th></tr></thead>
             <tbody id="ql-tbody"></tbody>
           </table>
         </div>
@@ -413,9 +413,38 @@
         </div>
         <div class="form-row">
           <div class="form-group"><label>Tạo bảng từ đơn ngày:</label><input type="date" id="sh-create-date"></div>
-          <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_taoBangSoanNgayMai()">🧾 TẠO BẢNG SOẠN NGÀY MAI</button></div>
+          <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_moBangChonDonSoan()">🧾 TẠO BẢNG SOẠN HÀNG</button></div>
         </div>
         <div class="stats-bar" id="sh-stats"></div>
+        <div id="sh-order-picker" style="display:none; margin-top:12px; border:1px solid #dbeafe; border-radius:12px; padding:12px; background:#f8fbff;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+            <div>
+              <b style="color:#1e3a8a;">Chọn đơn để phân tích xuất bảng soạn</b>
+              <div id="sh-order-picker-summary" style="font-size:12px; color:#64748b; margin-top:2px;"></div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; border-radius:10px; box-shadow:none;" onclick="sh_chonTatCaDonSoan(true)">Chọn tất cả</button>
+              <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; border-radius:10px; box-shadow:none; background:#64748b;" onclick="sh_chonTatCaDonSoan(false)">Bỏ chọn</button>
+              <button type="button" class="btn-submit btn-success" style="width:auto; padding:8px 14px; border-radius:10px; box-shadow:none;" onclick="sh_taoBangSoanTuDonDaChon()">Xuất bảng theo đơn đã chọn</button>
+            </div>
+          </div>
+          <div style="max-height:260px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
+            <table style="min-width:700px; margin:0;">
+              <thead>
+                <tr>
+                  <th style="width:64px; text-align:center;">Chọn</th>
+                  <th>Số phiếu</th>
+                  <th>Kho xuất</th>
+                  <th>Kho nhận</th>
+                  <th>Giờ đặt</th>
+                </tr>
+              </thead>
+              <tbody id="sh-order-picker-body">
+                <tr><td colspan="5" style="text-align:center; color:#64748b;">Nhấn nút tạo bảng soạn hàng để tải danh sách đơn.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
       <div id="sh-list-container"><div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div></div>
       <div class="fixed-footer" id="sh-footer" style="display:none;">

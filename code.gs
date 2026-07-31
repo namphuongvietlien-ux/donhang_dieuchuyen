@@ -245,6 +245,9 @@ function doGet(e) {
         case 'getDashboardSummary':
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');
           break;
+        case 'getDanhSachDonSoanHang':
+          res = getDanhSachDonSoanHang(e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');
+          break;
         case 'getChiTietDonHangMobile':
           res = getChiTietDonHangMobile(e.parameter.soPhieu || '');
           break;
@@ -1292,9 +1295,9 @@ function getChiTietPhieu(soPhieu, storeName) {
   for (var i = 1; i < data.length; i++) { 
     if (data[i][1] && data[i][1].toString().toLowerCase() === soPhieu.toLowerCase()) {
       var slGoc = Number(data[i][7]) || 0;
-      var slThucTe = (data[i][8] !== "" && data[i][8] !== undefined) ? Number(data[i][8]) : slGoc;
-      var effectiveQty = (slThucTe !== undefined && slThucTe !== null && slThucTe !== "") ? slThucTe : slGoc;
-      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: effectiveQty, dvt: data[i][9], ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
+      var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
+      var slThucTe = hasActualQty ? Number(data[i][8]) : "";
+      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: data[i][9], ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
     }
   }
   var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
@@ -1951,6 +1954,91 @@ function getStockIndexByStore(stockData) {
   return index;
 }
 
+function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
+  var dateObj = parseDateInputYYYYMMDD(ngayYYYYMMDD);
+  if (!dateObj) {
+    dateObj = new Date();
+    dateObj.setHours(0, 0, 0, 0);
+  }
+  var orders = getEligibleOrdersForSoanHang(dateObj, userRole, userStore);
+  return {
+    success: true,
+    date: Utilities.formatDate(dateObj, Session.getScriptTimeZone(), "yyyy-MM-dd"),
+    total: orders.length,
+    orders: orders
+  };
+}
+
+function getEligibleOrdersForSoanHang(baseDate, userRole, userStore) {
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  if (!historySheet) return [];
+  var data = historySheet.getDataRange().getValues();
+  if (!data || data.length < 2) return [];
+
+  var targetDate = new Date(baseDate);
+  targetDate.setHours(0, 0, 0, 0);
+  var map = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    if (!row) continue;
+    var soPhieu = row[1] ? String(row[1]).trim() : "";
+    if (!soPhieu) continue;
+
+    var ngayTao = row[0] instanceof Date ? new Date(row[0]) : new Date(row[0]);
+    if (isNaN(ngayTao.getTime())) continue;
+    var dateOnly = new Date(ngayTao);
+    dateOnly.setHours(0, 0, 0, 0);
+    if (dateOnly.getTime() !== targetDate.getTime()) continue;
+
+    var khoXuat = row[2] ? String(row[2]).trim() : "";
+    var khoNhan = row[3] ? String(row[3]).trim() : "";
+    if (userRole !== "Admin" && khoXuat !== String(userStore || "").trim()) continue;
+
+    var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
+    var slThucTe = row[8];
+    var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
+
+    if (!map[soPhieu]) {
+      map[soPhieu] = {
+        soPhieu: soPhieu,
+        khoXuat: khoXuat,
+        khoNhan: khoNhan,
+        createdAt: ngayTao,
+        hasPacked: false,
+        hasConfirmed: false,
+        hasCancelled: false
+      };
+    }
+
+    var entry = map[soPhieu];
+    if (displayStatus === "Đã xác nhận") entry.hasConfirmed = true;
+    else if (displayStatus === "Đã soạn") entry.hasPacked = true;
+    else if (displayStatus === "Đã hủy" || displayStatus === "Đã hủy dòng") entry.hasCancelled = true;
+
+    if (ngayTao.getTime() < entry.createdAt.getTime()) {
+      entry.createdAt = ngayTao;
+    }
+  }
+
+  var orders = [];
+  for (var key in map) {
+    var item = map[key];
+    if (item.hasPacked || item.hasConfirmed || item.hasCancelled) continue;
+    orders.push({
+      soPhieu: item.soPhieu,
+      khoXuat: item.khoXuat,
+      khoNhan: item.khoNhan,
+      thoiGianDat: Utilities.formatDate(item.createdAt, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm"),
+      thoiGianDatMillis: item.createdAt.getTime()
+    });
+  }
+
+  orders.sort(function(a, b) { return a.thoiGianDatMillis - b.thoiGianDatMillis; });
+  return orders;
+}
+
 function taoBangSoanHangNgayMai(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
@@ -1961,6 +2049,29 @@ function taoBangSoanHangNgayMai(payload) {
   baseDate.setHours(0, 0, 0, 0);
   var tomorrow = new Date(baseDate);
   tomorrow.setDate(tomorrow.getDate() + 1);
+
+  var eligibleOrders = getEligibleOrdersForSoanHang(baseDate, payload && payload.userRole ? payload.userRole : "", payload && payload.userStore ? payload.userStore : "");
+  var eligibleSet = {};
+  for (var eo = 0; eo < eligibleOrders.length; eo++) {
+    eligibleSet[String(eligibleOrders[eo].soPhieu).trim()] = true;
+  }
+
+  var selectedOrdersRaw = payload && payload.selectedOrders && payload.selectedOrders.length ? payload.selectedOrders : [];
+  var selectedSet = {};
+  if (selectedOrdersRaw.length) {
+    for (var so = 0; so < selectedOrdersRaw.length; so++) {
+      var soPhieuPick = String(selectedOrdersRaw[so] || "").trim();
+      if (!soPhieuPick) continue;
+      if (eligibleSet[soPhieuPick]) selectedSet[soPhieuPick] = true;
+    }
+  } else {
+    for (var keyEligible in eligibleSet) selectedSet[keyEligible] = true;
+  }
+
+  var selectedOrderCount = Object.keys(selectedSet).length;
+  if (!selectedOrderCount) {
+    return { success: false, msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính." };
+  }
 
   var data = historySheet.getDataRange().getValues();
   if (!data || data.length < 2) throw new Error("Chưa có dữ liệu đơn hàng để tổng hợp.");
@@ -1987,6 +2098,7 @@ function taoBangSoanHangNgayMai(payload) {
     var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
 
     if (!soPhieu || !khoNhan) continue;
+    if (!selectedSet[soPhieu]) continue;
     if (status === "Đã hủy đơn" || status === "Đã hủy dòng") continue;
     if (soLuong <= 0) continue;
 

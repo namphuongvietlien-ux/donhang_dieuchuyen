@@ -763,11 +763,16 @@ function ql_hienThiChiTiet(phieu, options) {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
       var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
-      var latestQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
       var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
       var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
-      var displayQty = isPublicView ? (latestQty !== undefined && latestQty !== null && latestQty !== "" ? latestQty : "") : quantityInput;
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+displayQty+'</td>'+cancelButton+'</tr>');
+      var requestedDisplay = (!isReadOnlyRow && !isPublicView)
+        ? quantityInput
+        : ('<b>' + (Number(r.slGoc) || 0) + '</b>');
+      var hasReceivedQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "");
+      var receivedDisplay = hasReceivedQty
+        ? ('<b style="color:#166534;">' + Number(r.slThucTe) + '</b>')
+        : '<span style="color:#94a3b8;">-</span>';
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
     });
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     if (!isPublicView && packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
@@ -856,7 +861,7 @@ function ql_themMaHang(itemOverride) {
       trangThai: "Chưa lưu",
       nguoiSoanHang: ""
     });
-    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
+    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><span style="color:#94a3b8;">-</span></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
   }
 
   alert("✅ Đã thêm mã vào bảng chỉnh sửa. Nhấn Lưu để ghi vào hệ thống.");
@@ -972,15 +977,101 @@ function sh_luuPhieu() {
   apiPost('luuSoSoanHangVaAnh', { updates: updates, images: pendingImages, actor: sessionUser ? sessionUser.user : '' }).then(function(res) { hideLoad(); alert(res); pendingImages = {}; sh_taiDanhSachDon(); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
-function sh_taoBangSoanNgayMai() {
+var shOrderCandidates = [];
+
+function sh_capNhatTomTatChonDonSoan() {
+  var checkboxes = document.querySelectorAll('.sh-order-check');
+  var checked = 0;
+  checkboxes.forEach(function(cb) { if (cb.checked) checked++; });
+  var summaryEl = document.getElementById('sh-order-picker-summary');
+  if (summaryEl) {
+    summaryEl.innerText = 'Đang chọn ' + checked + '/' + checkboxes.length + ' đơn hợp lệ trong ngày (đơn đã soạn/đã giao đã được ẩn).';
+  }
+}
+
+function sh_renderDanhSachDonSoan(candidates) {
+  var bodyEl = document.getElementById('sh-order-picker-body');
+  if (!bodyEl) return;
+  if (!candidates || !candidates.length) {
+    bodyEl.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ trong ngày này để phân tích.</td></tr>';
+    sh_capNhatTomTatChonDonSoan();
+    return;
+  }
+  var html = '';
+  candidates.forEach(function(order, idx) {
+    html += '<tr>' +
+      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + order.soPhieu + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
+      '<td><b>' + order.soPhieu + '</b></td>' +
+      '<td>' + (order.khoXuat || '-') + '</td>' +
+      '<td>' + (order.khoNhan || '-') + '</td>' +
+      '<td>' + (order.thoiGianDat || '-') + '</td>' +
+      '</tr>';
+  });
+  bodyEl.innerHTML = html;
+  sh_capNhatTomTatChonDonSoan();
+}
+
+function sh_taiDanhSachDonSoanChoBang() {
+  var createDateEl = document.getElementById('sh-create-date');
+  var ngay = createDateEl && createDateEl.value ? createDateEl.value : '';
+  var pickerEl = document.getElementById('sh-order-picker');
+  if (pickerEl) pickerEl.style.display = 'block';
+  var bodyEl = document.getElementById('sh-order-picker-body');
+  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
+
+  apiGet('getDanhSachDonSoanHang', {
+    ngay: ngay,
+    userRole: sessionUser.role || '',
+    userStore: sessionUser.store || ''
+  }).then(function(res) {
+    if (!res || !res.success) {
+      throw new Error((res && (res.error || res.msg)) || 'Không thể tải danh sách đơn.');
+    }
+    shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
+    sh_renderDanhSachDonSoan(shOrderCandidates);
+  }).catch(function(err) {
+    shOrderCandidates = [];
+    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + err.message + '</td></tr>';
+    sh_capNhatTomTatChonDonSoan();
+  });
+}
+
+function sh_chonTatCaDonSoan(checked) {
+  document.querySelectorAll('.sh-order-check').forEach(function(cb) {
+    cb.checked = !!checked;
+  });
+  sh_capNhatTomTatChonDonSoan();
+}
+
+function sh_moBangChonDonSoan() {
+  if (!sessionUser || !sessionUser.user) {
+    alert('Vui lòng đăng nhập trước khi tạo bảng soạn.');
+    return;
+  }
+  sh_taiDanhSachDonSoanChoBang();
+}
+
+function sh_taoBangSoanTuDonDaChon() {
   if (!sessionUser || !sessionUser.user) {
     alert("Vui lòng đăng nhập trước khi tạo bảng soạn.");
     return;
   }
   var createDateEl = document.getElementById("sh-create-date");
   var ngay = createDateEl && createDateEl.value ? createDateEl.value : "";
-  showLoad("Đang tạo bảng tổng hợp soạn hàng ngày mai...");
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user }).then(function(res) {
+  var selectedOrders = [];
+  document.querySelectorAll('.sh-order-check').forEach(function(cb) {
+    if (cb.checked) {
+      var soPhieu = cb.getAttribute('data-sophieu') || '';
+      if (soPhieu) selectedOrders.push(soPhieu);
+    }
+  });
+  if (!selectedOrders.length) {
+    alert('Vui lòng tick ít nhất 1 đơn để tạo bảng soạn.');
+    return;
+  }
+
+  showLoad("Đang tạo bảng soạn hàng từ các đơn đã chọn...");
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }).then(function(res) {
     hideLoad();
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi"));
