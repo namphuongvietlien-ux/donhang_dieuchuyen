@@ -368,6 +368,7 @@ function getPendingOrdersForStore(storeName, maxCount) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
+  var targetStore = normalizeStoreName(storeName || "");
   var data = historySheet.getDataRange().getValues();
   var map = {};
   for (var i = 1; i < data.length; i++) {
@@ -377,7 +378,7 @@ function getPendingOrdersForStore(storeName, maxCount) {
     var slThucTe = data[i][8];
     var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
     if (!soPhieu || !khoNhan) continue;
-    if (khoNhan !== storeName) continue;
+    if (!isSameStoreName(khoNhan, targetStore)) continue;
     var isDaXuLy = getDisplayOrderStatus(rowStatus, slThucTe) !== "Mới";
     if (!map[soPhieu]) {
       map[soPhieu] = { soPhieu: soPhieu, khoXuat: khoXuat, khoNhan: khoNhan, daXuLy: isDaXuLy };
@@ -440,6 +441,7 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     if (!target) return "";
     var targetNormalized = normalizeOrderCodeText(target);
     var ss = getSS();
+    var catalogLookup = getCatalogLookup(ss);
     var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
     if (!historySheet) return "";
     var data = historySheet.getDataRange().getValues();
@@ -467,7 +469,7 @@ function taoPdfDonHangVaLayLink(soPhieu) {
         data[i][4] || "",
         data[i][5] || "",
         data[i][6] || "",
-        data[i][9] || "Cái",
+        resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]),
         slDat,
         hasActual ? slThucNhan : "",
         rowStatus || "Mới"
@@ -794,6 +796,55 @@ function getCellValue(row, index, fallback) {
   return String(value).trim();
 }
 
+function getCatalogLookup(ss) {
+  var lookup = { byMaHang: {}, byMaVach: {} };
+  var dataSheet = ss.getSheetByName("Data_Excel");
+  if (!dataSheet) return lookup;
+
+  var rawData = dataSheet.getDataRange().getValues();
+  if (!rawData || !rawData.length) return lookup;
+
+  var headerRowIndex = findHeaderRowIndex(rawData, 10);
+  var headerRow = headerRowIndex >= 0 ? rawData[headerRowIndex] : null;
+  var maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
+  var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid', 'ean']);
+  var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
+  var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
+
+  for (var i = startRow; i < rawData.length; i++) {
+    var row = rawData[i];
+    if (!row) continue;
+    var maHang = getCellValue(row, maHangIdx !== -1 ? maHangIdx : 0, "");
+    var maVach = getCellValue(row, maVachIdx !== -1 ? maVachIdx : 2, "");
+    var tenHang = getCellValue(row, tenHangIdx !== -1 ? tenHangIdx : 5, "");
+    var dvt = getCellValue(row, dvtIdx !== -1 ? dvtIdx : 7, "");
+    if (!dvt && dvtIdx === -1) dvt = getCellValue(row, 6, "");
+
+    var rec = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt };
+    if (maHang) lookup.byMaHang[String(maHang).trim().toUpperCase()] = rec;
+    if (maVach) lookup.byMaVach[String(maVach).trim().toUpperCase()] = rec;
+  }
+  return lookup;
+}
+
+function resolveCatalogProduct(lookup, maHang, maVach) {
+  if (!lookup) return null;
+  var mv = String(maVach || "").trim().toUpperCase();
+  var mh = String(maHang || "").trim().toUpperCase();
+  if (mv && lookup.byMaVach[mv]) return lookup.byMaVach[mv];
+  if (mh && lookup.byMaHang[mh]) return lookup.byMaHang[mh];
+  return null;
+}
+
+function resolveDvtValue(lookup, maHang, maVach, currentDvt) {
+  var current = String(currentDvt || "").trim();
+  var catalogItem = resolveCatalogProduct(lookup, maHang, maVach);
+  var catalogDvt = catalogItem && catalogItem.dvt ? String(catalogItem.dvt).trim() : "";
+  if (catalogDvt && (!current || normalizeHeaderText(current) === "cai")) return catalogDvt;
+  return current || catalogDvt || "";
+}
+
 function findHeaderRowIndex(data, maxScanRows) {
   var limit = Math.min(data.length, maxScanRows || 8);
   for (var r = 0; r < limit; r++) {
@@ -945,7 +996,7 @@ function parseImportRows(importData) {
     var maHang = getCellValue(row, idxMaHang, "");
     var maVach = getCellValue(row, idxMaVach, "");
     var tenHang = getCellValue(row, idxTenHang, "");
-    var dvt = getCellValue(row, idxDvt, "Cái");
+    var dvt = getCellValue(row, idxDvt, "");
     var kho = getCellValue(row, idxKho, "");
     var tonRaw = idxTonKho !== -1 ? row[idxTonKho] : "";
     var tonKho = (tonRaw === "" || tonRaw === null || tonRaw === undefined) ? "" : Number(tonRaw);
@@ -956,7 +1007,7 @@ function parseImportRows(importData) {
       maHang: maHang,
       maVach: maVach,
       tenHang: tenHang,
-      dvt: dvt || "Cái",
+      dvt: dvt || "",
       kho: kho,
       tonKho: isNaN(tonKho) ? "" : tonKho
     });
@@ -1025,7 +1076,7 @@ function nhapKhauCapNhatThongTin(payload) {
       maHang: item.maHang || "",
       maVach: item.maVach || "",
       tenHang: item.tenHang || "",
-      dvt: item.dvt || "Cái"
+      dvt: item.dvt || ""
     };
   }
   var catalogRows = [];
@@ -1170,7 +1221,7 @@ function getInitialData() {
           if (fallbackDvt !== "") dvt = fallbackDvt;
         }
         if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
-        var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "Cái" };
+        var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "" };
         if (maVach !== "") danhMucHangHoa[maVach.toUpperCase()] = obj;
         if (maHang !== "" && !danhMucHangHoa[maHang.toUpperCase()]) danhMucHangHoa[maHang.toUpperCase()] = obj;
       }
@@ -1197,22 +1248,26 @@ function getInitialData() {
 // --- API: LƯU ĐƠN / PHIẾU TẠO MỚI ---
 function luuPhieuTuWebApp(payload) {
   var ss = getSS();
+  var catalogLookup = getCatalogLookup(ss);
   var homNay = new Date();
   var prefix = payload.loaiPhieu === "DonHang" ? "DH" : "DC";
   var soPhieu = prefix + "-" + Math.floor(100000 + Math.random() * 900000);
+  var khoXuatNormalized = normalizeStoreName(payload.khoXuat || "");
+  var khoNhanNormalized = normalizeStoreName(payload.khoNhan || "");
   
   var dataLichSuArr = [];
   var coLoiCanDieuChinh = false;
   
   for (var i = 0; i < payload.items.length; i++) {
     var item = payload.items[i];
+    var dvtResolved = resolveDvtValue(catalogLookup, item ? item.maHang : "", item ? item.maVach : "", item ? item.dvt : "");
     var slNum = Number(item.sl);
     var ghiChuLoi = "";
     var coLoiDongNay = false;
     if (isNaN(slNum) || slNum <= 0) { coLoiDongNay = true; ghiChuLoi = "Lỗi số lượng"; slNum = 0; }
-    if (!item.dvt || item.dvt === "Không tìm thấy" || item.dvt === "") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Lỗi ĐVT"; }
+    if (!dvtResolved || dvtResolved === "Không tìm thấy") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Lỗi ĐVT"; }
     if (item.maHang === "LỖI MÃ") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Mã không tồn tại"; }
-    dataLichSuArr.push([ homNay, soPhieu, payload.khoXuat, payload.khoNhan, item.maHang, item.maVach, item.tenHang, slNum, "", item.dvt, "", ghiChuLoi, "Mới" ]);
+    dataLichSuArr.push([ homNay, soPhieu, khoXuatNormalized, khoNhanNormalized, item.maHang, item.maVach, item.tenHang, slNum, "", dvtResolved, "", ghiChuLoi, "Mới" ]);
     if (coLoiDongNay) coLoiCanDieuChinh = true;
   }
 
@@ -1234,7 +1289,7 @@ function luuPhieuTuWebApp(payload) {
   
   if (!coLoiCanDieuChinh) {
     var createPdfUrl = taoPdfDonHangVaLayLink(soPhieu);
-    sendTelegramMessage(soPhieu, payload.khoXuat, payload.khoNhan, payload.items.length, createPdfUrl);
+    sendTelegramMessage(soPhieu, khoXuatNormalized, khoNhanNormalized, payload.items.length, createPdfUrl);
   }
   return { success: true, soPhieu: soPhieu, coLoi: coLoiCanDieuChinh };
 }
@@ -1244,6 +1299,8 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
+  var filterKhoNhan = normalizeStoreName(khoNhan || "");
+  var filterUserStore = normalizeStoreName(userStore || "");
   var data = historySheet.getDataRange().getValues();
   var map = {};
   for (var i = 1; i < data.length; i++) {
@@ -1257,11 +1314,11 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     var thoiGian = rowNgay instanceof Date ? rowNgay.getTime() : "";
 
     if (!rowSoPhieu) continue;
-    if (khoNhan && khoNhan !== "all" && rowKhoNhan !== khoNhan) continue;
+    if (filterKhoNhan && filterKhoNhan !== "all" && !isSameStoreName(rowKhoNhan, filterKhoNhan)) continue;
     
     // BỘ LỌC BẢO MẬT PHÂN QUYỀN: Chi nhánh chỉ thấy đơn của mình
     if (userRole !== "Admin") {
-      if (rowKhoXuat !== userStore && rowKhoNhan !== userStore) continue;
+      if (!isSameStoreName(rowKhoXuat, filterUserStore) && !isSameStoreName(rowKhoNhan, filterUserStore)) continue;
     }
 
     if (ngayYYYYMMDD && rowNgay) {
@@ -1405,6 +1462,7 @@ function isDateInTimeline(value, timeline, fromDate, toDate) {
 
 function getChiTietPhieu(soPhieu, storeName) {
   var ss = getSS();
+  var catalogLookup = getCatalogLookup(ss);
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   var data = historySheet.getDataRange().getValues();
   var matchedRows = [];
@@ -1413,7 +1471,7 @@ function getChiTietPhieu(soPhieu, storeName) {
       var slGoc = Number(data[i][7]) || 0;
       var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
       var slThucTe = hasActualQty ? Number(data[i][8]) : "";
-      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: data[i][9] || "Cái", ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
+      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]), ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
     }
   }
   var tonKhoMap = getStockMapForStore(ss, storeName);
@@ -1460,8 +1518,8 @@ function getStockValueForItem(tonKhoMap, maHang, maVach) {
 }
 
 function isStoreNameMatch(stockStoreName, targetStoreName) {
-  var left = String(stockStoreName || "").trim();
-  var right = String(targetStoreName || "").trim();
+  var left = normalizeStoreName(stockStoreName || "");
+  var right = normalizeStoreName(targetStoreName || "");
   if (!left || !right) return false;
 
   if (left === right) return true;
@@ -1475,6 +1533,31 @@ function isStoreNameMatch(stockStoreName, targetStoreName) {
   var leftShort = formatShortStoreLabel(left);
   var rightShort = formatShortStoreLabel(right);
   return normalizeHeaderText(leftShort) === normalizeHeaderText(rightShort);
+}
+
+function normalizeStoreName(storeName) {
+  var raw = String(storeName || "").trim();
+  if (!raw) return "";
+  if (raw === "all" || raw === "Tất cả") return raw;
+  if (STORE_MAP[raw]) return raw;
+
+  var normalizedRaw = normalizeHeaderText(raw);
+  for (var fullName in STORE_MAP) {
+    if (!Object.prototype.hasOwnProperty.call(STORE_MAP, fullName)) continue;
+    var shortName = STORE_MAP[fullName];
+    if (normalizeHeaderText(fullName) === normalizedRaw || normalizeHeaderText(shortName) === normalizedRaw) {
+      return fullName;
+    }
+  }
+  return raw;
+}
+
+function isSameStoreName(leftStore, rightStore) {
+  var left = normalizeStoreName(leftStore);
+  var right = normalizeStoreName(rightStore);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return isStoreNameMatch(left, right);
 }
 
 function ensureHistoryStatusColumn(historySheet) {
@@ -2047,6 +2130,7 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
+  var filterUserStore = normalizeStoreName(userStore || "");
   var data = historySheet.getDataRange().getValues();
   var map = {};
   var today = new Date(); today.setHours(0,0,0,0);
@@ -2063,9 +2147,9 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
     if (isCanceled) continue;
 
     if (viewMode === "packing") {
-      if (userRole !== "Admin" && rowKhoXuat !== userStore) continue;
+      if (userRole !== "Admin" && !isSameStoreName(rowKhoXuat, filterUserStore)) continue;
     } else if (userRole !== "Admin") {
-      if (rowKhoXuat !== userStore && rowKhoNhan !== userStore) continue;
+      if (!isSameStoreName(rowKhoXuat, filterUserStore) && !isSameStoreName(rowKhoNhan, filterUserStore)) continue;
     }
 
     var slThucTe = data[i][8];
@@ -2086,6 +2170,7 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
 
 function getChiTietDonHangMobile(soPhieu) {
   var ss = getSS();
+  var catalogLookup = getCatalogLookup(ss);
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   var data = historySheet.getDataRange().getValues();
   var items = [];
@@ -2095,7 +2180,7 @@ function getChiTietDonHangMobile(soPhieu) {
       if (!khoXuat && data[i][2]) khoXuat = String(data[i][2]).trim();
       var slGoc = Number(data[i][7]) || 0;
       var slThucTe = (data[i][8] !== "" && data[i][8] !== undefined) ? Number(data[i][8]) : slGoc;
-      items.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], dvt: data[i][9] || "Cái", slGoc: slGoc, slThucTe: slThucTe, anhXacNhan: (data[i][10]||""), nguoiSoanHang: data[i][13] || "" });
+      items.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], dvt: resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]), slGoc: slGoc, slThucTe: slThucTe, anhXacNhan: (data[i][10]||""), nguoiSoanHang: data[i][13] || "" });
     }
   }
   var tonKhoMap = getStockMapForStore(ss, khoXuat);
@@ -2319,6 +2404,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore) {
 
 function taoBangSoanHangNgayMai(payload) {
   var ss = getSS();
+  var catalogLookup = getCatalogLookup(ss);
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) throw new Error("Không tìm thấy sheet Lịch Sử Xuất Kho.");
 
@@ -2373,7 +2459,7 @@ function taoBangSoanHangNgayMai(payload) {
     var maVach = row[5] ? String(row[5]).trim() : "";
     var tenHang = row[6] ? String(row[6]).trim() : "";
     var soLuong = Number(row[7]) || 0;
-    var dvt = row[9] ? String(row[9]).trim() : "Cái";
+    var dvt = resolveDvtValue(catalogLookup, maHang, maVach, row[9]);
     var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
 
     if (!soPhieu || !khoNhan) continue;
@@ -2389,7 +2475,7 @@ function taoBangSoanHangNgayMai(payload) {
         maHang: maHang,
         maVach: maVach,
         tenHang: tenHang,
-        dvt: dvt || "Cái",
+        dvt: dvt || "",
         totalQty: 0,
         byStore: {},
         sourceStores: {},
@@ -2475,7 +2561,7 @@ function taoBangSoanHangNgayMai(payload) {
       item.maHang || "",
       item.maVach || "",
       item.tenHang || "",
-      item.dvt || "Cái",
+      item.dvt || "",
       stock,
       item.totalQty
     ];
