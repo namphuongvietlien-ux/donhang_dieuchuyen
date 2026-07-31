@@ -234,13 +234,70 @@ function switchTab(tabId) {
   if(tabId === 'tab-admin') loadDSUser();
 }
 
+function formatDateInputValue(date) {
+  var yyyy = date.getFullYear();
+  var mm = String(date.getMonth() + 1).padStart(2, '0');
+  var dd = String(date.getDate()).padStart(2, '0');
+  return yyyy + '-' + mm + '-' + dd;
+}
+
+function dashboard_onTimelineChange() {
+  var timelineEl = document.getElementById('dashboard-timeline');
+  var fromWrap = document.getElementById('dashboard-from-wrap');
+  var toWrap = document.getElementById('dashboard-to-wrap');
+  var fromEl = document.getElementById('dashboard-from');
+  var toEl = document.getElementById('dashboard-to');
+  var timeline = timelineEl && timelineEl.value ? timelineEl.value : '2days';
+  var isCustom = timeline === 'custom';
+  if (fromWrap) fromWrap.style.display = isCustom ? 'block' : 'none';
+  if (toWrap) toWrap.style.display = isCustom ? 'block' : 'none';
+  if (isCustom && fromEl && toEl && !fromEl.value && !toEl.value) {
+    var today = new Date();
+    var start = new Date(today);
+    start.setDate(today.getDate() - 1);
+    fromEl.value = formatDateInputValue(start);
+    toEl.value = formatDateInputValue(today);
+  }
+  loadDashboardSummary();
+}
+
+function getDashboardTimelineParams() {
+  var timelineEl = document.getElementById('dashboard-timeline');
+  var fromEl = document.getElementById('dashboard-from');
+  var toEl = document.getElementById('dashboard-to');
+  return {
+    timeline: timelineEl && timelineEl.value ? timelineEl.value : '2days',
+    fromDate: fromEl && fromEl.value ? fromEl.value : '',
+    toDate: toEl && toEl.value ? toEl.value : ''
+  };
+}
+
+function getDashboardTimelineLabel(params) {
+  if (!params) return '2 ngày gần nhất';
+  if (params.timeline === 'today') return 'Hôm nay';
+  if (params.timeline === '7days') return '7 ngày gần nhất';
+  if (params.timeline === '30days') return '30 ngày gần nhất';
+  if (params.timeline === 'all') return 'Tất cả thời gian';
+  if (params.timeline === 'custom') {
+    if (params.fromDate && params.toDate) return 'Từ ' + params.fromDate + ' đến ' + params.toDate;
+    if (params.fromDate) return 'Từ ' + params.fromDate;
+    if (params.toDate) return 'Đến ' + params.toDate;
+    return 'Khoảng thời gian tùy chỉnh';
+  }
+  return '2 ngày gần nhất';
+}
+
 function loadDashboardSummary() {
   if (!sessionUser || !sessionUser.user) return;
   var grid = document.getElementById('dashboard-summary-grid');
   var recent = document.getElementById('dashboard-recent-orders');
+  var timelineLabel = document.getElementById('dashboard-timeline-label');
+  var timelineParams = getDashboardTimelineParams();
+  var timeline = timelineParams.timeline;
   if (!grid || !recent) return;
+  if (timelineLabel) timelineLabel.innerText = 'Đang xem: ' + getDashboardTimelineLabel(timelineParams);
   showLoad('Đang tải tổng quan...');
-  apiGet('getDashboardSummary', { userRole: sessionUser.role || '', userStore: sessionUser.store || '' }).then(function(res) {
+  apiGet('getDashboardSummary', { userRole: sessionUser.role || '', userStore: sessionUser.store || '', timeline: timeline, fromDate: timelineParams.fromDate, toDate: timelineParams.toDate }).then(function(res) {
     hideLoad();
     if (!res || !res.success || !res.data) return;
     var data = res.data;
@@ -252,7 +309,7 @@ function loadDashboardSummary() {
     ].join('');
 
     if (!data.recentOrders || !data.recentOrders.length) {
-      recent.innerHTML = '<div style="padding:12px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px; color:#64748b;">Chưa có đơn hàng nào trong phạm vi của bạn.</div>';
+      recent.innerHTML = '<div style="padding:12px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px; color:#64748b;">Chưa có đơn hàng nào trong khoảng thời gian đã chọn.</div>';
       return;
     }
 
@@ -963,22 +1020,200 @@ function taoTaiKhoan() {
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
+var importPreviewState = null;
+
+function impNormalizeText(value) {
+  return String(value || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function readImportFileMatrix(file) {
+  return new Promise(function(resolve, reject) {
+    if (!file) {
+      reject(new Error('Vui lòng chọn file.'));
+      return;
+    }
+    if (typeof XLSX === 'undefined') {
+      reject(new Error('Chưa tải được thư viện đọc Excel. Vui lòng tải lại trang.'));
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        var workbook = XLSX.read(e.target.result, { type: 'array' });
+        var firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) throw new Error('File không có sheet nào.');
+        var worksheet = workbook.Sheets[firstSheetName];
+        var rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '', raw: false });
+        resolve({ rows: rows, sheetName: firstSheetName });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = function() {
+      reject(new Error('Không thể đọc file đã chọn.'));
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function impGetHeaderRow(rows) {
+  if (!rows || !rows.length) return [];
+  var limit = Math.min(rows.length, 8);
+  for (var i = 0; i < limit; i++) {
+    var row = rows[i] || [];
+    var score = row.filter(function(cell) { return impNormalizeText(cell).length > 0; }).length;
+    if (score >= 3) return row;
+  }
+  return rows[0] || [];
+}
+
+function analyzeImportRows(rows, importType) {
+  var header = impGetHeaderRow(rows);
+  var normalized = header.map(impNormalizeText).filter(Boolean);
+  var joined = normalized.join(' | ');
+  var hasStockSignals = /ton kho|so luong ton|stock|onhand|slton|qty/.test(joined) || /kho|cua hang|chi nhanh|store/.test(joined);
+  var hasCatalogSignals = /ma hang hoa|ma hang hoa cha|ma vach|ten hang hoa|don vi tinh|gia ban|thue suat/.test(joined);
+  var detectedType = hasStockSignals && !hasCatalogSignals ? 'stock' : (hasCatalogSignals ? 'catalog' : 'unknown');
+  var warnings = [];
+  if (!rows || rows.length < 2) warnings.push('File gần như không có dữ liệu.');
+  if (importType === 'stock' && detectedType === 'catalog') warnings.push('File đang giống file nhập khẩu thông tin hơn file tồn kho.');
+  if (importType === 'catalog' && detectedType === 'stock') warnings.push('File đang giống file tồn kho hơn file nhập khẩu thông tin.');
+  if (importType === 'stock' && !hasStockSignals) warnings.push('Không tìm thấy dấu hiệu cột tồn kho hoặc tên kho trong file.');
+  if (importType === 'catalog' && !hasCatalogSignals) warnings.push('Không tìm thấy đủ dấu hiệu cột thông tin hàng hóa trong file.');
+  if (normalized.length < 3) warnings.push('Dòng tiêu đề quá ít cột, có thể chọn nhầm sheet hoặc nhầm file.');
+  return {
+    header: header,
+    detectedType: detectedType,
+    warnings: warnings,
+    rowCount: rows ? rows.length : 0,
+    colCount: header ? header.length : 0
+  };
+}
+
+function renderImportPreview(previewState) {
+  var card = document.getElementById('imp-preview-card');
+  var meta = document.getElementById('imp-preview-meta');
+  var warning = document.getElementById('imp-preview-warning');
+  var ok = document.getElementById('imp-preview-ok');
+  var head = document.getElementById('imp-preview-head');
+  var body = document.getElementById('imp-preview-body');
+  var confirmEl = document.getElementById('imp-confirm');
+  if (!card || !meta || !warning || !ok || !head || !body || !confirmEl) return;
+
+  if (!previewState) {
+    card.style.display = 'none';
+    meta.innerHTML = '';
+    warning.style.display = 'none';
+    ok.style.display = 'none';
+    head.innerHTML = '';
+    body.innerHTML = '';
+    confirmEl.checked = false;
+    imp_toggleImportButton();
+    return;
+  }
+
+  card.style.display = 'block';
+  confirmEl.checked = false;
+  meta.innerHTML = '<b>File:</b> ' + previewState.fileName + ' | <b>Sheet:</b> ' + previewState.sheetName + ' | <b>Dòng:</b> ' + previewState.analysis.rowCount + ' | <b>Cột:</b> ' + previewState.analysis.colCount + ' | <b>Nhận diện:</b> ' + (previewState.analysis.detectedType === 'stock' ? 'Tồn kho' : previewState.analysis.detectedType === 'catalog' ? 'Nhập khẩu thông tin' : 'Chưa rõ');
+
+  if (previewState.analysis.warnings.length) {
+    warning.style.display = 'block';
+    warning.innerHTML = '<b>Cảnh báo:</b><br>' + previewState.analysis.warnings.map(function(item) { return '- ' + item; }).join('<br>');
+    ok.style.display = 'none';
+    ok.innerHTML = '';
+  } else {
+    ok.style.display = 'block';
+    ok.innerHTML = 'Đã kiểm tra sơ bộ, chưa phát hiện dấu hiệu chọn nhầm file.';
+    warning.style.display = 'none';
+    warning.innerHTML = '';
+  }
+
+  var previewRows = previewState.rows.slice(0, 6);
+  var header = previewRows[0] || [];
+  head.innerHTML = '<tr>' + header.map(function(cell) {
+    return '<th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0; background:#f8fafc;">' + (cell || '') + '</th>';
+  }).join('') + '</tr>';
+  body.innerHTML = previewRows.slice(1).map(function(row) {
+    return '<tr>' + row.map(function(cell) {
+      return '<td style="padding:8px; border-bottom:1px solid #f1f5f9;">' + (cell || '') + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+  imp_toggleImportButton();
+}
+
+function imp_toggleImportButton() {
+  var btn = document.getElementById('imp-submit-btn');
+  var confirmEl = document.getElementById('imp-confirm');
+  var enabled = !!(btn && importPreviewState && confirmEl && confirmEl.checked);
+  if (!btn) return;
+  btn.disabled = !enabled;
+  btn.style.opacity = enabled ? '1' : '0.6';
+  btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
+
+function imp_handleSelectionChange() {
+  var typeEl = document.getElementById('imp-type');
+  var fileEl = document.getElementById('imp-file');
+  var importType = typeEl && typeEl.value ? typeEl.value : 'stock';
+  var file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+  importPreviewState = null;
+  renderImportPreview(null);
+  if (!file) return;
+  showLoad('Đang phân tích file để xem trước...');
+  readImportFileMatrix(file).then(function(parsed) {
+    importPreviewState = {
+      importType: importType,
+      fileName: file.name,
+      sheetName: parsed.sheetName,
+      rows: parsed.rows,
+      analysis: analyzeImportRows(parsed.rows, importType)
+    };
+    hideLoad();
+    renderImportPreview(importPreviewState);
+  }).catch(function(err) {
+    hideLoad();
+    renderImportPreview(null);
+    alert('Lỗi đọc file: ' + err.message);
+  });
+}
+
 function importDanhMucTonKho() {
   if (!sessionUser || sessionUser.role !== "Admin") return alert("Chỉ Admin mới được phép nhập khẩu dữ liệu.");
-  var sourceName = (document.getElementById("imp-sheet-name").value || "").trim();
-  if (!sourceName) return alert("Vui lòng nhập tên sheet nguồn.");
-  showLoad("Đang nhập khẩu dữ liệu...");
-  apiPost('nhapKhauCapNhatThongTin', { sourceSheet: sourceName, actor: sessionUser.user }).then(function(res) {
+  var typeEl = document.getElementById("imp-type");
+  var fileEl = document.getElementById("imp-file");
+  var importType = typeEl && typeEl.value ? typeEl.value : "stock";
+  var file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+  if (!file) return alert("Vui lòng chọn file từ máy tính.");
+  if (!importPreviewState || importPreviewState.fileName !== file.name || importPreviewState.importType !== importType) {
+    return alert('Vui lòng xem trước đúng file trước khi cập nhật.');
+  }
+  var confirmEl = document.getElementById('imp-confirm');
+  if (!confirmEl || !confirmEl.checked) return alert('Vui lòng xác nhận sau khi xem trước dữ liệu.');
+  showLoad("Đang cập nhật dữ liệu...");
+  Promise.resolve({ rows: importPreviewState.rows, sheetName: importPreviewState.sheetName }).then(function(parsed) {
+    return apiPost('nhapKhauCapNhatThongTin', {
+      importType: importType,
+      fileName: file.name,
+      sourceSheet: parsed.sheetName,
+      fileData: parsed.rows,
+      actor: sessionUser.user
+    });
+  }).then(function(res) {
     hideLoad();
     if (!res || !res.success) {
       alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi"));
       return;
     }
-    var msg = "✅ Nhập khẩu thành công!\n" +
-      "- Danh mục cập nhật: " + (res.catalogUpdated || 0) + " dòng\n" +
-      "- Tồn kho cập nhật: " + (res.stockUpdated || 0) + " dòng";
-    if (res.warnings && res.warnings.length) msg += "\n\n⚠️ Ghi chú:\n- " + res.warnings.join("\n- ");
+    var targetSheet = res.targetSheet || (importType === 'stock' ? 'TỔNG HỢP TỒN KHO' : 'Data_Excel');
+    var msg = "✅ Cập nhật thành công!\n" +
+      "- Sheet đích: " + targetSheet + "\n" +
+      "- Số dòng: " + (res.updatedRows || 0) + "\n" +
+      "- Số cột: " + (res.updatedCols || 0);
+    if (res.msg) msg += "\n\n" + res.msg;
     alert(msg);
+    if (fileEl) fileEl.value = '';
+    importPreviewState = null;
+    renderImportPreview(null);
     initSystemData();
   }).catch(function(err) {
     hideLoad();

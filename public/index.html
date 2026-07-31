@@ -237,10 +237,32 @@
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📊 Tổng quan hoạt động</h3>
         <p style="margin-top:-4px; color:gray;">Theo dõi nhanh số lượng đơn, trạng thái và đơn mới gần đây.</p>
+        <div class="form-row" style="margin-top:12px;">
+          <div class="form-group" style="max-width:220px;">
+            <label>Timeline</label>
+            <select id="dashboard-timeline" onchange="dashboard_onTimelineChange()">
+              <option value="2days" selected>2 ngày gần nhất</option>
+              <option value="today">Hôm nay</option>
+              <option value="7days">7 ngày gần nhất</option>
+              <option value="30days">30 ngày gần nhất</option>
+              <option value="custom">Tùy chỉnh</option>
+              <option value="all">Tất cả</option>
+            </select>
+          </div>
+          <div class="form-group" id="dashboard-from-wrap" style="max-width:220px; display:none;">
+            <label>Từ ngày</label>
+            <input type="date" id="dashboard-from" onchange="loadDashboardSummary()">
+          </div>
+          <div class="form-group" id="dashboard-to-wrap" style="max-width:220px; display:none;">
+            <label>Đến ngày</label>
+            <input type="date" id="dashboard-to" onchange="loadDashboardSummary()">
+          </div>
+        </div>
         <div id="dashboard-summary-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px;"></div>
       </div>
       <div class="card">
         <h4 style="margin-top:0; color:var(--primary);">🗂️ Đơn hàng gần đây</h4>
+        <div id="dashboard-timeline-label" style="font-size:13px; color:#64748b; margin:-4px 0 10px;"></div>
         <div id="dashboard-recent-orders"></div>
       </div>
     </div>
@@ -405,12 +427,38 @@
     <!-- TAB 5: ADMIN QUẢN LÝ TÀI KHOẢN -->
     <div id="tab-admin" class="tab-content">
       <div class="card" style="border-left: 4px solid #f29900;">
-        <h3 style="margin-top:0;">Nhập khẩu thông tin (Danh mục + Tồn kho)</h3>
-        <p style="font-size:13px; color:#5f6368; margin-top:-4px;">Tự động đọc dữ liệu từ sheet nguồn và cập nhật đúng cột vào <b>Data_Excel</b> và <b>TỔNG HỢP TỒN KHO</b> theo định dạng đang dùng.</p>
+        <h3 style="margin-top:0;">Cập nhật tự động từ file local</h3>
+        <p style="font-size:13px; color:#5f6368; margin-top:-4px;">Chỉ Admin được phép chọn file từ máy tính và cập nhật trực tiếp lên Google Sheet.</p>
         <div class="form-row">
-          <div class="form-group"><label>Tên sheet nguồn nhập khẩu</label><input type="text" id="imp-sheet-name" placeholder="Ví dụ: Nhap_khau_thong_tin" value="Nhap_khau_thong_tin"></div>
+          <div class="form-group" style="max-width:260px;">
+            <label>Loại cập nhật</label>
+            <select id="imp-type" onchange="imp_handleSelectionChange()">
+              <option value="stock">Cập nhật tồn kho -> TỔNG HỢP TỒN KHO</option>
+              <option value="catalog">Cập nhật file nhập khẩu thông tin -> Data_Excel</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Chọn file từ máy tính</label>
+            <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" onchange="imp_handleSelectionChange()">
+          </div>
         </div>
-        <button class="btn-submit" onclick="importDanhMucTonKho()">⬆️ CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET</button>
+        <p style="font-size:12px; color:#64748b; margin:6px 0 12px;">File tồn kho sẽ được dán nguyên dữ liệu lên sheet TỔNG HỢP TỒN KHO. File nhập khẩu thông tin sẽ được dán nguyên dữ liệu lên sheet Data_Excel theo cấu trúc file mẫu mới.</p>
+        <div id="imp-preview-card" style="display:none; margin:12px 0; padding:12px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc;">
+          <div id="imp-preview-meta" style="font-size:13px; color:#334155; margin-bottom:8px;"></div>
+          <div id="imp-preview-warning" style="display:none; font-size:13px; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
+          <div id="imp-preview-ok" style="display:none; font-size:13px; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
+          <div style="overflow-x:auto; max-height:260px; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
+            <table style="min-width:720px; margin:0;">
+              <thead id="imp-preview-head"></thead>
+              <tbody id="imp-preview-body"></tbody>
+            </table>
+          </div>
+          <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-size:13px; color:#475569;">
+            <input type="checkbox" id="imp-confirm" onchange="imp_toggleImportButton()">
+            <span>Tôi đã xem trước dữ liệu và xác nhận cập nhật đúng loại file.</span>
+          </label>
+        </div>
+        <button class="btn-submit" id="imp-submit-btn" onclick="importDanhMucTonKho()" disabled style="opacity:0.6; cursor:not-allowed;">⬆️ CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET</button>
       </div>
 
       <div class="card" style="border-left: 4px solid var(--primary);">
@@ -444,6 +492,7 @@
     
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

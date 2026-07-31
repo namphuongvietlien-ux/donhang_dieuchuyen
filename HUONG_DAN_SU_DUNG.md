@@ -22,14 +22,19 @@ Hệ thống dùng để:
 ### Bước 1: Nhập danh mục và tồn kho
 
 Vào tab `Admin`:
-- nhập tên sheet nguồn
+- chọn `Loại cập nhật`
+- chọn file local từ máy tính
 - bấm `CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET`
 
 Kết quả:
-- cập nhật `Data_Excel`
-- cập nhật `TỔNG HỢP TỒN KHO`
+- nếu chọn `Cập nhật tồn kho`:
+	dữ liệu file được dán trực tiếp lên `TỔNG HỢP TỒN KHO`
+- nếu chọn `Cập nhật file nhập khẩu thông tin`:
+	dữ liệu file được dán trực tiếp lên `Data_Excel`
 
 Lưu ý:
+- chỉ tài khoản `Admin` mới nhìn thấy và thao tác được chức năng này
+- file nhập khẩu thông tin có thể thay đổi số cột, hệ thống sẽ lưu nguyên dữ liệu file vào `Data_Excel`
 - cần làm bước này trước khi tạo đơn nếu dữ liệu mã hàng hoặc tồn kho mới thay đổi
 
 ### Bước 2: Tạo đơn
