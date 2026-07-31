@@ -254,6 +254,9 @@ function doGet(e) {
         case 'getDanhSachTaiKhoan':
           res = getDanhSachTaiKhoan();
           break;
+        case 'debugTonKho':
+          res = debugTonKhoInfo(e.parameter.key || '', e.parameter.storeName || '', e.parameter.maHang || '');
+          break;
         default:
           res = { error: 'Unknown action' };
       }
@@ -447,6 +450,7 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     if (!data || data.length < 2) return "";
 
     var rows = [];
+    var diffRowIndexes = [];
     var khoXuat = "";
     var khoNhan = "";
     var createdAt = "";
@@ -462,17 +466,32 @@ function taoPdfDonHangVaLayLink(soPhieu) {
       if (!createdAt && data[i][0]) createdAt = data[i][0];
       var slDat = Number(data[i][7]) || 0;
       var hasActual = data[i][8] !== "" && data[i][8] !== null && data[i][8] !== undefined;
-      var slThucNhan = hasActual ? Number(data[i][8]) : "";
-      var slChot = hasActual ? slThucNhan : slDat;
-      if (!slChot || slChot <= 0) continue;
+      var isReceived = rowStatus === "Đã xác nhận nhận hàng";
+      // Cột 16 "SL Giao (Soạn)" lưu riêng số lượng đã soạn/giao, không bị ghi đè khi
+      // chi nhánh nhận xác nhận số thực nhận (cột 9 dùng chung cho cả 2 giai đoạn).
+      var rawSlGiao = data[i][15];
+      var hasSlGiaoColumn = rawSlGiao !== "" && rawSlGiao !== null && rawSlGiao !== undefined;
+      var slGiao;
+      if (hasSlGiaoColumn) {
+        slGiao = Number(rawSlGiao) || 0;
+      } else if (hasActual && !isReceived) {
+        // Dữ liệu cũ (trước khi có cột 16): cột 9 lúc này vẫn đang là số soạn.
+        slGiao = Number(data[i][8]) || 0;
+      } else {
+        slGiao = slDat;
+      }
+      var slThucNhan = isReceived && hasActual ? Number(data[i][8]) : "";
+      var displayQty = slThucNhan !== "" ? slThucNhan : slGiao;
+      if (!displayQty || displayQty <= 0) continue;
+      if (slThucNhan !== "" && slThucNhan !== slGiao) diffRowIndexes.push(rows.length);
       rows.push([
         rows.length + 1,
         data[i][4] || "",
         data[i][5] || "",
         data[i][6] || "",
         resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]),
-        slChot,
-        hasActual ? slThucNhan : "",
+        slGiao,
+        slThucNhan,
         rowStatus || "Mới"
       ]);
     }
@@ -484,11 +503,16 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     var ngayText = createdAt ? Utilities.formatDate(new Date(createdAt), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm") : "";
     tempSheet.getRange("A2:H2").merge().setValue("Kho xuất: " + khoXuat + " | Kho nhận: " + khoNhan + (ngayText ? " | Thời gian tạo: " + ngayText : "")).setFontStyle("italic");
 
-    var headers = [["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "SL chốt", "SL thực nhận", "Trạng thái dòng"]];
+    var headers = [["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "SL Giao (Soạn)", "SL Thực Nhận", "Trạng thái dòng"]];
     tempSheet.getRange(4, 1, 1, 8).setValues(headers).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
     tempSheet.getRange(5, 1, rows.length, 8).setValues(rows);
     tempSheet.getRange(4, 1, rows.length + 1, 8).setBorder(true, true, true, true, true, true, "#000000", SpreadsheetApp.BorderStyle.SOLID);
     tempSheet.getRange(5, 6, rows.length, 2).setHorizontalAlignment("right");
+    // Bôi màu nổi bật những dòng có SL Giao khác SL Thực Nhận để dễ phát hiện chênh lệch.
+    for (var d = 0; d < diffRowIndexes.length; d++) {
+      var sheetRow = 5 + diffRowIndexes[d];
+      tempSheet.getRange(sheetRow, 6, 1, 2).setBackground("#f4cccc").setFontColor("#990000").setFontWeight("bold");
+    }
     tempSheet.setColumnWidth(1, 45);
     tempSheet.setColumnWidth(2, 110);
     tempSheet.setColumnWidth(3, 120);
@@ -849,20 +873,26 @@ function resolveDvtValue(lookup, maHang, maVach, currentDvt) {
 }
 
 function findHeaderRowIndex(data, maxScanRows) {
+  // Dò dòng tiêu đề bằng cách yêu cầu ÍT NHẤT 2 ô khớp alias trong CÙNG một dòng.
+  // Chỉ khớp 1 ô là không đủ, vì dòng tiêu đề báo cáo (vd "TỔNG HỢP TỒN KHO") ở ô A1
+  // cũng chứa chuỗi con "tonkho" và dễ bị nhận nhầm là dòng tiêu đề thật.
   var limit = Math.min(data.length, maxScanRows || 8);
+  var markerAliases = ['mahang', 'mavach', 'tenhang', 'tonkho', 'soluongton', 'cuahang', 'donvitinh', 'dvt', 'dauky', 'nhapkho', 'xuatkho', 'cuoiky'];
   for (var r = 0; r < limit; r++) {
     var row = data[r];
     if (!row) continue;
-    var hasMarker = false;
+    var matchCount = 0;
     for (var c = 0; c < row.length; c++) {
       var token = normalizeHeaderText(row[c]);
       if (!token) continue;
-      if (token.indexOf('mahang') !== -1 || token.indexOf('mavach') !== -1 || token.indexOf('tenhang') !== -1 || token.indexOf('tonkho') !== -1 || token.indexOf('soluongton') !== -1 || token === 'kho' || token.indexOf('cuahang') !== -1) {
-        hasMarker = true;
-        break;
+      for (var a = 0; a < markerAliases.length; a++) {
+        if (token.indexOf(markerAliases[a]) !== -1 || token === 'kho') {
+          matchCount++;
+          break;
+        }
       }
     }
-    if (hasMarker) return r;
+    if (matchCount >= 2) return r;
   }
   return -1;
 }
@@ -974,6 +1004,54 @@ function looksLikeStoreHeaderName(value) {
   return false;
 }
 
+// DEBUG TAM THOI - dung de kiem tra dung cau truc sheet ton kho tren Google Sheet that.
+// Goi: <exec_url>?action=debugTonKho&key=TK_DEBUG_2026&storeName=K9%20Qu%E1%BA%ADn%207&maHang=TKS2015
+// XOA HAM NAY (va case 'debugTonKho' trong doGet) sau khi sua xong loi ton kho.
+function debugTonKhoInfo(secret, storeName, maHang) {
+  if (secret !== 'TK_DEBUG_2026') {
+    return { error: 'Invalid key' };
+  }
+  var ss = getSS();
+  var sheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!sheet) return { error: 'Khong tim thay sheet TONG HOP TON KHO' };
+  var data = sheet.getDataRange().getValues();
+  var stockConfig = getStockSheetConfig(data);
+  var header = data[stockConfig.headerIndex] || [];
+  var sampleRows = [];
+  for (var i = stockConfig.startRow; i < Math.min(data.length, stockConfig.startRow + 15); i++) {
+    sampleRows.push(data[i]);
+  }
+  var result = {
+    sheetName: sheet.getName(),
+    totalRows: data.length,
+    totalCols: header.length,
+    headerIndex: stockConfig.headerIndex,
+    header: header,
+    stockConfig: stockConfig,
+    sampleRows: sampleRows
+  };
+  if (storeName) {
+    var tonKhoMap = getStockMapForStore(ss, storeName);
+    result.storeNameInput = storeName;
+    result.storeNameNormalized = normalizeStoreName(storeName);
+    result.tonKhoMapKeyCount = Object.keys(tonKhoMap).length;
+    result.tonKhoMapSample = {};
+    var keys = Object.keys(tonKhoMap);
+    for (var k = 0; k < Math.min(keys.length, 25); k++) {
+      result.tonKhoMapSample[keys[k]] = tonKhoMap[keys[k]];
+    }
+    if (maHang) {
+      result.testMaHangValue = getStockValueForItem(tonKhoMap, maHang, maHang);
+      var mhKey = 'MH:' + normalizeProductCode(maHang);
+      var mvKey = 'MV:' + normalizeProductCode(maHang);
+      result.testMaHangKeyLookup = {};
+      result.testMaHangKeyLookup[mhKey] = tonKhoMap[mhKey];
+      result.testMaHangKeyLookup[mvKey] = tonKhoMap[mvKey];
+    }
+  }
+  return result;
+}
+
 function getStockSheetConfig(stockData) {
   var headerIndex = findHeaderRowIndex(stockData, 10);
   if (headerIndex < 0) {
@@ -1012,7 +1090,7 @@ function getStockSheetConfig(stockData) {
 
   var startRow = headerIndex + 1;
   var markerRow = stockData[headerIndex + 1] || [];
-  if (/^\(\d+\)$/.test(String(markerRow[0] || "").trim()) || /^\(\d+\)$/.test(String(markerRow[1] || "").trim())) {
+  if (isMarkerRow(markerRow)) {
     startRow = headerIndex + 2;
   }
 
@@ -1026,6 +1104,24 @@ function getStockSheetConfig(stockData) {
     tonKhoIdx: tonKhoIdx === -1 ? 6 : tonKhoIdx,
     requireStoreRowPrefix: isSummaryStockLayout
   };
+}
+
+function isMarkerRow(row) {
+  // Dòng chú thích thứ tự cột kiểu "(1) (2) ... (7) = (4) + (5) - (6)".
+  // Google Sheets có thể tự chuyển "(1)" thành số âm -1 (định dạng kế toán),
+  // nên phải nhận diện cả trường hợp số âm lẫn chuỗi "(n)".
+  if (!row) return false;
+  var markerCount = 0;
+  for (var c = 0; c < row.length; c++) {
+    var v = row[c];
+    if (typeof v === 'number' && v < 0 && Math.round(v) === v) {
+      markerCount++;
+      continue;
+    }
+    var text = String(v === null || v === undefined ? "" : v).trim();
+    if (/^\(\d+\)/.test(text)) markerCount++;
+  }
+  return markerCount >= 2;
 }
 
 function isLikelyStoreRowName(value) {
@@ -1750,6 +1846,9 @@ function ensureHistoryStatusColumn(historySheet) {
   if (historySheet.getRange(1, 15).getValue() !== "Nguồn cập nhật") {
     historySheet.getRange(1, 15).setValue("Nguồn cập nhật").setFontWeight("bold").setBackground("#d9ead3");
   }
+  if (historySheet.getRange(1, 16).getValue() !== "SL Giao (Soạn)") {
+    historySheet.getRange(1, 16).setValue("SL Giao (Soạn)").setFontWeight("bold").setBackground("#d9ead3");
+  }
 }
 
 function getDisplayOrderStatus(rowStatus, slThucTe) {
@@ -2443,11 +2542,13 @@ function luuSoSoanHangVaAnh(payload) {
       if (val !== "") {
         var parsedVal = Number(val);
         historySheet.getRange(updates[i].row, 9).setValue(parsedVal);
+        historySheet.getRange(updates[i].row, 16).setValue(parsedVal);
         historySheet.getRange(updates[i].row, 14).setValue(payload.actor || "");
         historySheet.getRange(updates[i].row, 15).setValue("Soạn hàng");
         historySheet.getRange(updates[i].row, 13).setValue("Đã soạn hàng");
       } else {
         historySheet.getRange(updates[i].row, 9).clearContent();
+        historySheet.getRange(updates[i].row, 16).clearContent();
         historySheet.getRange(updates[i].row, 13).setValue("Mới");
       }
     }
