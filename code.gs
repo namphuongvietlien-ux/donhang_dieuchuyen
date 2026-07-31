@@ -949,12 +949,25 @@ function writeImportedDataToSheet(sheet, fileData) {
   return { rows: newRowCount, cols: newColCount };
 }
 
+function isMovementReportColumnHeader(value) {
+  // Cột báo cáo biến động kho kiểu "Đầu kỳ / Nhập kho / Xuất kho / Cuối kỳ".
+  // Các cột này chứa chữ "kho" (vd "Nhập kho", "Xuất kho") nên dễ bị nhận nhầm
+  // thành cột tên cửa hàng/kho nếu chỉ so khớp chuỗi con "kho".
+  var text = normalizeHeaderText(String(value || ""));
+  if (!text) return false;
+  return text.indexOf('dauky') !== -1 || text.indexOf('nhapkho') !== -1 || text.indexOf('nhap') !== -1 ||
+    text.indexOf('xuatkho') !== -1 || text.indexOf('xuat') !== -1 || text.indexOf('cuoiky') !== -1 ||
+    text.indexOf('tonkho') !== -1 || text.indexOf('soluongton') !== -1 || text.indexOf('stock') !== -1 ||
+    text.indexOf('onhand') !== -1 || text.indexOf('slton') !== -1 || text.indexOf('qty') !== -1;
+}
+
 function looksLikeStoreHeaderName(value) {
   var text = normalizeHeaderText(String(value || ""));
   if (!text) return false;
-  if (text.indexOf('mahang') !== -1 || text.indexOf('mavach') !== -1 || text.indexOf('tenhang') !== -1 || text.indexOf('dvt') !== -1 || text.indexOf('donvi') !== -1 || text.indexOf('unit') !== -1 || text.indexOf('tonkho') !== -1 || text.indexOf('soluongton') !== -1 || text.indexOf('stock') !== -1 || text.indexOf('qty') !== -1) {
+  if (text.indexOf('mahang') !== -1 || text.indexOf('mavach') !== -1 || text.indexOf('tenhang') !== -1 || text.indexOf('dvt') !== -1 || text.indexOf('donvi') !== -1 || text.indexOf('unit') !== -1) {
     return false;
   }
+  if (isMovementReportColumnHeader(text)) return false;
   if (text.indexOf('kho') !== -1 || text.indexOf('cuahang') !== -1 || text.indexOf('chinhanh') !== -1 || text.indexOf('store') !== -1 || text.indexOf('tenkho') !== -1) return true;
   if (text.indexOf('q7') !== -1 || text.indexOf('q8') !== -1 || text.indexOf('q1') !== -1 || text.indexOf('q4') !== -1 || text.indexOf('q5') !== -1 || text.indexOf('ph') !== -1 || text.indexOf('k9') !== -1 || text.indexOf('quan') !== -1) return true;
   if (text.indexOf('quận') !== -1 || text.indexOf('quan') !== -1) return true;
@@ -967,20 +980,32 @@ function getStockSheetConfig(stockData) {
     return { startRow: 4, headerIndex: 0, storeIndexes: [0, 7], storeHeaderIndexes: [], maHangIdx: 1, maVachIdx: 2, tonKhoIdx: 6, requireStoreRowPrefix: false };
   }
   var header = stockData[headerIndex] || [];
-  var storeIndexes = findAllColumnIndicesByAliases(header, ['kho', 'cuahang', 'chinhanh', 'store', 'tenkho']);
-  var storeHeaderIndexes = [];
-  for (var c = 0; c < header.length; c++) {
-    if (storeIndexes.indexOf(c) !== -1) continue;
-    if (looksLikeStoreHeaderName(header[c])) storeHeaderIndexes.push(c);
-  }
+
+  // Xác định trước các cột đã có ý nghĩa rõ ràng (mã hàng, mã vạch, tồn kho, tên hàng, đvt)
+  // để loại trừ chúng (và các cột báo cáo biến động như "Nhập kho"/"Xuất kho") khỏi danh sách
+  // cột được đoán là "cửa hàng/kho" chỉ vì chứa chữ "kho".
   var maHangIdx = findColumnIndexByAliases(header, ['mahang', 'mahanghoa', 'sku', 'mahh', 'code', 'itemcode']);
   var maVachIdx = findColumnIndexByAliases(header, ['mavach', 'barcode', 'ean', 'barcodeid']);
   var tonKhoIdx = findColumnIndexByAliases(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'qty', 'cuoiky']);
   var tenHangIdx = findColumnIndexByAliases(header, ['tenhang', 'tenhanghoa', 'name', 'description']);
+  var dvtIdx = findColumnIndexByAliases(header, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  var claimedIndexes = [maHangIdx, maVachIdx, tonKhoIdx, tenHangIdx, dvtIdx];
+
+  var storeIndexes = findAllColumnIndicesByAliases(header, ['kho', 'cuahang', 'chinhanh', 'store', 'tenkho']).filter(function (idx) {
+    if (claimedIndexes.indexOf(idx) !== -1) return false;
+    return !isMovementReportColumnHeader(header[idx]);
+  });
+  var storeHeaderIndexes = [];
+  for (var c = 0; c < header.length; c++) {
+    if (storeIndexes.indexOf(c) !== -1) continue;
+    if (claimedIndexes.indexOf(c) !== -1) continue;
+    if (looksLikeStoreHeaderName(header[c])) storeHeaderIndexes.push(c);
+  }
 
   var isSummaryStockLayout = (tenHangIdx !== -1 && maHangIdx !== -1 && tonKhoIdx !== -1 && storeIndexes.length === 0);
   if (isSummaryStockLayout) {
-    // File "TỔNG HỢP TỒN KHO (24).xlsx": row product + row kho đều nằm cùng cột tên hàng.
+    // File "TỔNG HỢP TỒN KHO (24).xlsx": mỗi sản phẩm có 1 dòng tổng, theo sau là các dòng
+    // con (mỗi dòng 1 kho) - tên kho nằm cùng cột với tên hàng hóa (cột A).
     storeIndexes = [tenHangIdx];
     if (maVachIdx === -1) maVachIdx = maHangIdx;
   }
