@@ -152,7 +152,8 @@ function initSystemData() {
     var elQ = document.getElementById("ql-kho-nhan"); if(elQ) elQ.innerHTML = '<option value="all">-- Tất cả --</option>' + htmlStores;
     var elA = document.getElementById("adm-store"); if(elA) elA.innerHTML = '<option value="Tất cả">-- Chọn kho quản lý --</option>' + htmlStores;
 
-    if (sessionUser.role === "Admin") { var nav = document.getElementById("nav-tab-admin"); if(nav) nav.style.display = "block"; }
+    var nav = document.getElementById("nav-tab-admin");
+    if (nav) nav.style.display = sessionUser.role === "Admin" ? "block" : "none";
     updateDashboardHero();
     applyQuyenKho();
     loadDashboardSummary();
@@ -202,6 +203,8 @@ function logoutUser() {
   closeUserMenu();
   hidePasswordSection();
   sessionUser = { user: '', role: '', store: '' };
+  var nav = document.getElementById('nav-tab-admin');
+  if (nav) nav.style.display = 'none';
   safeText('lbl-username', 'Guest');
   safeText('hero-role', 'Guest');
   safeText('hero-store', '-');
@@ -570,7 +573,8 @@ function confirm_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("confirm-phieu");
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
-  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: document.getElementById("confirm-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
+  var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
+  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: document.getElementById("confirm-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
     var html = '<option value="">-- Chọn Phiếu --</option>';
     res.forEach(function(r) {
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
@@ -671,15 +675,14 @@ function ql_hienThiChiTiet(phieu, options) {
   currentPhieuObj = phieu;
   var isPublicView = !!(options && options.publicView);
   var isAdmin = sessionUser.role === "Admin";
-  var canManageOrder = !!sessionUser.user;
-  var canReceiveConfirm = !!sessionUser.user && (isAdmin || sessionUser.store === currentPhieuObj.khoNhan || sessionUser.store === "Tất cả" || sessionUser.store === currentPhieuObj.khoXuat);
   showLoad("Tải chi tiết...");
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
     hideLoad(); editRows = rows; currentLoadedRows = rows || []; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
-    var isReadOnlyOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
-    var canEditRows = !!sessionUser.user && !isReadOnlyOrder && isAdmin && !isPublicView;
-    var canAddItems = !!sessionUser.user && !isReadOnlyOrder && !isPublicView;
-    var canCancelOrder = !!sessionUser.user && !isReadOnlyOrder && isAdmin && !isPublicView;
+    var isConfirmedOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
+    var isPackedOrder = rows.some(function(r) { return r.trangThai === "Đã soạn hàng"; });
+    var canEditRows = !!sessionUser.user && !isPublicView && !isConfirmedOrder && (isAdmin || !isPackedOrder);
+    var canAddItems = canEditRows;
+    var canCancelOrder = !!sessionUser.user && !isPublicView && !isConfirmedOrder && isAdmin;
 
     document.getElementById("ql-admin-actions").style.display = canAddItems ? "flex" : "none";
     document.getElementById("ql-admin-column").style.display = canEditRows ? "table-cell" : "none";
@@ -691,6 +694,9 @@ function ql_hienThiChiTiet(phieu, options) {
       document.getElementById("ql-order-meta").innerText = "Chế độ xem công khai – chỉ đọc";
     } else {
       document.getElementById("ql-order-meta").innerText = "";
+      if (isConfirmedOrder) document.getElementById("ql-order-meta").innerText = "Đơn đã xác nhận nhận hàng - chỉ xem.";
+      else if (isPackedOrder && !isAdmin) document.getElementById("ql-order-meta").innerText = "Đơn đã soạn xong - chỉ Admin mới được phép sửa.";
+      else if (isPackedOrder && isAdmin) document.getElementById("ql-order-meta").innerText = "Đơn đã soạn xong - Admin sửa sẽ mở lại đơn để soạn lại.";
     }
     document.getElementById("ql-lbl-sophieu").innerText = currentPhieuObj.soPhieu;
     document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
@@ -698,18 +704,20 @@ function ql_hienThiChiTiet(phieu, options) {
 
     rows.forEach((r, i) => {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
-      var isReadOnlyRow = isReadOnlyOrder || isCancelled;
+      var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
       var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
       var latestQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? r.slThucTe : r.slGoc;
-      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+latestQty+'" '+(isReadOnlyRow || !canEditRows ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
-      var cancelButton = canAddItems && !isReadOnlyOrder ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
+      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
+      var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
       var displayQty = isPublicView ? (latestQty !== undefined && latestQty !== null && latestQty !== "" ? latestQty : "") : quantityInput;
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+(isCancelled || isReadOnlyOrder ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+displayQty+'</td>'+cancelButton+'</tr>');
+      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td><b>Mã vạch: '+r.maVach+'</b><br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td>'+r.stock+'</td><td>'+displayQty+'</td>'+cancelButton+'</tr>');
     });
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     if (!isPublicView && packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
-    if (isReadOnlyOrder && !isPublicView) {
+    if (isConfirmedOrder && !isPublicView) {
       document.getElementById("ql-order-meta").innerText += " | Chế độ chỉ xem sau khi xác nhận nhận hàng";
+    } else if (isPackedOrder && !isAdmin && !isPublicView && packerNames.length) {
+      document.getElementById("ql-order-meta").innerText += " | Chi nhánh không thể sửa sau khi đã soạn xong";
     }
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
@@ -730,7 +738,6 @@ function ql_isDuplicateOrderItem(item) {
 }
 
 function ql_luuSua() {
-  if (sessionUser.role !== "Admin") return alert("Chỉ quản trị viên được phép sửa đơn.");
   var inputs = document.querySelectorAll(".edit-sl-input");
   var updates = [];
   var newItems = [];

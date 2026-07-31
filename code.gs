@@ -251,9 +251,6 @@ function doGet(e) {
         case 'getDanhSachTaiKhoan':
           res = getDanhSachTaiKhoan();
           break;
-        case 'taoBangSoanHangNgayMai':
-          res = taoBangSoanHangNgayMai({ ngay: e.parameter.ngay || '' });
-          break;
         default:
           res = { error: 'Unknown action' };
       }
@@ -375,9 +372,10 @@ function getPendingOrdersForStore(storeName, maxCount) {
     var khoNhan = data[i][3] ? data[i][3].toString().trim() : "";
     var khoXuat = data[i][2] ? data[i][2].toString().trim() : "";
     var slThucTe = data[i][8];
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
     if (!soPhieu || !khoNhan) continue;
     if (khoNhan !== storeName) continue;
-    var isDaXuLy = (slThucTe !== "" && slThucTe !== undefined && Number(slThucTe) > 0);
+    var isDaXuLy = getDisplayOrderStatus(rowStatus, slThucTe) !== "Mới";
     if (!map[soPhieu]) {
       map[soPhieu] = { soPhieu: soPhieu, khoXuat: khoXuat, khoNhan: khoNhan, daXuLy: isDaXuLy };
     } else if (isDaXuLy) {
@@ -423,6 +421,7 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
   var kxShort = STORE_MAP[khoXuat] || khoXuat;
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var text = "📦 *THÔNG BÁO " + typeLabel + "*\n" +
+             "*Trạng thái:* Mới\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
@@ -437,6 +436,7 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount) {
 function sendTelegramOrderReady(soPhieu, khoNhan) {
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var text = "✅ *ĐÃ HOÀN THÀNH SOẠN HÀNG*\n" +
+             "*Trạng thái:* Đã soạn\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n\n" +
              "Mở chi tiết đơn: " + getOrderWebUrl(soPhieu);
@@ -495,6 +495,7 @@ function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, tot
                    "*Thừa hàng:* " + extraCount + " mã\n" +
                    "*Tổng dòng:* " + totalRows + " mã\n";
   var text = "📦 *ĐƠN ĐÃ SOẠN XONG*\n" +
+             "*Trạng thái:* Đã soạn\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
@@ -514,6 +515,7 @@ function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirm
   var knShort = STORE_MAP[khoNhan] || khoNhan;
   var detailText = changedCount > 0 ? "*Dòng có thay đổi số thực nhận:* " + changedCount + "\n" + "*Tổng số lượng thay đổi:* " + changedQtyTotal + "\n" : "*Không có dòng nào thay đổi số thực nhận.*\n";
   var text = "📥 *XÁC NHẬN NHẬN HÀNG*\n" +
+             "*Trạng thái:* Đã xác nhận\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
              "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
              "*Số dòng xác nhận:* " + count + "\n" +
@@ -954,7 +956,7 @@ function luuPhieuTuWebApp(payload) {
     if (isNaN(slNum) || slNum <= 0) { coLoiDongNay = true; ghiChuLoi = "Lỗi số lượng"; slNum = 0; }
     if (!item.dvt || item.dvt === "Không tìm thấy" || item.dvt === "") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Lỗi ĐVT"; }
     if (item.maHang === "LỖI MÃ") { coLoiDongNay = true; ghiChuLoi += (ghiChuLoi ? " | " : "") + "Mã không tồn tại"; }
-    dataLichSuArr.push([ homNay, soPhieu, payload.khoXuat, payload.khoNhan, item.maHang, item.maVach, item.tenHang, slNum, "", item.dvt, "", ghiChuLoi, "Đang xử lý" ]);
+    dataLichSuArr.push([ homNay, soPhieu, payload.khoXuat, payload.khoNhan, item.maHang, item.maVach, item.tenHang, slNum, "", item.dvt, "", ghiChuLoi, "Mới" ]);
     if (coLoiDongNay) coLoiCanDieuChinh = true;
   }
 
@@ -993,8 +995,8 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
     var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
     var slThucTe = data[i][8];
-    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Đang xử lý";
-    var isDaXuLy = rowStatus === "Đã hủy đơn" || (slThucTe !== "" && Number(slThucTe) > 0);
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
+    var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
     var thoiGian = rowNgay instanceof Date ? rowNgay.getTime() : "";
 
     if (!rowSoPhieu) continue;
@@ -1015,10 +1017,11 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     }
     
     if (!map[rowSoPhieu]) { 
-      map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: rowStatus === "Đã hủy đơn" ? "Đã hủy" : (isDaXuLy ? "Đã xử lý" : "Mới") };
+      map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
     } else {
-      if (rowStatus === "Đã hủy đơn") map[rowSoPhieu].trangThai = "Đã hủy";
-      else if (isDaXuLy && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xử lý";
+      if (displayStatus === "Đã hủy") map[rowSoPhieu].trangThai = "Đã hủy";
+      else if (displayStatus === "Đã xác nhận" && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xác nhận";
+      else if (displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã hủy" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
     }
   }
   var res = []; for(var key in map) res.push(map[key]); 
@@ -1045,19 +1048,19 @@ function getDashboardSummary(userRole, userStore) {
         if (rowKhoXuat !== userStore && rowKhoNhan !== userStore) continue;
       }
 
-      var status = data[i][12] ? String(data[i][12]).trim() : "Đang xử lý";
+      var status = data[i][12] ? String(data[i][12]).trim() : "Mới";
       var slThucTe = data[i][8];
-      var hasConfirmed = slThucTe !== "" && slThucTe !== undefined && slThucTe !== null && Number(slThucTe) > 0;
+      var displayStatus = getDisplayOrderStatus(status, slThucTe);
       var entry = orderMap[rowSoPhieu];
       if (!entry) {
-        entry = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: data[i][0], status: status, count: 0 };
+        entry = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: data[i][0], status: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus, count: 0 };
         orderMap[rowSoPhieu] = entry;
       }
 
-      if (status === "Đã hủy đơn") entry.status = "Đã hủy";
-      else if (status === "Đã xác nhận nhận hàng") entry.status = "Đã xác nhận";
-      else if (hasConfirmed && entry.status !== "Đã hủy") entry.status = "Đã xử lý";
-      else if (entry.status !== "Đã hủy" && entry.status !== "Đã xử lý" && entry.status !== "Đã xác nhận") entry.status = "Mới";
+      if (displayStatus === "Đã hủy") entry.status = "Đã hủy";
+      else if (displayStatus === "Đã xác nhận") entry.status = "Đã xác nhận";
+      else if (displayStatus === "Đã soạn" && entry.status !== "Đã hủy" && entry.status !== "Đã xác nhận") entry.status = "Đã soạn";
+      else if (entry.status !== "Đã hủy" && entry.status !== "Đã soạn" && entry.status !== "Đã xác nhận") entry.status = "Mới";
 
       entry.count += 1;
       if (!entry.thoiGian || (data[i][0] instanceof Date && entry.thoiGian instanceof Date && data[i][0].getTime() > entry.thoiGian.getTime())) {
@@ -1080,7 +1083,7 @@ function getDashboardSummary(userRole, userStore) {
     for (var j = 0; j < orders.length; j++) {
       var st = orders[j].status;
       if (st === "Đã hủy") canceledOrders++;
-      else if (st === "Đã xử lý" || st === "Đã xác nhận") processedOrders++;
+      else if (st === "Đã soạn" || st === "Đã xác nhận") processedOrders++;
       else pendingOrders++;
     }
 
@@ -1120,7 +1123,7 @@ function getChiTietPhieu(soPhieu, storeName) {
       var slGoc = Number(data[i][7]) || 0;
       var slThucTe = (data[i][8] !== "" && data[i][8] !== undefined) ? Number(data[i][8]) : slGoc;
       var effectiveQty = (slThucTe !== undefined && slThucTe !== null && slThucTe !== "") ? slThucTe : slGoc;
-      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: effectiveQty, dvt: data[i][9], ghiChu: data[i][11]||"", trangThai: data[i][12] || "Đang xử lý", nguoiSoanHang: data[i][13] || "" });
+      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: effectiveQty, dvt: data[i][9], ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
     }
   }
   var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
@@ -1147,6 +1150,53 @@ function ensureHistoryStatusColumn(historySheet) {
   if (historySheet.getRange(1, 15).getValue() !== "Nguồn cập nhật") {
     historySheet.getRange(1, 15).setValue("Nguồn cập nhật").setFontWeight("bold").setBackground("#d9ead3");
   }
+}
+
+function getDisplayOrderStatus(rowStatus, slThucTe) {
+  var status = String(rowStatus || "").trim();
+  if (status === "Đã hủy đơn") return "Đã hủy";
+  if (status === "Đã xác nhận nhận hàng") return "Đã xác nhận";
+  if (status === "Đã soạn hàng") return "Đã soạn";
+  if (status === "Đã hủy dòng") return "Đã hủy dòng";
+  if (slThucTe !== "" && slThucTe !== undefined && slThucTe !== null) return "Đã soạn";
+  return "Mới";
+}
+
+function getOrderState(soPhieu, historySheet, dataRows) {
+  var data = dataRows || historySheet.getDataRange().getValues();
+  var target = String(soPhieu || "").trim().toLowerCase();
+  var state = { isPacked: false, isConfirmed: false, stores: [] };
+  if (!target) return state;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][1] || "").trim().toLowerCase() !== target) continue;
+    var rowStatus = String(data[i][12] || "").trim();
+    var slThucTe = data[i][8];
+    var khoXuat = String(data[i][2] || "").trim();
+    var khoNhan = String(data[i][3] || "").trim();
+    if (khoXuat && state.stores.indexOf(khoXuat) === -1) state.stores.push(khoXuat);
+    if (khoNhan && state.stores.indexOf(khoNhan) === -1) state.stores.push(khoNhan);
+    if (rowStatus === "Đã xác nhận nhận hàng") state.isConfirmed = true;
+    if (rowStatus === "Đã soạn hàng" || ((slThucTe !== "" && slThucTe !== undefined && slThucTe !== null) && rowStatus !== "Đã hủy dòng" && rowStatus !== "Đã hủy đơn")) {
+      state.isPacked = true;
+    }
+  }
+  return state;
+}
+
+function assertActorCanManageOrder(actor, soPhieu, historySheet, dataRows) {
+  var account = getAccountByActor(actor);
+  if (!account) throw new Error("Tài khoản không tồn tại.");
+  var state = getOrderState(soPhieu, historySheet, dataRows);
+  if (state.isConfirmed) throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
+  if (String(account.role).trim() === "Admin") {
+    return { account: account, state: state };
+  }
+  var actorStore = String(account.store || "").trim();
+  if (actorStore && actorStore !== "Tất cả" && state.stores.length && state.stores.indexOf(actorStore) === -1) {
+    throw new Error("Bạn chỉ có thể chỉnh sửa đơn thuộc kho của mình.");
+  }
+  if (state.isPacked) throw new Error("Đơn đã soạn xong, chỉ quản trị viên mới được phép sửa.");
+  return { account: account, state: state };
 }
 
 function getAuditSheet(ss) {
@@ -1196,7 +1246,7 @@ function requireAuthenticatedAction(payload) {
 }
 
 function requireAdminAction(action, payload) {
-  var adminActions = ['luuChinhSuaPhieu', 'taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin'];
+  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin'];
   if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
     throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
   }
@@ -1241,26 +1291,34 @@ function isOrderConfirmedForEditing(soPhieu, historySheet, dataRows) {
 function luuChinhSuaPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  requireAdmin(payload.actor);
   ensureHistoryStatusColumn(historySheet);
   var lock = LockService.getDocumentLock();
   try {
     lock.waitLock(10000);
     var historyData = historySheet.getDataRange().getValues();
-    if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet, historyData)) {
-      throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
-    }
     var changeCount = 0;
     var modifiedCount = 0;
     var cancelledCount = 0;
     var shouldNotify = false;
     var orderInfo = null;
     var soPhieu = payload && payload.soPhieu ? String(payload.soPhieu).trim() : "";
+    var permission = assertActorCanManageOrder(payload.actor, soPhieu, historySheet, historyData);
+    var actorRole = String(permission.account.role || "").trim();
+    var wasPacked = permission.state.isPacked;
     var orderBaseRow = null;
     for (var i = 1; i < historyData.length; i++) {
       if (String(historyData[i][1]).trim().toLowerCase() === soPhieu.toLowerCase()) {
         orderBaseRow = historyData[i];
         break;
+      }
+    }
+    if (wasPacked && actorRole === "Admin") {
+      for (var r = 1; r < historyData.length; r++) {
+        if (String(historyData[r][1]).trim().toLowerCase() !== soPhieu.toLowerCase()) continue;
+        var rowStatus = String(historyData[r][12] || "").trim();
+        if (rowStatus === "Đã hủy đơn" || rowStatus === "Đã hủy dòng") continue;
+        historySheet.getRange(r + 1, 9).clearContent();
+        historySheet.getRange(r + 1, 12, 1, 4).setValues([["Cần soạn lại sau khi chỉnh sửa", "Mới", payload.actor || "", "Quản lý"]]);
       }
     }
     var newRows = [];
@@ -1272,7 +1330,7 @@ function luuChinhSuaPhieu(payload) {
         }
         var itemQty = Number(newItem.sl);
         if (!itemQty || itemQty < 1) continue;
-        newRows.push([new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, itemQty, newItem.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý", payload.actor || "", "Quản lý"]);
+        newRows.push([new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, "", newItem.dvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"]);
         logOrderChange(ss, soPhieu, "Thêm mã vào đơn", payload.actor, newItem.maHang, newItem.maVach, "", itemQty, newItem.tenHang || "");
         changeCount += 1;
         shouldNotify = true;
@@ -1290,15 +1348,15 @@ function luuChinhSuaPhieu(payload) {
       var maHang = currentRow[4] ? String(currentRow[4]).trim() : "";
       var maVach = currentRow[5] ? String(currentRow[5]).trim() : "";
       if (!orderInfo) orderInfo = getThongTinPhieu(soPhieuValue);
-      if (Number(u.valSl) === 0) {
-        pendingUpdates.push({row: rowIndex, sl8: 0, sl9: 0, note: "Đã hủy dòng", status: "Đã hủy dòng", actor: payload.actor || "", source: "Quản lý"});
+      if (u.valSl !== "" && Number(u.valSl) === 0) {
+        pendingUpdates.push({row: rowIndex, requestedQty: 0, actualQty: 0, note: "Đã hủy dòng", status: "Đã hủy dòng", actor: payload.actor || "", source: "Quản lý"});
         logOrderChange(ss, soPhieuValue, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
         changeCount += 1;
         cancelledCount += 1;
         shouldNotify = true;
       } else if (u.valSl !== "") {
         var newVal = Number(u.valSl);
-        pendingUpdates.push({row: rowIndex, sl8: newVal, sl9: newVal, note: "", status: "Đang xử lý", actor: payload.actor || "", source: "Quản lý"});
+        pendingUpdates.push({row: rowIndex, requestedQty: newVal, actualQty: wasPacked ? "" : currentRow[8], note: wasPacked ? "Cần soạn lại sau khi chỉnh sửa" : "", status: "Mới", actor: payload.actor || "", source: "Quản lý"});
         if (Number(oldSl) !== newVal) {
           logOrderChange(ss, soPhieuValue, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, newVal, "");
           changeCount += 1;
@@ -1313,15 +1371,12 @@ function luuChinhSuaPhieu(payload) {
     }
     if (pendingUpdates.length) {
       pendingUpdates.sort(function(a, b) { return a.row - b.row; });
-      var rangesToUpdate = [];
       for (var g = 0; g < pendingUpdates.length; g++) {
-        var up = pendingUpdates[g];
-        rangesToUpdate.push({row: up.row, values8_9: [[up.sl8, up.sl9]], values12_15: [[up.note, up.status, up.actor, up.source]]});
-      }
-      for (var g = 0; g < rangesToUpdate.length; g++) {
-        var itemUpdate = rangesToUpdate[g];
-        historySheet.getRange(itemUpdate.row, 8, 1, 2).setValues(itemUpdate.values8_9);
-        historySheet.getRange(itemUpdate.row, 12, 1, 4).setValues(itemUpdate.values12_15);
+        var itemUpdate = pendingUpdates[g];
+        historySheet.getRange(itemUpdate.row, 8).setValue(itemUpdate.requestedQty);
+        if (itemUpdate.actualQty === "") historySheet.getRange(itemUpdate.row, 9).clearContent();
+        else historySheet.getRange(itemUpdate.row, 9).setValue(itemUpdate.actualQty);
+        historySheet.getRange(itemUpdate.row, 12, 1, 4).setValues([[itemUpdate.note, itemUpdate.status, itemUpdate.actor, itemUpdate.source]]);
       }
     }
     SpreadsheetApp.flush();
@@ -1329,7 +1384,12 @@ function luuChinhSuaPhieu(payload) {
       var detailText = [];
       if (modifiedCount > 0) detailText.push("Mã sửa số lượng: " + modifiedCount);
       if (cancelledCount > 0) detailText.push("Mã hủy: " + cancelledCount);
-      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, "Chỉnh sửa số lượng / hủy mã", changeCount, payload.actor, detailText.join("; ") || ("Đơn đã thay đổi " + changeCount + " mã."));
+      var actionLabel = wasPacked && actorRole === "Admin" ? "Mở lại đơn đã soạn để chỉnh sửa" : "Chỉnh sửa số lượng / hủy mã";
+      var extraSummary = detailText.join("; ") || ("Đơn đã thay đổi " + changeCount + " mã.");
+      if (wasPacked && actorRole === "Admin") {
+        extraSummary = "Trạng thái mới: Mới, cần soạn lại. " + extraSummary;
+      }
+      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, actionLabel, changeCount, payload.actor, extraSummary);
     }
   } finally { lock.releaseLock(); }
   return { success: true };
@@ -1340,11 +1400,9 @@ function themChiTietPhieu(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet || !payload.soPhieu || !payload.item) throw new Error("Thiếu dữ liệu đơn hàng hoặc sản phẩm.");
-  if (isOrderConfirmedForEditing(payload.soPhieu, historySheet)) {
-    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
-  }
   ensureHistoryStatusColumn(historySheet);
   var data = historySheet.getDataRange().getValues();
+  assertActorCanManageOrder(payload.actor, payload.soPhieu, historySheet, data);
   var baseRow = null;
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][1]).trim() === String(payload.soPhieu).trim()) { baseRow = data[i]; break; }
@@ -1353,7 +1411,7 @@ function themChiTietPhieu(payload) {
   var item = payload.item;
   var quantity = Number(item.sl);
   if (!quantity || quantity < 1) throw new Error("Số lượng thêm phải lớn hơn 0.");
-  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", item.dvt || "", "", "Thêm bởi quản trị viên", "Đang xử lý"];
+  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", item.dvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"];
   historySheet.appendRow(row);
   logOrderChange(ss, payload.soPhieu, "Thêm mã vào đơn", payload.actor, item.maHang, item.maVach, "", quantity, item.tenHang || "");
   return { success: true };
@@ -1365,15 +1423,21 @@ function huyDongChiTietPhieu(payload) {
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   ensureHistoryStatusColumn(historySheet);
   var soPhieu = payload && payload.soPhieu ? payload.soPhieu : "";
-  if (soPhieu && isOrderConfirmedForEditing(soPhieu, historySheet)) {
-    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể chỉnh sửa nữa.");
+  var dataRows = historySheet.getDataRange().getValues();
+  if (!soPhieu) {
+    var lookupRow = Number(payload.row);
+    if (lookupRow >= 2 && dataRows[lookupRow - 1]) soPhieu = String(dataRows[lookupRow - 1][1] || "").trim();
   }
+  assertActorCanManageOrder(payload.actor, soPhieu, historySheet, dataRows);
   var row = Number(payload.row);
   if (!row || row < 2) throw new Error("Dòng đơn hàng không hợp lệ.");
   var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
   historySheet.getRange(row, 8).setValue(0);
+  historySheet.getRange(row, 9).setValue(0);
   historySheet.getRange(row, 12).setValue("Đã hủy dòng");
   historySheet.getRange(row, 13).setValue("Đã hủy dòng");
+  historySheet.getRange(row, 14).setValue(payload.actor || "");
+  historySheet.getRange(row, 15).setValue("Quản lý");
   logOrderChange(ss, values[1], "Hủy mã khỏi đơn", payload.actor, values[4], values[5], values[7], 0, "Hủy từng dòng");
   return { success: true };
 }
@@ -1410,6 +1474,7 @@ function xacNhanNhanHang(payload) {
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   var receiveSheet = getReceiveSheet(ss);
   if (!historySheet) throw new Error("Không tìm thấy dữ liệu đơn hàng.");
+  ensureHistoryStatusColumn(historySheet);
   var actorAccount = getAccountByActor(payload.actor);
   var expectedStore = payload.store || (actorAccount ? actorAccount.store : "");
   if (actorAccount && String(actorAccount.role).trim() !== "Admin") {
@@ -1428,7 +1493,10 @@ function xacNhanNhanHang(payload) {
     var qty = Number(conf.receivedQty);
     if (!row || row < 2 || isNaN(qty) || qty < 0) continue;
     var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
+    historySheet.getRange(row, 9).setValue(qty);
     historySheet.getRange(row, 13).setValue("Đã xác nhận nhận hàng");
+    historySheet.getRange(row, 14).setValue(payload.actor || "");
+    historySheet.getRange(row, 15).setValue("Xác nhận nhận hàng");
     var requestedQty = Number(values[7]) || 0;
     var previousQty = Number(conf.previousQty) || 0;
     var actualChanged = qty !== previousQty;
@@ -1447,12 +1515,34 @@ function xacNhanNhanHang(payload) {
   return { success: true, count: confirmations.length };
 }
 
+function cleanupLegacyGeneratedSheets(ss, prefixes) {
+  if (!ss || typeof ss.getSheets !== "function") return;
+  var allSheets = ss.getSheets();
+  for (var i = allSheets.length - 1; i >= 0; i--) {
+    var sheet = allSheets[i];
+    var name = sheet.getName ? sheet.getName() : "";
+    for (var p = 0; p < prefixes.length; p++) {
+      if (name.indexOf(prefixes[p]) === 0) {
+        ss.deleteSheet(sheet);
+        break;
+      }
+    }
+  }
+}
+
+function recreateTempSheet(ss, sheetName, legacyPrefixes) {
+  cleanupLegacyGeneratedSheets(ss, legacyPrefixes || []);
+  var existing = ss.getSheetByName(sheetName);
+  if (existing) {
+    ss.deleteSheet(existing);
+  }
+  return ss.insertSheet(sheetName);
+}
+
 function taoFileExcelVaLayLink(payload) {
   var ss = getSS();
-  var tenTabPhieu = "In_" + payload.soPhieu;
-  var targetSheet = ss.getSheetByName(tenTabPhieu);
-  if (targetSheet) { ss.deleteSheet(targetSheet); }
-  targetSheet = ss.insertSheet(tenTabPhieu);
+  var tenTabPhieu = "__TMP_XUAT_EXCEL";
+  var targetSheet = recreateTempSheet(ss, tenTabPhieu, ["In_"]);
   
   var khoXuat = payload.khoXuat; var khoNhan = payload.khoNhan;
   var tieuDe = payload.soPhieu.indexOf("DH") !== -1 ? "ĐƠN ĐẶT HÀNG" : "LỆNH ĐIỀU CHUYỂN";
@@ -1482,10 +1572,8 @@ function taoFileExcelVaLayLink(payload) {
 
 function taoPreviewPublicUrl(soPhieu, khoXuat, khoNhan, rows) {
   var ss = getSS();
-  var previewSheetName = "Preview_" + soPhieu.replace(/[^A-Za-z0-9]/g, "_");
-  var existing = ss.getSheetByName(previewSheetName);
-  if (existing) ss.deleteSheet(existing);
-  var sheet = ss.insertSheet(previewSheetName);
+  var previewSheetName = "__TMP_PREVIEW_CONG_KHAI";
+  var sheet = recreateTempSheet(ss, previewSheetName, ["Preview_"]);
   sheet.getRange("A1:G1").setValues([["Số phiếu", "Kho xuất", "Kho nhận", "Mã hàng", "Mã vạch", "Tên hàng", "Số thực nhận"]]).setFontWeight("bold");
   var data = [];
   for (var i = 0; i < rows.length; i++) {
@@ -1516,7 +1604,7 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
     var rowSoPhieu = data[i][1] ? data[i][1].toString().trim() : "";
     var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
     var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
-    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Đang xử lý";
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
     var isCanceled = rowStatus === "Đã hủy đơn";
 
     if (isCanceled) continue;
@@ -1528,15 +1616,16 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
     }
 
     var slThucTe = data[i][8];
-    var isDaXuLy = (slThucTe !== "" && Number(slThucTe) > 0);
+    var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
     
     var match = (ngayChon === 'today' && rowNgay.getTime() === today.getTime()) ||
                 (ngayChon === 'yesterday' && rowNgay.getTime() === yesterday.getTime()) ||
                 (ngayChon === 'all');
                 
     if (match && rowSoPhieu) { 
-      if(!map[rowSoPhieu]) map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, trangThai: isDaXuLy ? "Đã xử lý" : "Mới" }; 
-      else if(isDaXuLy) map[rowSoPhieu].trangThai = "Đã xử lý";
+      if(!map[rowSoPhieu]) map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus }; 
+      else if(displayStatus === "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã xác nhận";
+      else if(displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
     }
   }
   var res = []; for(var p in map) res.push(map[p]); return res;
@@ -1560,6 +1649,7 @@ function getChiTietDonHangMobile(soPhieu) {
 function luuSoSoanHangVaAnh(payload) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  ensureHistoryStatusColumn(historySheet);
   var updates = payload.updates || [];
   var images = payload.images || {}; 
   var lock = LockService.getDocumentLock();
@@ -1569,14 +1659,13 @@ function luuSoSoanHangVaAnh(payload) {
       var val = updates[i].val;
       if (val !== "") {
         var parsedVal = Number(val);
-        historySheet.getRange(updates[i].row, 8).setValue(parsedVal);
         historySheet.getRange(updates[i].row, 9).setValue(parsedVal);
         historySheet.getRange(updates[i].row, 14).setValue(payload.actor || "");
         historySheet.getRange(updates[i].row, 15).setValue("Soạn hàng");
-        historySheet.getRange(updates[i].row, 13).setValue("Đang xử lý");
+        historySheet.getRange(updates[i].row, 13).setValue("Đã soạn hàng");
       } else {
-        historySheet.getRange(updates[i].row, 8).clearContent();
         historySheet.getRange(updates[i].row, 9).clearContent();
+        historySheet.getRange(updates[i].row, 13).setValue("Mới");
       }
     }
     var targetFolder;
@@ -1767,10 +1856,8 @@ function taoBangSoanHangNgayMai(payload) {
   var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
   var stockIndex = stockSheet ? getStockIndexByStore(stockSheet.getDataRange().getValues()) : {};
 
-  var sheetName = "SoanNgayMai_" + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "ddMMyyyy");
-  var existing = ss.getSheetByName(sheetName);
-  if (existing) ss.deleteSheet(existing);
-  var reportSheet = ss.insertSheet(sheetName);
+  var sheetName = "__TMP_SOAN_NGAY_MAI";
+  var reportSheet = recreateTempSheet(ss, sheetName, ["SoanNgayMai_"]);
 
   var title = "BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy");
   reportSheet.getRange("A1").setValue(title).setFontSize(14).setFontWeight("bold");
