@@ -22,6 +22,7 @@ async function callJsonApi(urls, options) {
 async function apiGet(action, params) {
   const proxyUrl = new URL('/api/gas-proxy', location.origin);
   proxyUrl.searchParams.set('action', action);
+  proxyUrl.searchParams.set('_ts', String(Date.now()));
   if (params) {
     Object.keys(params).forEach(k => {
       if (params[k] !== undefined && params[k] !== null) proxyUrl.searchParams.set(k, params[k]);
@@ -30,6 +31,7 @@ async function apiGet(action, params) {
 
   const directUrl = new URL(GAS_EXEC_URL);
   directUrl.searchParams.set('action', action);
+  directUrl.searchParams.set('_ts', String(Date.now()));
   if (params) {
     Object.keys(params).forEach(k => {
       if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
@@ -652,6 +654,9 @@ function ql_onSelectPhieu() {
 function confirm_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("confirm-phieu");
   if (!selectEl) return;
+  var viewEl = document.getElementById("confirm-view");
+  if (!selectedSoPhieu && viewEl) viewEl.style.display = "none";
+  if (!selectedSoPhieu) currentConfirmPhieuObj = null;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: document.getElementById("confirm-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
@@ -817,14 +822,12 @@ function ql_hienThiChiTiet(phieu, options) {
 
 function ql_getVariantOptions(rowMeta) {
   var maHang = String(rowMeta && rowMeta.maHang ? rowMeta.maHang : '').trim().toUpperCase();
-  var tenHang = String(rowMeta && rowMeta.tenHang ? rowMeta.tenHang : '').trim().toUpperCase();
   var seen = {};
   var variants = [];
   danhMucArr.forEach(function(item) {
     if (!item) return;
     var itemMaHang = String(item.maHang || '').trim().toUpperCase();
-    var itemTen = String(item.tenHang || '').trim().toUpperCase();
-    var sameGroup = (maHang && itemMaHang === maHang) || (tenHang && itemTen === tenHang);
+    var sameGroup = maHang && itemMaHang === maHang;
     if (!sameGroup) return;
     var key = String(item.maVach || '').trim().toUpperCase() + '|' + String(item.dvt || 'Cái').trim().toUpperCase();
     if (!key || seen[key]) return;
@@ -1042,6 +1045,8 @@ function sh_taiDanhSachDon() {
     var dd = String(now.getDate()).padStart(2, '0');
     createDateEl.value = yyyy + '-' + mm + '-' + dd;
   }
+  document.getElementById("sh-list-container").innerHTML = '<div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div>';
+  document.getElementById("sh-footer").style.display = "none";
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
   apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }).then(function(res) {
     var countMoi = 0; var countDone = 0;
