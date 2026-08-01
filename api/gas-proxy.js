@@ -68,6 +68,14 @@ export default async function handler(req, res) {
         headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Accept': 'application/json' },
         body: JSON.stringify(body)
       }, 50000);
+      const looksHtml = /^\s*</.test(r.text || '') || /<!doctype html>/i.test(r.text || '');
+      if (looksHtml) {
+        res.status(502).json({
+          error: 'GAS returned HTML instead of JSON (redirect/doGet). Try direct client POST.',
+          action: body.action
+        });
+        return;
+      }
       res.status(r.status).send(r.text);
       return;
     }

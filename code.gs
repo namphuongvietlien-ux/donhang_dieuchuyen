@@ -432,7 +432,7 @@ function doPost(e) {
     var contents = e && e.postData && e.postData.contents ? e.postData.contents : "";
     if (!contents) {
       Logger.log("doPost warning: empty payload");
-      return ContentService.createTextOutput("OK");
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Empty POST payload" })).setMimeType(ContentService.MimeType.JSON);
     }
     var payload = JSON.parse(contents);
     // If request is from webapp proxy (has action), route to server API handlers
