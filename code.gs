@@ -3618,10 +3618,18 @@ function taoBangSoanHangNgayMai(payload) {
     var stock = 0;
     for (var s = 0; s < sourceStores.length; s++) {
       var storeStockMap = getStockMapByStoreName(stockIndex, sourceStores[s]);
-      var codeA = it.maHang ? String(it.maHang).toUpperCase() : "";
-      var codeB = it.maVach ? String(it.maVach).toUpperCase() : "";
+      var codeA = normalizeProductCode(it.maHang || "");
+      var codeB = normalizeProductCode(it.maVach || "");
       var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
       var qtyByMaVach = codeB ? (storeStockMap[codeB] || 0) : 0;
+      if (!qtyByMaHang && codeA) {
+        var compactA = normalizeNumericCode(codeA);
+        if (compactA) qtyByMaHang = storeStockMap[compactA] || 0;
+      }
+      if (!qtyByMaVach && codeB) {
+        var compactB = normalizeNumericCode(codeB);
+        if (compactB) qtyByMaVach = storeStockMap[compactB] || 0;
+      }
       stock += qtyByMaHang > 0 ? qtyByMaHang : qtyByMaVach;
     }
     var thieu = it.totalQty - stock;
