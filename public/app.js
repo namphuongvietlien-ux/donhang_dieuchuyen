@@ -91,7 +91,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v7';
+var APP_BUILD = '2026-08-02-v8';
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
@@ -1295,7 +1295,7 @@ function sh_taiDanhSachDon() {
   document.getElementById("sh-list-container").innerHTML = '<div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div>';
   document.getElementById("sh-footer").style.display = "none";
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
-  apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }).then(function(res) {
+  apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }, { allowDirectFallback: true }).then(function(res) {
     var countMoi = 0; var countDone = 0;
     var html = '<option value="">-- Chọn đơn ('+res.length+') --</option>';
     res.forEach(r => {
@@ -1424,6 +1424,12 @@ function sh_taiDanhSachDonSoanChoBang() {
     }
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
     sh_renderDanhSachDonSoan(shOrderCandidates);
+    // Làm nóng cache tồn kho nền — lần tạo bảng sau sẽ nhanh hơn
+    apiGet('warmStockIndex', null, { allowDirectFallback: false, timeoutMs: 120000 }).then(function(w) {
+      dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun });
+    }).catch(function(err) {
+      dbgSoanLine_('warmStock.error', { error: String(err && err.message || err) });
+    });
   }).catch(function(err) {
     hideLoad();
     shOrderCandidates = [];

@@ -613,7 +613,10 @@ function doGet(e) {
           res = getThongTinPhieu(e.parameter.soPhieu || '');
           break;
         case 'getDonHangTheoNgay':
-          res = getDonHangTheoNgay(e.parameter.ngay || 'today', e.parameter.userRole || '', e.parameter.userStore || '');
+          res = getDonHangTheoNgay(e.parameter.ngay || 'today', e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.viewMode || '');
+          break;
+        case 'warmStockIndex':
+          res = warmStockIndex();
           break;
         case 'getDashboardSummary':
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');
@@ -3369,7 +3372,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "post-fix-v6"
+    _debugRun: "fast-v8"
   };
 }
 
@@ -3504,7 +3507,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không tìm thấy dòng hàng của các đơn đã chọn trong lịch sử gần đây.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v7"
+      _debugRun: "fast-v8"
     };
   }
   if (!Object.keys(selectedSet).length) {
@@ -3513,7 +3516,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v7"
+      _debugRun: "fast-v8"
     };
   }
 
@@ -3580,7 +3583,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không gom được mã hàng từ các đơn đã chọn.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v7",
+      _debugRun: "fast-v8",
       _debugInfo: { baseDateStr: baseDateStr, selectedList: Object.keys(selectedSet), scannedRows: historyPack.scannedRows || 0 }
     };
   }
@@ -3589,8 +3592,11 @@ function taoBangSoanHangNgayMai(payload) {
     return formatShortStoreLabel(a).localeCompare(formatShortStoreLabel(b));
   });
   var activeMap = getActiveStoreMap();
+
+  // Tồn kho: dùng cache (chunked). Lần đầu có thể chậm; lần sau lấy từ cache ~ms.
+  var stockIndex = getStockIndexCached_(ss);
   // #region agent log
-  _dbgMark("skipStock", { reason: "fast-algo" });
+  _dbgMark("stockIndex", { via: "cached", itemCount: keys.length });
   // #endregion
 
   var sheetName = "__TMP_SOAN_NGAY_MAI";
@@ -3604,17 +3610,40 @@ function taoBangSoanHangNgayMai(payload) {
   headers.push("Kho xuất");
 
   var rows = [];
+  var missingLines = 0;
+  var warningCol = 8 + storeList.length;
   for (var k = 0; k < keys.length; k++) {
     var it = itemMap[keys[k]];
     var sourceStores = Object.keys(it.sourceStores);
-    var rowOut = [0, it.maHang || "", it.maVach || "", it.tenHang || "", it.dvt || "", "", it.totalQty];
+    var stock = 0;
+    for (var s = 0; s < sourceStores.length; s++) {
+      var storeStockMap = getStockMapByStoreName(stockIndex, sourceStores[s]);
+      var codeA = it.maHang ? String(it.maHang).toUpperCase() : "";
+      var codeB = it.maVach ? String(it.maVach).toUpperCase() : "";
+      var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
+      var qtyByMaVach = codeB ? (storeStockMap[codeB] || 0) : 0;
+      stock += qtyByMaHang > 0 ? qtyByMaHang : qtyByMaVach;
+    }
+    var thieu = it.totalQty - stock;
+    var canhBao = thieu > 0 ? ("THIẾU " + thieu) : "ĐỦ";
+    var deXuat = thieu > 0
+      ? ("Thiếu " + thieu + ": ưu tiên đơn gấp, điều chuyển nội bộ hoặc nhập bổ sung.")
+      : "OK - có thể soạn gộp theo mã.";
+    if (thieu > 0) missingLines += 1;
+
+    var rowOut = [0, it.maHang || "", it.maVach || "", it.tenHang || "", it.dvt || "", stock, it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
-    rowOut.push("Chưa đối chiếu tồn");
-    rowOut.push("Bản nhanh: đối chiếu tồn kho thủ công khi soạn.");
+    rowOut.push(canhBao);
+    rowOut.push(deXuat);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));
     rows.push(rowOut);
   }
-  rows.sort(function(a, b) { return String(a[3] || "").localeCompare(String(b[3] || "")); });
+  rows.sort(function(a, b) {
+    var aWarn = String(a[warningCol - 1] || "");
+    var bWarn = String(b[warningCol - 1] || "");
+    if (aWarn !== bWarn) return aWarn.indexOf("THIẾU") === 0 ? -1 : 1;
+    return String(a[3] || "").localeCompare(String(b[3] || ""));
+  });
   for (var r = 0; r < rows.length; r++) rows[r][0] = r + 1;
 
   function padRow_(arr, width) {
@@ -3623,10 +3652,10 @@ function taoBangSoanHangNgayMai(payload) {
     return out;
   }
   var colCount = headers.length;
-  var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Chế độ: nhanh (không đọc tồn kho)";
+  var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Mã thiếu: " + missingLines;
   var sheetBlock = [
     padRow_([title], colCount),
-    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã"], colCount),
+    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã | Tồn từ cache"], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
     padRow_(headers, colCount)
@@ -3635,7 +3664,7 @@ function taoBangSoanHangNgayMai(payload) {
   reportSheet.getRange(1, 1, sheetBlock.length, colCount).setValues(sheetBlock);
   reportSheet.setFrozenRows(headerRow);
   // #region agent log
-  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount });
+  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount, missingLines: missingLines });
   // #endregion
   SpreadsheetApp.flush();
   // #region agent log
@@ -3648,10 +3677,16 @@ function taoBangSoanHangNgayMai(payload) {
     sheetName: sheetName,
     totalOrders: Object.keys(orderSeen).length,
     totalItems: rows.length,
-    missingItems: 0,
+    missingItems: missingLines,
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "fast-v7"
+    _debugRun: "fast-v8"
   };
+}
+
+function warmStockIndex() {
+  var t0 = Date.now();
+  getStockIndexCached_(getSS());
+  return { success: true, _debugRun: "fast-v8", _debugTotalMs: Date.now() - t0 };
 }
