@@ -142,7 +142,8 @@ function readHistoryForSelectedOrders_(historySheet, selectedSet, baseDateStr, m
   };
 }
 
-function getStockIndexCached_(ss) {
+function getStockIndexCached_(ss, options) {
+  options = options || {};
   ss = ss || getSS();
   var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
   if (!stockSheet) return {};
@@ -151,6 +152,8 @@ function getStockIndexCached_(ss) {
   var cache = getScriptCache_();
   var cached = getCacheJson_(cache, cacheKey);
   if (cached) return cached;
+  // onlyCached: không build trong request tạo bảng (tránh vượt timeout Vercel 60s)
+  if (options.onlyCached) return null;
   var stockData = stockSheet.getDataRange().getValues();
   var index = getStockIndexByStore(stockData);
   try {
@@ -617,6 +620,9 @@ function doGet(e) {
           break;
         case 'warmStockIndex':
           res = warmStockIndex();
+          break;
+        case 'getStockCacheStatus':
+          res = getStockCacheStatus();
           break;
         case 'getDashboardSummary':
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');
@@ -3372,7 +3378,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "fast-v8"
+    _debugRun: "fast-v9"
   };
 }
 
@@ -3593,10 +3599,12 @@ function taoBangSoanHangNgayMai(payload) {
   });
   var activeMap = getActiveStoreMap();
 
-  // Tồn kho: dùng cache (chunked). Lần đầu có thể chậm; lần sau lấy từ cache ~ms.
-  var stockIndex = getStockIndexCached_(ss);
+  // Chỉ dùng tồn đã cache — KHÔNG build trong request này (tránh Vercel 504 60s)
+  var stockIndex = getStockIndexCached_(ss, { onlyCached: true });
+  var stockReady = !!(stockIndex && typeof stockIndex === "object");
+  if (!stockReady) stockIndex = {};
   // #region agent log
-  _dbgMark("stockIndex", { via: "cached", itemCount: keys.length });
+  _dbgMark("stockIndex", { via: stockReady ? "cache-hit" : "cache-miss-skip-build", itemCount: keys.length });
   // #endregion
 
   var sheetName = "__TMP_SOAN_NGAY_MAI";
@@ -3616,30 +3624,34 @@ function taoBangSoanHangNgayMai(payload) {
     var it = itemMap[keys[k]];
     var sourceStores = Object.keys(it.sourceStores);
     var stock = 0;
-    for (var s = 0; s < sourceStores.length; s++) {
-      var storeStockMap = getStockMapByStoreName(stockIndex, sourceStores[s]);
-      var codeA = normalizeProductCode(it.maHang || "");
-      var codeB = normalizeProductCode(it.maVach || "");
-      var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
-      var qtyByMaVach = codeB ? (storeStockMap[codeB] || 0) : 0;
-      if (!qtyByMaHang && codeA) {
-        var compactA = normalizeNumericCode(codeA);
-        if (compactA) qtyByMaHang = storeStockMap[compactA] || 0;
+    var canhBao = "Chưa có cache tồn";
+    var deXuat = "Đợi tải tồn kho xong rồi tạo lại bảng để có số tồn.";
+    if (stockReady) {
+      for (var s = 0; s < sourceStores.length; s++) {
+        var storeStockMap = getStockMapByStoreName(stockIndex, sourceStores[s]);
+        var codeA = normalizeProductCode(it.maHang || "");
+        var codeB = normalizeProductCode(it.maVach || "");
+        var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
+        var qtyByMaVach = codeB ? (storeStockMap[codeB] || 0) : 0;
+        if (!qtyByMaHang && codeA) {
+          var compactA = normalizeNumericCode(codeA);
+          if (compactA) qtyByMaHang = storeStockMap[compactA] || 0;
+        }
+        if (!qtyByMaVach && codeB) {
+          var compactB = normalizeNumericCode(codeB);
+          if (compactB) qtyByMaVach = storeStockMap[compactB] || 0;
+        }
+        stock += qtyByMaHang > 0 ? qtyByMaHang : qtyByMaVach;
       }
-      if (!qtyByMaVach && codeB) {
-        var compactB = normalizeNumericCode(codeB);
-        if (compactB) qtyByMaVach = storeStockMap[compactB] || 0;
-      }
-      stock += qtyByMaHang > 0 ? qtyByMaHang : qtyByMaVach;
+      var thieu = it.totalQty - stock;
+      canhBao = thieu > 0 ? ("THIẾU " + thieu) : "ĐỦ";
+      deXuat = thieu > 0
+        ? ("Thiếu " + thieu + ": ưu tiên đơn gấp, điều chuyển nội bộ hoặc nhập bổ sung.")
+        : "OK - có thể soạn gộp theo mã.";
+      if (thieu > 0) missingLines += 1;
     }
-    var thieu = it.totalQty - stock;
-    var canhBao = thieu > 0 ? ("THIẾU " + thieu) : "ĐỦ";
-    var deXuat = thieu > 0
-      ? ("Thiếu " + thieu + ": ưu tiên đơn gấp, điều chuyển nội bộ hoặc nhập bổ sung.")
-      : "OK - có thể soạn gộp theo mã.";
-    if (thieu > 0) missingLines += 1;
 
-    var rowOut = [0, it.maHang || "", it.maVach || "", it.tenHang || "", it.dvt || "", stock, it.totalQty];
+    var rowOut = [0, it.maHang || "", it.maVach || "", it.tenHang || "", it.dvt || "", stockReady ? stock : "", it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
     rowOut.push(canhBao);
     rowOut.push(deXuat);
@@ -3649,7 +3661,7 @@ function taoBangSoanHangNgayMai(payload) {
   rows.sort(function(a, b) {
     var aWarn = String(a[warningCol - 1] || "");
     var bWarn = String(b[warningCol - 1] || "");
-    if (aWarn !== bWarn) return aWarn.indexOf("THIẾU") === 0 ? -1 : 1;
+    if (stockReady && aWarn !== bWarn) return aWarn.indexOf("THIẾU") === 0 ? -1 : 1;
     return String(a[3] || "").localeCompare(String(b[3] || ""));
   });
   for (var r = 0; r < rows.length; r++) rows[r][0] = r + 1;
@@ -3660,10 +3672,11 @@ function taoBangSoanHangNgayMai(payload) {
     return out;
   }
   var colCount = headers.length;
-  var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Mã thiếu: " + missingLines;
+  var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length +
+    (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: cache") : " | Tồn: chưa sẵn sàng (tạo lại sau khi tải tồn)");
   var sheetBlock = [
     padRow_([title], colCount),
-    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã | Tồn từ cache"], colCount),
+    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã"], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
     padRow_(headers, colCount)
@@ -3672,7 +3685,7 @@ function taoBangSoanHangNgayMai(payload) {
   reportSheet.getRange(1, 1, sheetBlock.length, colCount).setValues(sheetBlock);
   reportSheet.setFrozenRows(headerRow);
   // #region agent log
-  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount, missingLines: missingLines });
+  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount, missingLines: missingLines, stockReady: stockReady });
   // #endregion
   SpreadsheetApp.flush();
   // #region agent log
@@ -3686,15 +3699,26 @@ function taoBangSoanHangNgayMai(payload) {
     totalOrders: Object.keys(orderSeen).length,
     totalItems: rows.length,
     missingItems: missingLines,
+    stockReady: stockReady,
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "fast-v8"
+    _debugRun: "fast-v9"
   };
 }
 
 function warmStockIndex() {
   var t0 = Date.now();
-  getStockIndexCached_(getSS());
-  return { success: true, _debugRun: "fast-v8", _debugTotalMs: Date.now() - t0 };
+  var index = getStockIndexCached_(getSS(), {});
+  var keys = index ? Object.keys(index).length : 0;
+  return { success: true, stores: keys, _debugRun: "fast-v9", _debugTotalMs: Date.now() - t0 };
+}
+
+function getStockCacheStatus() {
+  var ss = getSS();
+  var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!stockSheet) return { success: true, ready: false, _debugRun: "fast-v9" };
+  var version = String(stockSheet.getLastRow()) + "_" + String(stockSheet.getLastColumn());
+  var cached = getCacheJson_(getScriptCache_(), CACHE_STOCK_INDEX_PREFIX + version);
+  return { success: true, ready: !!cached, _debugRun: "fast-v9" };
 }

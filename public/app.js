@@ -91,7 +91,8 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v8';
+var APP_BUILD = '2026-08-02-v9';
+var shStockWarmState = { ready: false, warming: false, lastMs: 0 };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
@@ -1424,17 +1425,35 @@ function sh_taiDanhSachDonSoanChoBang() {
     }
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
     sh_renderDanhSachDonSoan(shOrderCandidates);
-    // Làm nóng cache tồn kho nền — lần tạo bảng sau sẽ nhanh hơn
-    apiGet('warmStockIndex', null, { allowDirectFallback: false, timeoutMs: 120000 }).then(function(w) {
-      dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun });
-    }).catch(function(err) {
-      dbgSoanLine_('warmStock.error', { error: String(err && err.message || err) });
-    });
+    sh_warmStockInBackground_();
   }).catch(function(err) {
     hideLoad();
     shOrderCandidates = [];
     if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + escapeHtml(err.message) + '</td></tr>';
     sh_capNhatTomTatChonDonSoan();
+  });
+}
+
+function sh_warmStockInBackground_() {
+  if (shStockWarmState.warming) return;
+  shStockWarmState.warming = true;
+  var summaryEl = document.getElementById('sh-order-picker-summary');
+  if (summaryEl) summaryEl.innerText = (summaryEl.innerText || '') + ' | Đang tải tồn kho nền (GET thẳng GAS)...';
+  // GET thẳng GAS — không qua Vercel proxy (tránh 504 60s)
+  apiGet('warmStockIndex', null, { directOnly: true, timeoutMs: 180000 }).then(function(w) {
+    shStockWarmState.warming = false;
+    shStockWarmState.ready = !!(w && w.success);
+    shStockWarmState.lastMs = (w && w._debugTotalMs) || 0;
+    dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun, stores: w && w.stores, via: 'direct-get' });
+    if (summaryEl) {
+      summaryEl.innerText = shStockWarmState.ready
+        ? ('Tồn kho sẵn sàng (' + Math.round(shStockWarmState.lastMs / 1000) + 's). Có thể xuất bảng có số tồn.')
+        : 'Tồn kho chưa sẵn sàng.';
+    }
+  }).catch(function(err) {
+    shStockWarmState.warming = false;
+    shStockWarmState.ready = false;
+    dbgSoanLine_('warmStock.error', { error: String(err && err.message || err), via: 'direct-get' });
   });
 }
 
@@ -1472,49 +1491,44 @@ function sh_taoBangSoanTuDonDaChon() {
     return;
   }
 
-  showLoad("Đang tạo bảng soạn hàng...");
+  showLoad(shStockWarmState.ready ? "Đang tạo bảng soạn (có tồn kho)..." : "Đang tạo bảng soạn nhanh...");
   // #region agent log
   var _dbgSoanStart = Date.now();
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length,via:'proxy',hypothesisId:'D'},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v5'})}).catch(function(){});
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length,stockReady:shStockWarmState.ready,via:'proxy'},timestamp:Date.now(),hypothesisId:'Vercel60',runId:'post-fix-v9'})}).catch(function(){});
   // #endregion
-  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD, via: 'proxy' });
-  // POST thẳng GAS bị CORS preflight chặn — bắt buộc đi qua /api/gas-proxy
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: false, timeoutMs: 280000 }).then(function(res) {
+  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD, via: 'proxy', stockReady: shStockWarmState.ready });
+  // Timeout client < 60s Vercel để báo lỗi rõ, không treo
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: false, timeoutMs: 55000 }).then(function(res) {
     hideLoad();
     // #region agent log
     var _dbgClientMs = Date.now() - _dbgSoanStart;
-    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), build: APP_BUILD, via: 'proxy', msg: res && (res.msg || res.error), action: res && res.action, steps: res && res._debugTimings, debug: res && res._debugInfo, resKeys: res ? Object.keys(res) : [] });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,msg:res&&(res.msg||res.error),via:'proxy'},timestamp:Date.now(),hypothesisId:'C',runId:'post-fix-v6'})}).catch(function(){});
+    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, build: APP_BUILD, steps: res && res._debugTimings });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,stockReady:res&&res.stockReady},timestamp:Date.now(),hypothesisId:'Vercel60',runId:'post-fix-v9'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
-      var errText = (res && (res.msg || res.error)) || "Không rõ lỗi";
-      var failMsg = "❌ Tạo bảng thất bại:\n" + errText;
-      failMsg += "\n[Build FE: " + APP_BUILD + "]";
-      if (res && res._debugRun) failMsg += " [GAS: " + res._debugRun + "]";
-      else if (res && (res.msg || res.error)) failMsg += " [GAS có phản hồi lỗi]";
-      else failMsg += " [GAS: phản hồi không hợp lệ]";
-      if (res && res._debugTotalMs) failMsg += "\n(Server: " + Math.round(res._debugTotalMs / 1000) + "s)";
-      if (res && res._debugInfo) failMsg += "\n" + JSON.stringify(res._debugInfo);
-      alert(failMsg);
+      alert("❌ Tạo bảng thất bại:\n" + ((res && (res.msg || res.error)) || "Không rõ lỗi") + "\n[Build FE: " + APP_BUILD + "]" + (res && res._debugRun ? (" [GAS: " + res._debugRun + "]") : ""));
       return;
     }
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
-      "- Mã thiếu: " + (res.missingItems || 0);
+      "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
+      "- Tồn kho: " + (res.stockReady ? "có (cache)" : "chưa — đợi dòng 'Tồn kho sẵn sàng' rồi tạo lại");
     if (res._debugTotalMs) msg += "\n(Thời gian server: " + Math.round(res._debugTotalMs / 1000) + "s)";
-    if (res._debugRun) msg += "\n[" + res._debugRun + "]";
+    msg += "\n[fast-v9 / " + APP_BUILD + "]";
     alert(msg);
-    if (res.url) {
-      window.open(res.url, '_blank', 'noopener,noreferrer');
-    }
+    if (res.url) window.open(res.url, '_blank', 'noopener,noreferrer');
+    if (!res.stockReady) sh_warmStockInBackground_();
   }).catch(function(err) {
     hideLoad();
-    // #region agent log
     dbgSoanLine_('taoBangSoan.error', { clientMs: Date.now() - _dbgSoanStart, error: String(err && err.message || err), build: APP_BUILD, via: 'proxy' });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan error',data:{clientMs:Date.now()-_dbgSoanStart,error:String(err&&err.message||err),via:'proxy'},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v5'})}).catch(function(){});
-    // #endregion
-    alert('Lỗi: ' + err.message);
+    var m = String(err && err.message || err);
+    if (m.indexOf('504') !== -1 || m.indexOf('TIMEOUT') !== -1 || m.indexOf('Hết thời gian') !== -1) {
+      alert('Lỗi timeout Vercel (60s).\nHãy đợi "Tồn kho sẵn sàng" trên màn hình rồi bấm Xuất bảng lại.\nChi tiết: ' + m);
+      sh_warmStockInBackground_();
+      return;
+    }
+    alert('Lỗi: ' + m);
   });
 }
 
