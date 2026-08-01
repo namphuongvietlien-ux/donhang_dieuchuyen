@@ -4095,6 +4095,18 @@ function taoBangSoanHangNgayMai(payload) {
   var orderSeen = {};
   var storeSeen = {};
 
+  // ĐVT: ưu tiên lịch sử → Data_Excel (cache) → TON_Q7. Ghi ngược vào lịch sử nếu trống.
+  var catalogLookup = null;
+  try { catalogLookup = getCatalogLookup(ss); } catch (catErr) { catalogLookup = null; }
+  // #region agent log
+  _dbgMark("catalogLookup", {
+    ready: !!(catalogLookup && (Object.keys(catalogLookup.byMaVach || {}).length || Object.keys(catalogLookup.byMaHang || {}).length)),
+    byMaVach: catalogLookup ? Object.keys(catalogLookup.byMaVach || {}).length : 0,
+    byMaHang: catalogLookup ? Object.keys(catalogLookup.byMaHang || {}).length : 0
+  });
+  // #endregion
+  var historyDvtBackfill = []; // { sheetRow, dvt }
+
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
     if (!row) continue;
@@ -4107,7 +4119,11 @@ function taoBangSoanHangNgayMai(payload) {
     var maVach = row[5] ? String(row[5]).trim() : "";
     var tenHang = row[6] ? String(row[6]).trim() : "";
     var soLuong = Number(row[7]) || 0;
-    var dvt = String(row[9] || "").trim();
+    var dvtRaw = String(row[9] || "").trim();
+    var dvt = dvtRaw;
+    if ((!dvt || normalizeHeaderText(dvt) === "cai") && catalogLookup) {
+      dvt = resolveDvtValue(catalogLookup, maHang, maVach, dvtRaw) || dvtRaw;
+    }
     var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
 
     if (!khoNhan) continue;
@@ -4143,6 +4159,11 @@ function taoBangSoanHangNgayMai(payload) {
       storeList.push(khoNhan);
     }
     orderSeen[soPhieu] = true;
+
+    // Lịch sử trống ĐVT nhưng đã resolve từ catalog → ghi lại để lần sau không cần lookup
+    if (dvt && !dvtRaw && historyPack.orders && historyPack.orders[i - 1]) {
+      historyDvtBackfill.push({ sheetRow: historyPack.orders[i - 1], dvt: dvt });
+    }
   }
 
   var keys = Object.keys(itemMap);
@@ -4196,6 +4217,7 @@ function taoBangSoanHangNgayMai(payload) {
   var warningCol = 8 + storeList.length;
   // #region agent log
   var _dbgDvtFromOrder = 0;
+  var _dbgDvtCatalog = 0;
   var _dbgDvtInferred = 0;
   var _dbgDvtEmpty = 0;
   var _dbgDvtSample = [];
@@ -4204,13 +4226,18 @@ function taoBangSoanHangNgayMai(payload) {
     var it = itemMap[keys[k]];
     var sourceStores = Object.keys(it.sourceStores);
     var dvtOut = it.dvt || "";
-    var dvtSource = dvtOut ? "order" : "";
+    var dvtSource = dvtOut ? "resolved" : "";
+    if (!dvtOut && catalogLookup) {
+      dvtOut = resolveDvtValue(catalogLookup, it.maHang, it.maVach, "") || "";
+      if (dvtOut) dvtSource = "catalog";
+    }
     if (!dvtOut && stockReady) {
       dvtOut = inferDvtLabelFromStockMap_(q7Map, q7DvtLabels, it.maHang, it.maVach) || "";
       if (dvtOut) dvtSource = "ton_q7";
     }
     // #region agent log
-    if (dvtSource === "order") _dbgDvtFromOrder++;
+    if (dvtSource === "resolved") _dbgDvtFromOrder++;
+    else if (dvtSource === "catalog") _dbgDvtCatalog++;
     else if (dvtSource === "ton_q7") _dbgDvtInferred++;
     else _dbgDvtEmpty++;
     if (_dbgDvtSample.length < 5) {
@@ -4260,6 +4287,22 @@ function taoBangSoanHangNgayMai(payload) {
   // #region agent log
   _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount, missingLines: missingLines, stockReady: stockReady });
   // #endregion
+
+  // Ghi ĐVT đã resolve từ Data_Excel vào cột J (ĐVT thực tế) của lịch sử — tối đa 400 ô/lần
+  var backfilled = 0;
+  if (historyDvtBackfill.length) {
+    var maxBackfill = Math.min(historyDvtBackfill.length, 400);
+    for (var bf = 0; bf < maxBackfill; bf++) {
+      try {
+        historySheet.getRange(historyDvtBackfill[bf].sheetRow, 10).setValue(historyDvtBackfill[bf].dvt);
+        backfilled++;
+      } catch (bfErr) {}
+    }
+  }
+  // #region agent log
+  _dbgMark("backfillHistoryDvt", { candidates: historyDvtBackfill.length, written: backfilled });
+  // #endregion
+
   SpreadsheetApp.flush();
   // #region agent log
   _dbgMark("flush", {});
@@ -4277,11 +4320,13 @@ function taoBangSoanHangNgayMai(payload) {
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "dvt-v1",
+    _debugRun: "dvt-catalog-v1",
     _debugDvtFromOrder: _dbgDvtFromOrder,
+    _debugDvtCatalog: _dbgDvtCatalog,
     _debugDvtInferred: _dbgDvtInferred,
     _debugDvtEmpty: _dbgDvtEmpty,
-    _debugDvtSample: _dbgDvtSample
+    _debugDvtSample: _dbgDvtSample,
+    _debugDvtBackfill: backfilled
   };
 }
 
