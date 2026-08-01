@@ -3513,7 +3513,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không tìm thấy dòng hàng của các đơn đã chọn trong lịch sử gần đây.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v8"
+      _debugRun: "fast-v9"
     };
   }
   if (!Object.keys(selectedSet).length) {
@@ -3522,7 +3522,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v8"
+      _debugRun: "fast-v9"
     };
   }
 
@@ -3589,7 +3589,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không gom được mã hàng từ các đơn đã chọn.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v8",
+      _debugRun: "fast-v9",
       _debugInfo: { baseDateStr: baseDateStr, selectedList: Object.keys(selectedSet), scannedRows: historyPack.scannedRows || 0 }
     };
   }
