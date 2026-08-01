@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v15';
+var APP_BUILD = '2026-08-02-v16';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -883,8 +883,20 @@ function resetConfirmViewAfterSave() {
 }
 
 function unwrapListResponse_(res) {
-  if (Array.isArray(res)) return { rows: res, meta: {} };
+  // Hỗ trợ cả mảng thuần (GAS cũ/mới) và object { data: [] }
+  if (Array.isArray(res)) {
+    return {
+      rows: res,
+      meta: {
+        _debugTotalMs: res._debugTotalMs,
+        _debugScanned: res._debugScanned,
+        _debugRun: res._debugRun,
+        _debugStock: res._debugStock
+      }
+    };
+  }
   if (res && Array.isArray(res.data)) return { rows: res.data, meta: res };
+  if (res && res.success === false) return { rows: [], meta: res };
   return { rows: [], meta: res || {} };
 }
 
@@ -1361,9 +1373,11 @@ function sh_taiDanhSachDon() {
   document.getElementById("sh-footer").style.display = "none";
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
   apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }, { allowDirectFallback: true }).then(function(res) {
+    var parsed = unwrapListResponse_(res);
+    var rows = parsed.rows;
     var countMoi = 0; var countDone = 0;
-    var html = '<option value="">-- Chọn đơn ('+res.length+') --</option>';
-    res.forEach(r => {
+    var html = '<option value="">-- Chọn đơn ('+rows.length+') --</option>';
+    rows.forEach(function(r) {
       if(r.trangThai === "Mới") countMoi++; else countDone++;
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';

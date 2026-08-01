@@ -2216,14 +2216,14 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
   var res = [];
   for (var key in map) res.push(map[key]);
   res.sort(function(a, b) { return (b.thoiGian || 0) - (a.thoiGian || 0); });
-  return {
-    success: true,
-    data: res,
-    _debugTotalMs: Date.now() - t0,
-    _debugScanned: scanned,
-    _debugFilter: bounds.filter,
-    _debugRun: "ql-fast-v1"
-  };
+  // Trả mảng thuần để tương thích FE cũ (res.forEach). Meta debug gắn kèm (JSON có thể bỏ qua).
+  try {
+    res._debugTotalMs = Date.now() - t0;
+    res._debugScanned = scanned;
+    res._debugFilter = bounds.filter;
+    res._debugRun = "ql-fast-v2";
+  } catch (metaErr) {}
+  return res;
 }
 
 function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
@@ -2348,7 +2348,7 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
   var t0 = Date.now();
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  if (!historySheet || !soPhieu) return { success: true, data: [], _debugRun: "ql-fast-v1" };
+  if (!historySheet || !soPhieu) return [];
   var wantStock = !(includeStock === false || includeStock === 0 || includeStock === "0" || includeStock === "false");
   var soPhieuTrim = String(soPhieu).trim();
   var selectedSet = {};
@@ -2386,14 +2386,14 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
     }
   }
 
-  return {
-    success: true,
-    data: matchedRows,
-    _debugTotalMs: Date.now() - t0,
-    _debugScanned: pack.scannedRows || 0,
-    _debugStock: wantStock,
-    _debugRun: "ql-fast-v1"
-  };
+  // Trả mảng thuần — tương thích FE cũ (rows.forEach / rows.filter)
+  try {
+    matchedRows._debugTotalMs = Date.now() - t0;
+    matchedRows._debugScanned = pack.scannedRows || 0;
+    matchedRows._debugStock = wantStock;
+    matchedRows._debugRun = "ql-fast-v2";
+  } catch (metaErr2) {}
+  return matchedRows;
 }
 
 function getStockMapForStore(ss, storeName) {
