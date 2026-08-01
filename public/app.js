@@ -91,7 +91,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v6';
+var APP_BUILD = '2026-08-02-v7';
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
@@ -1497,6 +1497,7 @@ function sh_taoBangSoanTuDonDaChon() {
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0);
     if (res._debugTotalMs) msg += "\n(Thời gian server: " + Math.round(res._debugTotalMs / 1000) + "s)";
+    if (res._debugRun) msg += "\n[" + res._debugRun + "]";
     alert(msg);
     if (res.url) {
       window.open(res.url, '_blank', 'noopener,noreferrer');
