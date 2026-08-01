@@ -142,6 +142,56 @@ function readHistoryForSelectedOrders_(historySheet, selectedSet, baseDateStr, m
   };
 }
 
+var STOCK_SHEET_CACHE_NAME = "__CACHE_STOCK_INDEX";
+
+function readStockIndexFromSheet_(ss, version) {
+  var sh = ss.getSheetByName(STOCK_SHEET_CACHE_NAME);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var meta = sh.getRange(1, 1, 1, 2).getValues()[0];
+  if (String(meta[0] || "") !== String(version)) return null;
+  var lastRow = sh.getLastRow();
+  var numRows = lastRow - 1;
+  if (numRows < 1) return null;
+  var data = sh.getRange(2, 1, numRows, 2).getValues();
+  var index = {};
+  for (var i = 0; i < data.length; i++) {
+    var storeKey = String(data[i][0] || "").trim();
+    var raw = data[i][1];
+    if (!storeKey || raw === "" || raw === null) continue;
+    try {
+      index[storeKey] = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch (e) {}
+  }
+  return Object.keys(index).length ? index : null;
+}
+
+function writeStockIndexToSheet_(ss, version, index) {
+  var sh = ss.getSheetByName(STOCK_SHEET_CACHE_NAME);
+  if (!sh) sh = ss.insertSheet(STOCK_SHEET_CACHE_NAME);
+  sh.clear();
+  sh.getRange(1, 1, 1, 2).setValues([[version, new Date()]]);
+  var storeKeys = Object.keys(index || {});
+  if (!storeKeys.length) return false;
+  var rows = [];
+  for (var i = 0; i < storeKeys.length; i++) {
+    var sk = storeKeys[i];
+    var json = JSON.stringify(index[sk] || {});
+    // Giới hạn cell ~50k; nếu quá dài thì bỏ qua map kho đó (hiếm)
+    if (json.length > 48000) {
+      var slim = {};
+      var codes = Object.keys(index[sk] || {});
+      for (var c = 0; c < codes.length && JSON.stringify(slim).length < 45000; c++) {
+        slim[codes[c]] = index[sk][codes[c]];
+      }
+      json = JSON.stringify(slim);
+    }
+    rows.push([sk, json]);
+  }
+  if (rows.length) sh.getRange(2, 1, rows.length, 2).setValues(rows);
+  try { SpreadsheetApp.flush(); } catch (e) {}
+  return true;
+}
+
 function getStockIndexCached_(ss, options) {
   options = options || {};
   ss = ss || getSS();
@@ -152,13 +202,17 @@ function getStockIndexCached_(ss, options) {
   var cache = getScriptCache_();
   var cached = getCacheJson_(cache, cacheKey);
   if (cached) return cached;
+  var sheetCached = readStockIndexFromSheet_(ss, version);
+  if (sheetCached) {
+    try { putCacheJson_(cache, cacheKey, sheetCached, CACHE_TTL_SECONDS); } catch (e) {}
+    return sheetCached;
+  }
   // onlyCached: không build trong request tạo bảng (tránh vượt timeout Vercel 60s)
   if (options.onlyCached) return null;
   var stockData = stockSheet.getDataRange().getValues();
   var index = getStockIndexByStore(stockData);
-  try {
-    putCacheJson_(cache, cacheKey, index, CACHE_TTL_SECONDS);
-  } catch (e) {}
+  try { putCacheJson_(cache, cacheKey, index, CACHE_TTL_SECONDS); } catch (e) {}
+  try { writeStockIndexToSheet_(ss, version, index); } catch (e2) {}
   return index;
 }
 
@@ -3378,7 +3432,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "fast-v9"
+    _debugRun: "fast-v10"
   };
 }
 
@@ -3513,7 +3567,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không tìm thấy dòng hàng của các đơn đã chọn trong lịch sử gần đây.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v9"
+      _debugRun: "fast-v10"
     };
   }
   if (!Object.keys(selectedSet).length) {
@@ -3522,7 +3576,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v9"
+      _debugRun: "fast-v10"
     };
   }
 
@@ -3589,7 +3643,7 @@ function taoBangSoanHangNgayMai(payload) {
       msg: "Không gom được mã hàng từ các đơn đã chọn.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v9",
+      _debugRun: "fast-v10",
       _debugInfo: { baseDateStr: baseDateStr, selectedList: Object.keys(selectedSet), scannedRows: historyPack.scannedRows || 0 }
     };
   }
@@ -3599,12 +3653,13 @@ function taoBangSoanHangNgayMai(payload) {
   });
   var activeMap = getActiveStoreMap();
 
-  // Chỉ dùng tồn đã cache — KHÔNG build trong request này (tránh Vercel 504 60s)
-  var stockIndex = getStockIndexCached_(ss, { onlyCached: true });
-  var stockReady = !!(stockIndex && typeof stockIndex === "object");
+  // Ưu tiên cache; nếu payload.forceStock=true thì được phép build (chỉ khi gọi thẳng GAS)
+  var forceStock = !!(payload && payload.forceStock);
+  var stockIndex = getStockIndexCached_(ss, { onlyCached: !forceStock });
+  var stockReady = !!(stockIndex && typeof stockIndex === "object" && Object.keys(stockIndex).length);
   if (!stockReady) stockIndex = {};
   // #region agent log
-  _dbgMark("stockIndex", { via: stockReady ? "cache-hit" : "cache-miss-skip-build", itemCount: keys.length });
+  _dbgMark("stockIndex", { via: stockReady ? (forceStock ? "built-or-cache" : "cache-hit") : "cache-miss", forceStock: forceStock, itemCount: keys.length });
   // #endregion
 
   var sheetName = "__TMP_SOAN_NGAY_MAI";
@@ -3703,22 +3758,38 @@ function taoBangSoanHangNgayMai(payload) {
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "fast-v9"
+    _debugRun: "fast-v10"
   };
 }
 
 function warmStockIndex() {
   var t0 = Date.now();
-  var index = getStockIndexCached_(getSS(), {});
-  var keys = index ? Object.keys(index).length : 0;
-  return { success: true, stores: keys, _debugRun: "fast-v9", _debugTotalMs: Date.now() - t0 };
+  var ss = getSS();
+  var index = getStockIndexCached_(ss, {});
+  var storeCount = index ? Object.keys(index).length : 0;
+  var status = getStockCacheStatus();
+  return {
+    success: true,
+    stores: storeCount,
+    ready: !!(status && status.ready),
+    cacheSource: status && status.source,
+    _debugRun: "fast-v10",
+    _debugTotalMs: Date.now() - t0
+  };
 }
 
 function getStockCacheStatus() {
   var ss = getSS();
   var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-  if (!stockSheet) return { success: true, ready: false, _debugRun: "fast-v9" };
+  if (!stockSheet) return { success: true, ready: false, source: "none", _debugRun: "fast-v10" };
   var version = String(stockSheet.getLastRow()) + "_" + String(stockSheet.getLastColumn());
   var cached = getCacheJson_(getScriptCache_(), CACHE_STOCK_INDEX_PREFIX + version);
-  return { success: true, ready: !!cached, _debugRun: "fast-v9" };
+  if (cached && Object.keys(cached).length) {
+    return { success: true, ready: true, source: "script-cache", stores: Object.keys(cached).length, _debugRun: "fast-v10" };
+  }
+  var sheetCached = readStockIndexFromSheet_(ss, version);
+  if (sheetCached && Object.keys(sheetCached).length) {
+    return { success: true, ready: true, source: "sheet-cache", stores: Object.keys(sheetCached).length, _debugRun: "fast-v10" };
+  }
+  return { success: true, ready: false, source: "none", _debugRun: "fast-v10" };
 }

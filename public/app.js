@@ -103,8 +103,8 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v10';
-var shStockWarmState = { ready: false, warming: false, lastMs: 0 };
+var APP_BUILD = '2026-08-02-v11';
+var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
@@ -1448,26 +1448,50 @@ function sh_taiDanhSachDonSoanChoBang() {
 }
 
 function sh_warmStockInBackground_() {
-  if (shStockWarmState.warming) return;
+  return sh_ensureStockReady_();
+}
+
+function sh_ensureStockReady_() {
+  if (shStockWarmState.ready) return Promise.resolve(true);
+  if (shStockWarmState.promise) return shStockWarmState.promise;
   shStockWarmState.warming = true;
   var summaryEl = document.getElementById('sh-order-picker-summary');
-  if (summaryEl) summaryEl.innerText = (summaryEl.innerText || '') + ' | Đang tải tồn kho nền (GET thẳng GAS)...';
-  // GET thẳng GAS — không qua Vercel proxy (tránh 504 60s)
-  apiGet('warmStockIndex', null, { directOnly: true, timeoutMs: 180000 }).then(function(w) {
-    shStockWarmState.warming = false;
-    shStockWarmState.ready = !!(w && w.success);
-    shStockWarmState.lastMs = (w && w._debugTotalMs) || 0;
-    dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun, stores: w && w.stores, via: 'direct-get' });
-    if (summaryEl) {
-      summaryEl.innerText = shStockWarmState.ready
-        ? ('Tồn kho sẵn sàng (' + Math.round(shStockWarmState.lastMs / 1000) + 's). Có thể xuất bảng có số tồn.')
-        : 'Tồn kho chưa sẵn sàng.';
-    }
-  }).catch(function(err) {
-    shStockWarmState.warming = false;
-    shStockWarmState.ready = false;
-    dbgSoanLine_('warmStock.error', { error: String(err && err.message || err), via: 'direct-get' });
-  });
+  if (summaryEl) summaryEl.innerText = 'Đang tải tồn kho (có thể 1–2 phút lần đầu)...';
+
+  shStockWarmState.promise = apiGet('getStockCacheStatus', null, { directOnly: true, timeoutMs: 30000 })
+    .then(function(st) {
+      if (st && st.ready) {
+        shStockWarmState.ready = true;
+        shStockWarmState.warming = false;
+        shStockWarmState.promise = null;
+        dbgSoanLine_('warmStock.alreadyReady', { source: st.source, stores: st.stores });
+        if (summaryEl) summaryEl.innerText = 'Tồn kho sẵn sàng (' + (st.source || 'cache') + ').';
+        return true;
+      }
+      // Build + lưu cache (ScriptCache + sheet) — GET thẳng GAS, không qua Vercel
+      return apiGet('warmStockIndex', null, { directOnly: true, timeoutMs: 180000 }).then(function(w) {
+        shStockWarmState.warming = false;
+        shStockWarmState.promise = null;
+        shStockWarmState.ready = !!(w && w.success && (w.ready !== false));
+        shStockWarmState.lastMs = (w && w._debugTotalMs) || 0;
+        dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun, stores: w && w.stores, ready: shStockWarmState.ready, source: w && w.cacheSource, via: 'direct-get' });
+        if (summaryEl) {
+          summaryEl.innerText = shStockWarmState.ready
+            ? ('Tồn kho sẵn sàng (' + Math.round(shStockWarmState.lastMs / 1000) + 's).')
+            : 'Tồn kho chưa lưu được cache — sẽ thử force khi xuất bảng.';
+        }
+        return shStockWarmState.ready;
+      });
+    })
+    .catch(function(err) {
+      shStockWarmState.warming = false;
+      shStockWarmState.promise = null;
+      shStockWarmState.ready = false;
+      dbgSoanLine_('warmStock.error', { error: String(err && err.message || err), via: 'direct-get' });
+      if (summaryEl) summaryEl.innerText = 'Lỗi tải tồn kho: ' + String(err && err.message || err);
+      return false;
+    });
+  return shStockWarmState.promise;
 }
 
 function sh_chonTatCaDonSoan(checked) {
@@ -1504,44 +1528,48 @@ function sh_taoBangSoanTuDonDaChon() {
     return;
   }
 
-  showLoad(shStockWarmState.ready ? "Đang tạo bảng soạn (có tồn kho)..." : "Đang tạo bảng soạn nhanh...");
-  // #region agent log
   var _dbgSoanStart = Date.now();
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length,stockReady:shStockWarmState.ready,via:'proxy'},timestamp:Date.now(),hypothesisId:'Vercel60',runId:'post-fix-v9'})}).catch(function(){});
-  // #endregion
-  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD, via: 'proxy', stockReady: shStockWarmState.ready });
-  // Timeout client < 60s Vercel để báo lỗi rõ, không treo
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {
+  showLoad("Bước 1/2: Đang tải tồn kho...");
+  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD });
+
+  sh_ensureStockReady_().then(function(stockOk) {
+    showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (có tồn kho)..." : "Bước 2/2: Đang tạo bảng (force tồn kho qua GAS)...");
+    dbgSoanLine_('taoBangSoan.afterWarm', { stockOk: stockOk, warmMs: Date.now() - _dbgSoanStart });
+    // forceStock=true nếu warm chưa ready — POST text/plain thẳng GAS (không bị Vercel 60s)
+    var payload = {
+      ngay: ngay,
+      actor: sessionUser.user,
+      userRole: sessionUser.role || '',
+      userStore: sessionUser.store || '',
+      selectedOrders: selectedOrders,
+      forceStock: !stockOk
+    };
+    var postOpts = stockOk
+      ? { allowDirectFallback: true, timeoutMs: 55000 }
+      : { directOnly: true, timeoutMs: 180000 };
+    return apiPost('taoBangSoanHangNgayMai', payload, postOpts);
+  }).then(function(res) {
     hideLoad();
-    // #region agent log
     var _dbgClientMs = Date.now() - _dbgSoanStart;
     dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, build: APP_BUILD, steps: res && res._debugTimings });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,stockReady:res&&res.stockReady},timestamp:Date.now(),hypothesisId:'Vercel60',runId:'post-fix-v9'})}).catch(function(){});
-    // #endregion
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại:\n" + ((res && (res.msg || res.error)) || "Không rõ lỗi") + "\n[Build FE: " + APP_BUILD + "]" + (res && res._debugRun ? (" [GAS: " + res._debugRun + "]") : ""));
       return;
     }
+    if (res.stockReady) shStockWarmState.ready = true;
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
-      "- Tồn kho: " + (res.stockReady ? "có (cache)" : "chưa — đợi dòng 'Tồn kho sẵn sàng' rồi tạo lại");
-    if (res._debugTotalMs) msg += "\n(Thời gian server: " + Math.round(res._debugTotalMs / 1000) + "s)";
-    msg += "\n[fast-v9 / " + APP_BUILD + "]";
+      "- Tồn kho: " + (res.stockReady ? "CÓ" : "KHÔNG có — kiểm tra sheet TỔNG HỢP TỒN KHO");
+    if (res._debugTotalMs) msg += "\n(Server tạo bảng: " + Math.round(res._debugTotalMs / 1000) + "s)";
+    msg += "\n(Tổng chờ: " + Math.round(_dbgClientMs / 1000) + "s)\n[fast-v10 / " + APP_BUILD + "]";
     alert(msg);
     if (res.url) window.open(res.url, '_blank', 'noopener,noreferrer');
-    if (!res.stockReady) sh_warmStockInBackground_();
   }).catch(function(err) {
     hideLoad();
-    dbgSoanLine_('taoBangSoan.error', { clientMs: Date.now() - _dbgSoanStart, error: String(err && err.message || err), build: APP_BUILD, via: 'proxy' });
-    var m = String(err && err.message || err);
-    if (m.indexOf('504') !== -1 || m.indexOf('TIMEOUT') !== -1 || m.indexOf('Hết thời gian') !== -1) {
-      alert('Lỗi timeout Vercel (60s).\nHãy đợi "Tồn kho sẵn sàng" trên màn hình rồi bấm Xuất bảng lại.\nChi tiết: ' + m);
-      sh_warmStockInBackground_();
-      return;
-    }
-    alert('Lỗi: ' + m);
+    dbgSoanLine_('taoBangSoan.error', { clientMs: Date.now() - _dbgSoanStart, error: String(err && err.message || err), build: APP_BUILD });
+    alert('Lỗi: ' + (err && err.message || err));
   });
 }
 
