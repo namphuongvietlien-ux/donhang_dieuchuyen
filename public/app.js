@@ -1,25 +1,35 @@
 // API helpers
 const GAS_EXEC_URL = 'https://script.google.com/macros/s/AKfycbwhqeAzzNrPTm1cH7KMmmj44btXb2OL835xxaItHByohT11sLDrdgfw7BrVlI5txqXonw/exec';
 
-async function callJsonApi(urls, options) {
+async function callJsonApi(urls, options, timeoutMs) {
   let lastError = null;
   const uniqueUrls = Array.isArray(urls) ? urls.filter(function(u, i, arr) { return u && arr.indexOf(u) === i; }) : [urls];
   for (const target of uniqueUrls) {
+    const controller = new AbortController();
+    const ms = timeoutMs || 120000;
+    const timer = setTimeout(function() { controller.abort(); }, ms);
+    const reqOptions = Object.assign({}, options || {}, { signal: controller.signal });
     try {
-      const res = await fetch(target, options);
+      const res = await fetch(target, reqOptions);
+      clearTimeout(timer);
       const txt = await res.text();
       if (!res.ok) {
-        lastError = new Error('HTTP ' + res.status + ': ' + txt);
+        lastError = new Error('HTTP ' + res.status + ': ' + txt.slice(0, 200));
         continue;
       }
       try {
         return JSON.parse(txt);
       } catch (e) {
-        lastError = new Error('Invalid JSON response from ' + target + ': ' + txt);
+        lastError = new Error('Invalid JSON response from ' + target + ': ' + txt.slice(0, 200));
         continue;
       }
     } catch (err) {
-      lastError = err;
+      clearTimeout(timer);
+      if (err && err.name === 'AbortError') {
+        lastError = new Error('Hết thời gian chờ (' + Math.round(ms / 1000) + 's). Kiểm tra deploy code.gs lên Google Apps Script.');
+      } else {
+        lastError = err;
+      }
     }
   }
   throw lastError || new Error('Không thể kết nối tới máy chủ');
@@ -59,7 +69,7 @@ async function apiGet(action, params, options) {
     }
     urls.push(directUrl.toString());
   }
-  return callJsonApi(urls, { method: 'GET', headers: { 'Accept': 'application/json' } });
+  return callJsonApi(urls, { method: 'GET', headers: { 'Accept': 'application/json' } }, options.timeoutMs);
 }
 
 async function apiPost(action, payload, options) {
@@ -73,7 +83,7 @@ async function apiPost(action, payload, options) {
     urls = ['/api/gas-proxy'];
     if (options.allowDirectFallback !== false) urls.push(GAS_EXEC_URL);
   }
-  return callJsonApi(urls, reqOptions);
+  return callJsonApi(urls, reqOptions, options.timeoutMs || 180000);
 }
 
 function showLoginError(message) {
@@ -81,7 +91,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v3';
+var APP_BUILD = '2026-08-02-v4';
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
