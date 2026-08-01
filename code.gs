@@ -53,6 +53,80 @@ function readHistoryDataPack_(historySheet, maxRows) {
   return { data: data, startRow: startRow };
 }
 
+function getCacheJson_(cache, key) {
+  if (!cache) return null;
+  var raw = cache.get(key);
+  if (raw) {
+    try { return JSON.parse(raw); } catch (e) {}
+  }
+  var n = cache.get(key + "_n");
+  if (!n) return null;
+  var parts = [];
+  var num = Number(n) || 0;
+  for (var i = 0; i < num; i++) {
+    var part = cache.get(key + "_" + i);
+    if (part === null) return null;
+    parts.push(part);
+  }
+  try { return JSON.parse(parts.join("")); } catch (e) { return null; }
+}
+
+function putCacheJson_(cache, key, obj, ttl) {
+  if (!cache) return;
+  var json = JSON.stringify(obj);
+  if (json.length < 95000) {
+    cache.put(key, json, ttl);
+    return;
+  }
+  var chunkSize = 90000;
+  var numChunks = Math.ceil(json.length / chunkSize);
+  cache.put(key + "_n", String(numChunks), ttl);
+  for (var ci = 0; ci < numChunks; ci++) {
+    cache.put(key + "_" + ci, json.substring(ci * chunkSize, (ci + 1) * chunkSize), ttl);
+  }
+}
+
+function readHistoryForSelectedOrders_(historySheet, selectedSet, baseDateStr, maxScanRows) {
+  maxScanRows = maxScanRows || 4000;
+  var chunkSize = 1200;
+  var lastRow = historySheet.getLastRow();
+  var lastCol = Math.max(historySheet.getLastColumn(), 16);
+  if (lastRow < 2) return { data: [[]], startRow: 2 };
+
+  var needOrders = {};
+  for (var nk in selectedSet) {
+    if (selectedSet.hasOwnProperty(nk)) needOrders[nk] = true;
+  }
+  var matchedRows = [];
+  var scanned = 0;
+  var endRow = lastRow;
+
+  while (endRow >= 2 && scanned < maxScanRows) {
+    var startRow = Math.max(2, endRow - chunkSize + 1);
+    var numRows = endRow - startRow + 1;
+    if (scanned + numRows > maxScanRows) {
+      startRow = Math.max(2, endRow - (maxScanRows - scanned) + 1);
+      numRows = endRow - startRow + 1;
+    }
+    var body = historySheet.getRange(startRow, 1, endRow, lastCol).getValues();
+    for (var i = 0; i < body.length; i++) {
+      var row = body[i];
+      if (!row) continue;
+      if (!matchesNgayFilter(row[0], baseDateStr)) continue;
+      var soPhieu = row[1] ? String(row[1]).trim() : "";
+      if (!soPhieu || !selectedSet[soPhieu]) continue;
+      matchedRows.push({ row: row, order: startRow + i });
+    }
+    scanned += numRows;
+    endRow = startRow - 1;
+  }
+
+  matchedRows.sort(function(a, b) { return a.order - b.order; });
+  var data = [[]];
+  for (var m = 0; m < matchedRows.length; m++) data.push(matchedRows[m].row);
+  return { data: data, startRow: matchedRows.length ? matchedRows[0].order : 2, scannedRows: scanned, matchedRows: matchedRows.length };
+}
+
 function getStockIndexCached_(ss) {
   ss = ss || getSS();
   var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
@@ -60,15 +134,12 @@ function getStockIndexCached_(ss) {
   var version = String(stockSheet.getLastRow()) + "_" + String(stockSheet.getLastColumn());
   var cacheKey = CACHE_STOCK_INDEX_PREFIX + version;
   var cache = getScriptCache_();
-  var cached = cache.get(cacheKey);
-  if (cached) {
-    try { return JSON.parse(cached); } catch (e) {}
-  }
+  var cached = getCacheJson_(cache, cacheKey);
+  if (cached) return cached;
   var stockData = stockSheet.getDataRange().getValues();
   var index = getStockIndexByStore(stockData);
   try {
-    var json = JSON.stringify(index);
-    if (json.length < 95000) cache.put(cacheKey, json, CACHE_TTL_SECONDS);
+    putCacheJson_(cache, cacheKey, index, CACHE_TTL_SECONDS);
   } catch (e) {}
   return index;
 }
@@ -3151,47 +3222,108 @@ function getPartialStockIndexForItems_(ss, itemMap, keys) {
   }
   if (!Object.keys(neededCodes).length || !Object.keys(neededStores).length) return {};
 
-  var stockData = stockSheet.getDataRange().getValues();
+  var lastRow = stockSheet.getLastRow();
+  var lastCol = stockSheet.getLastColumn();
+  if (lastRow < 2) return {};
+
+  var headerRows = Math.min(20, lastRow);
+  var headerData = stockSheet.getRange(1, 1, headerRows, lastCol).getValues();
+  var stockConfig = getStockSheetConfig(headerData);
+  var header = headerData[stockConfig.headerIndex] || [];
+
+  var colSet = {};
+  colSet[stockConfig.maHangIdx] = true;
+  colSet[stockConfig.maVachIdx] = true;
+  colSet[stockConfig.tonKhoIdx] = true;
+  if (stockConfig.storeIndexes) {
+    for (var si = 0; si < stockConfig.storeIndexes.length; si++) colSet[stockConfig.storeIndexes[si]] = true;
+  }
+  if (stockConfig.storeHeaderIndexes) {
+    for (var hi = 0; hi < stockConfig.storeHeaderIndexes.length; hi++) {
+      var hIdx = stockConfig.storeHeaderIndexes[hi];
+      var storeName = getCellValue(header, hIdx, "");
+      var storeKey = getCanonicalStoreKey(storeName);
+      if (storeKey && neededStores[storeKey]) colSet[hIdx] = true;
+    }
+  }
+  var colList = [];
+  for (var ck in colSet) {
+    if (colSet.hasOwnProperty(ck) && colSet[ck] !== false) colList.push(Number(ck));
+  }
+  colList.sort(function(a, b) { return a - b; });
+  if (!colList.length) return {};
+
+  var minCol = colList[0] + 1;
+  var maxCol = colList[colList.length - 1] + 1;
+  var colOffset = minCol - 1;
+  var relMaHang = stockConfig.maHangIdx - colOffset;
+  var relMaVach = stockConfig.maVachIdx - colOffset;
+  var relTonKho = stockConfig.tonKhoIdx - colOffset;
+  var relStoreIndexes = (stockConfig.storeIndexes || []).map(function(idx) { return idx - colOffset; });
+  var relStoreHeaderIndexes = [];
+  if (stockConfig.storeHeaderIndexes) {
+    for (var rh = 0; rh < stockConfig.storeHeaderIndexes.length; rh++) {
+      var origIdx = stockConfig.storeHeaderIndexes[rh];
+      if (!colSet[origIdx]) continue;
+      relStoreHeaderIndexes.push({ relIdx: origIdx - colOffset, origIdx: origIdx });
+    }
+  }
+
+  var slimConfig = {
+    startRow: stockConfig.startRow,
+    headerIndex: stockConfig.headerIndex,
+    maHangIdx: relMaHang,
+    maVachIdx: relMaVach,
+    tonKhoIdx: relTonKho,
+    storeIndexes: relStoreIndexes,
+    storeHeaderIndexes: relStoreHeaderIndexes.map(function(x) { return x.relIdx; })
+  };
+
   var index = {};
-  var stockConfig = getStockSheetConfig(stockData);
-  var header = stockData[stockConfig.headerIndex] || [];
   var currentMaHang = "";
   var currentMaVach = "";
-  for (var i = stockConfig.startRow; i < stockData.length; i++) {
-    var row = stockData[i];
-    if (!row) continue;
-    var rowMaHangRaw = getCellValue(row, stockConfig.maHangIdx, "");
-    var rowMaVachRaw = getCellValue(row, stockConfig.maVachIdx, "");
-    var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
-    if (hasOwnCode) {
-      currentMaHang = rowMaHangRaw;
-      currentMaVach = rowMaVachRaw;
-    }
-    var maHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
-    var maVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
-    if (!rowCodesMatchNeeded_(maHang, maVach, neededCodes)) continue;
+  var dataStartRow = stockConfig.startRow + 1;
+  var chunkSize = 2500;
 
-    var storedAny = false;
-    if (stockConfig.storeHeaderIndexes && stockConfig.storeHeaderIndexes.length) {
-      for (var c = 0; c < stockConfig.storeHeaderIndexes.length; c++) {
-        var storeHeaderIdx = stockConfig.storeHeaderIndexes[c];
-        var store = getCellValue(header, storeHeaderIdx, "");
-        if (!store) continue;
-        var qty = parseQuantityValue(row[storeHeaderIdx]);
-        if (qty === 0) continue;
-        var storeKey = getCanonicalStoreKey(store);
-        addStockToIndexFiltered_(index, storeKey, maHang, maVach, qty, neededCodes, neededStores);
-        storedAny = storedAny || !!(storeKey && neededStores[storeKey] && qty);
+  for (var startRow = dataStartRow; startRow <= lastRow; startRow += chunkSize) {
+    var endRow = Math.min(lastRow, startRow + chunkSize - 1);
+    var body = stockSheet.getRange(startRow, minCol, endRow, maxCol).getValues();
+    for (var i = 0; i < body.length; i++) {
+      var row = body[i];
+      if (!row) continue;
+      var rowMaHangRaw = getCellValue(row, slimConfig.maHangIdx, "");
+      var rowMaVachRaw = getCellValue(row, slimConfig.maVachIdx, "");
+      var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
+      if (hasOwnCode) {
+        currentMaHang = rowMaHangRaw;
+        currentMaVach = rowMaVachRaw;
       }
-    }
-    if (storedAny) continue;
+      var maHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
+      var maVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
+      if (!rowCodesMatchNeeded_(maHang, maVach, neededCodes)) continue;
 
-    var stores = getRowStoreNames(row, stockConfig);
-    var qty = parseQuantityValue(row[stockConfig.tonKhoIdx]);
-    if (qty === 0 || !stores.length) continue;
-    for (var s = 0; s < stores.length; s++) {
-      var storeKey = getCanonicalStoreKey(stores[s]);
-      addStockToIndexFiltered_(index, storeKey, maHang, maVach, qty, neededCodes, neededStores);
+      var storedAny = false;
+      if (slimConfig.storeHeaderIndexes && slimConfig.storeHeaderIndexes.length) {
+        for (var c = 0; c < slimConfig.storeHeaderIndexes.length; c++) {
+          var storeHeaderIdx = slimConfig.storeHeaderIndexes[c];
+          var store = getCellValue(header, colOffset + storeHeaderIdx, "");
+          if (!store) continue;
+          var qty = parseQuantityValue(row[storeHeaderIdx]);
+          if (qty === 0) continue;
+          var storeKey = getCanonicalStoreKey(store);
+          addStockToIndexFiltered_(index, storeKey, maHang, maVach, qty, neededCodes, neededStores);
+          storedAny = storedAny || !!(storeKey && neededStores[storeKey] && qty);
+        }
+      }
+      if (storedAny) continue;
+
+      var stores = getRowStoreNames(row, slimConfig);
+      var qty2 = parseQuantityValue(row[slimConfig.tonKhoIdx]);
+      if (qty2 === 0 || !stores.length) continue;
+      for (var s = 0; s < stores.length; s++) {
+        var storeKey2 = getCanonicalStoreKey(stores[s]);
+        addStockToIndexFiltered_(index, storeKey2, maHang, maVach, qty2, neededCodes, neededStores);
+      }
     }
   }
   return index;
@@ -3309,10 +3441,26 @@ function taoBangSoanHangNgayMai(payload) {
   var userRole = payload && payload.userRole ? payload.userRole : "";
   var userStore = payload && payload.userStore ? payload.userStore : "";
   var selectedOrdersRaw = payload && payload.selectedOrders && payload.selectedOrders.length ? payload.selectedOrders : [];
-  var historyLimit = selectedOrdersRaw.length ? 5000 : 8000;
-  var historyPack = readHistoryDataPack_(historySheet, historyLimit);
+  var selectedSetEarly = {};
+  if (selectedOrdersRaw.length) {
+    for (var so0 = 0; so0 < selectedOrdersRaw.length; so0++) {
+      var pick0 = String(selectedOrdersRaw[so0] || "").trim();
+      if (pick0) selectedSetEarly[pick0] = true;
+    }
+  }
+  var historyPack;
+  if (Object.keys(selectedSetEarly).length) {
+    historyPack = readHistoryForSelectedOrders_(historySheet, selectedSetEarly, baseDateStr, 4000);
+  } else {
+    historyPack = readHistoryDataPack_(historySheet, 8000);
+  }
   // #region agent log
-  _dbgMark("readHistory", { historyRows: historyPack.data ? historyPack.data.length - 1 : 0, startRow: historyPack.startRow });
+  _dbgMark("readHistory", {
+    historyRows: historyPack.data ? historyPack.data.length - 1 : 0,
+    startRow: historyPack.startRow,
+    scannedRows: historyPack.scannedRows || 0,
+    targeted: !!Object.keys(selectedSetEarly).length
+  });
   // #endregion
   var data = historyPack.data;
   if (!data || data.length < 2) throw new Error("Chưa có dữ liệu đơn hàng để tổng hợp.");
@@ -3507,6 +3655,7 @@ function taoBangSoanHangNgayMai(payload) {
     missingItems: missingLines,
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
-    _debugTotalMs: _dbgTotalMs
+    _debugTotalMs: _dbgTotalMs,
+    _debugRun: "post-fix-v2"
   };
 }

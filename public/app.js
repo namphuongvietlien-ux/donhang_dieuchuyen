@@ -55,8 +55,13 @@ async function apiPost(action, payload, options) {
   options = options || {};
   const body = { action: action, payload: payload };
   const reqOptions = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-  const urls = ['/api/gas-proxy'];
-  if (options.allowDirectFallback !== false) urls.push(GAS_EXEC_URL);
+  let urls;
+  if (options.directOnly) {
+    urls = [GAS_EXEC_URL];
+  } else {
+    urls = ['/api/gas-proxy'];
+    if (options.allowDirectFallback !== false) urls.push(GAS_EXEC_URL);
+  }
   return callJsonApi(urls, reqOptions);
 }
 
@@ -1418,17 +1423,19 @@ function sh_taoBangSoanTuDonDaChon() {
   showLoad("Đang tạo bảng soạn hàng...");
   // #region agent log
   var _dbgSoanStart = Date.now();
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length,directOnly:true},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v2'})}).catch(function(){});
   // #endregion
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: true }).then(function(res) {
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { directOnly: true }).then(function(res) {
     hideLoad();
     // #region agent log
     var _dbgClientMs = Date.now() - _dbgSoanStart;
-    console.log('[debug] taoBangSoan', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, steps: res && res._debugTimings });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,steps:res&&res._debugTimings},timestamp:Date.now(),hypothesisId:'A-D',runId:'post-fix'})}).catch(function(){});
+    console.log('[debug] taoBangSoan', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, steps: res && res._debugTimings });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,steps:res&&res._debugTimings},timestamp:Date.now(),hypothesisId:'A-D',runId:'post-fix-v2'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
-      alert("❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi"));
+      var failMsg = "❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi");
+      if (res && res._debugTotalMs) failMsg += "\n(Server: " + Math.round(res._debugTotalMs / 1000) + "s)";
+      alert(failMsg);
       return;
     }
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
@@ -1443,7 +1450,7 @@ function sh_taoBangSoanTuDonDaChon() {
   }).catch(function(err) {
     hideLoad();
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan error',data:{clientMs:Date.now()-_dbgSoanStart,error:String(err&&err.message||err)},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan error',data:{clientMs:Date.now()-_dbgSoanStart,error:String(err&&err.message||err)},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v2'})}).catch(function(){});
     // #endregion
     alert('Lỗi: ' + err.message);
   });
