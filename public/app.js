@@ -1416,8 +1416,17 @@ function sh_taoBangSoanTuDonDaChon() {
   }
 
   showLoad("Đang tạo bảng soạn hàng...");
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: false }).then(function(res) {
+  // #region agent log
+  var _dbgSoanStart = Date.now();
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix'})}).catch(function(){});
+  // #endregion
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: true }).then(function(res) {
     hideLoad();
+    // #region agent log
+    var _dbgClientMs = Date.now() - _dbgSoanStart;
+    console.log('[debug] taoBangSoan', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, steps: res && res._debugTimings });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,steps:res&&res._debugTimings},timestamp:Date.now(),hypothesisId:'A-D',runId:'post-fix'})}).catch(function(){});
+    // #endregion
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi"));
       return;
@@ -1426,12 +1435,16 @@ function sh_taoBangSoanTuDonDaChon() {
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0);
+    if (res._debugTotalMs) msg += "\n(Thời gian server: " + Math.round(res._debugTotalMs / 1000) + "s)";
     alert(msg);
     if (res.url) {
       window.open(res.url, '_blank', 'noopener,noreferrer');
     }
   }).catch(function(err) {
     hideLoad();
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan error',data:{clientMs:Date.now()-_dbgSoanStart,error:String(err&&err.message||err)},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix'})}).catch(function(){});
+    // #endregion
     alert('Lỗi: ' + err.message);
   });
 }

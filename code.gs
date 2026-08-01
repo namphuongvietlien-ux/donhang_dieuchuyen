@@ -2660,6 +2660,15 @@ function recreateTempSheet(ss, sheetName, legacyPrefixes) {
   return ss.insertSheet(sheetName);
 }
 
+function recreateTempSheetFast_(ss, sheetName) {
+  var existing = ss.getSheetByName(sheetName);
+  if (existing) {
+    existing.clear();
+    return existing;
+  }
+  return ss.insertSheet(sheetName);
+}
+
 function taoFileExcelVaLayLink(payload) {
   var ss = getSS();
   var catalogLookup = getCatalogLookup(ss);
@@ -3087,6 +3096,107 @@ function getStockIndexByStore(stockData) {
   return index;
 }
 
+function rowCodesMatchNeeded_(maHang, maVach, neededCodes) {
+  if (maHang && neededCodes[maHang]) return true;
+  if (maVach && neededCodes[maVach]) return true;
+  if (maHang) {
+    var c = normalizeNumericCode(maHang);
+    if (c && neededCodes[c]) return true;
+  }
+  if (maVach) {
+    var c2 = normalizeNumericCode(maVach);
+    if (c2 && neededCodes[c2]) return true;
+  }
+  return false;
+}
+
+function addStockToIndexFiltered_(index, storeKey, maHang, maVach, qty, neededCodes, neededStores) {
+  if (!storeKey || !neededStores[storeKey] || !qty) return;
+  if (!rowCodesMatchNeeded_(maHang, maVach, neededCodes)) return;
+  if (!index[storeKey]) index[storeKey] = {};
+  if (maHang) {
+    index[storeKey][maHang] = (index[storeKey][maHang] || 0) + qty;
+    var maHangCompact = normalizeNumericCode(maHang);
+    if (maHangCompact && maHangCompact !== maHang) index[storeKey][maHangCompact] = (index[storeKey][maHangCompact] || 0) + qty;
+  }
+  if (maVach) {
+    index[storeKey][maVach] = (index[storeKey][maVach] || 0) + qty;
+    var maVachCompact = normalizeNumericCode(maVach);
+    if (maVachCompact && maVachCompact !== maVach) index[storeKey][maVachCompact] = (index[storeKey][maVachCompact] || 0) + qty;
+  }
+}
+
+function getPartialStockIndexForItems_(ss, itemMap, keys) {
+  ss = ss || getSS();
+  var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!stockSheet || !keys || !keys.length) return {};
+
+  var neededCodes = {};
+  var neededStores = {};
+  for (var ki = 0; ki < keys.length; ki++) {
+    var it = itemMap[keys[ki]];
+    if (!it) continue;
+    if (it.maHang) {
+      var mh = normalizeProductCode(it.maHang);
+      if (mh) neededCodes[mh] = true;
+    }
+    if (it.maVach) {
+      var mv = normalizeProductCode(it.maVach);
+      if (mv) neededCodes[mv] = true;
+    }
+    for (var src in it.sourceStores) {
+      var sk = getCanonicalStoreKey(src);
+      if (sk) neededStores[sk] = true;
+    }
+  }
+  if (!Object.keys(neededCodes).length || !Object.keys(neededStores).length) return {};
+
+  var stockData = stockSheet.getDataRange().getValues();
+  var index = {};
+  var stockConfig = getStockSheetConfig(stockData);
+  var header = stockData[stockConfig.headerIndex] || [];
+  var currentMaHang = "";
+  var currentMaVach = "";
+  for (var i = stockConfig.startRow; i < stockData.length; i++) {
+    var row = stockData[i];
+    if (!row) continue;
+    var rowMaHangRaw = getCellValue(row, stockConfig.maHangIdx, "");
+    var rowMaVachRaw = getCellValue(row, stockConfig.maVachIdx, "");
+    var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
+    if (hasOwnCode) {
+      currentMaHang = rowMaHangRaw;
+      currentMaVach = rowMaVachRaw;
+    }
+    var maHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
+    var maVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
+    if (!rowCodesMatchNeeded_(maHang, maVach, neededCodes)) continue;
+
+    var storedAny = false;
+    if (stockConfig.storeHeaderIndexes && stockConfig.storeHeaderIndexes.length) {
+      for (var c = 0; c < stockConfig.storeHeaderIndexes.length; c++) {
+        var storeHeaderIdx = stockConfig.storeHeaderIndexes[c];
+        var store = getCellValue(header, storeHeaderIdx, "");
+        if (!store) continue;
+        var qty = parseQuantityValue(row[storeHeaderIdx]);
+        if (qty === 0) continue;
+        var storeKey = getCanonicalStoreKey(store);
+        addStockToIndexFiltered_(index, storeKey, maHang, maVach, qty, neededCodes, neededStores);
+        storedAny = storedAny || !!(storeKey && neededStores[storeKey] && qty);
+      }
+    }
+    if (storedAny) continue;
+
+    var stores = getRowStoreNames(row, stockConfig);
+    var qty = parseQuantityValue(row[stockConfig.tonKhoIdx]);
+    if (qty === 0 || !stores.length) continue;
+    for (var s = 0; s < stores.length; s++) {
+      var storeKey = getCanonicalStoreKey(stores[s]);
+      addStockToIndexFiltered_(index, storeKey, maHang, maVach, qty, neededCodes, neededStores);
+    }
+  }
+  return index;
+}
+
 function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
   var dateObj = parseDateInputYYYYMMDD(ngayYYYYMMDD);
   if (!dateObj) {
@@ -3170,6 +3280,21 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
 }
 
 function taoBangSoanHangNgayMai(payload) {
+  // #region agent log
+  var _dbgT0 = Date.now();
+  var _dbgSteps = [];
+  function _dbgMark(step, extra) {
+    var entry = { step: step, ms: Date.now() - _dbgT0 };
+    if (extra) {
+      for (var ek in extra) {
+        if (extra.hasOwnProperty(ek)) entry[ek] = extra[ek];
+      }
+    }
+    _dbgSteps.push(entry);
+  }
+  _dbgMark("start", { selectedCount: payload && payload.selectedOrders ? payload.selectedOrders.length : 0 });
+  // #endregion
+
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) throw new Error("Không tìm thấy sheet Lịch Sử Xuất Kho.");
@@ -3183,11 +3308,15 @@ function taoBangSoanHangNgayMai(payload) {
 
   var userRole = payload && payload.userRole ? payload.userRole : "";
   var userStore = payload && payload.userStore ? payload.userStore : "";
-  var historyPack = readHistoryDataPack_(historySheet, 12000);
+  var selectedOrdersRaw = payload && payload.selectedOrders && payload.selectedOrders.length ? payload.selectedOrders : [];
+  var historyLimit = selectedOrdersRaw.length ? 5000 : 8000;
+  var historyPack = readHistoryDataPack_(historySheet, historyLimit);
+  // #region agent log
+  _dbgMark("readHistory", { historyRows: historyPack.data ? historyPack.data.length - 1 : 0, startRow: historyPack.startRow });
+  // #endregion
   var data = historyPack.data;
   if (!data || data.length < 2) throw new Error("Chưa có dữ liệu đơn hàng để tổng hợp.");
 
-  var selectedOrdersRaw = payload && payload.selectedOrders && payload.selectedOrders.length ? payload.selectedOrders : [];
   var selectedSet = {};
   if (selectedOrdersRaw.length) {
     for (var so = 0; so < selectedOrdersRaw.length; so++) {
@@ -3202,8 +3331,11 @@ function taoBangSoanHangNgayMai(payload) {
   }
 
   var selectedOrderCount = Object.keys(selectedSet).length;
+  // #region agent log
+  _dbgMark("selectedSet", { selectedOrderCount: selectedOrderCount });
+  // #endregion
   if (!selectedOrderCount) {
-    return { success: false, msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính." };
+    return { success: false, msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính.", _debugTimings: _dbgSteps, _debugTotalMs: Date.now() - _dbgT0 };
   }
 
   var itemMap = {};
@@ -3264,28 +3396,34 @@ function taoBangSoanHangNgayMai(payload) {
   var keys = [];
   for (var key in itemMap) keys.push(key);
   if (!keys.length) {
-    return { success: false, msg: "Không có đơn hợp lệ trong ngày đã chọn để tạo bảng soạn." };
+    return { success: false, msg: "Không có đơn hợp lệ trong ngày đã chọn để tạo bảng soạn.", _debugTimings: _dbgSteps, _debugTotalMs: Date.now() - _dbgT0 };
   }
+
+  // #region agent log
+  _dbgMark("aggregateItems", { itemCount: keys.length, storeCount: storeList.length });
+  // #endregion
 
   storeList.sort(function(a, b) {
     return formatShortStoreLabel(a).localeCompare(formatShortStoreLabel(b));
   });
 
-  var stockIndex = getStockIndexCached_(ss);
+  // #region agent log
+  var _stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  // #endregion
+  var stockIndex = getPartialStockIndexForItems_(ss, itemMap, keys);
+  // #region agent log
+  _dbgMark("stockIndex", { partialStock: true, neededItemCount: keys.length, stockSheetRows: _stockSheet ? _stockSheet.getLastRow() : 0 });
+  // #endregion
   var activeMap = getActiveStoreMap();
 
   var sheetName = "__TMP_SOAN_NGAY_MAI";
-  var reportSheet = recreateTempSheet(ss, sheetName, ["SoanNgayMai_"]);
+  var reportSheet = recreateTempSheetFast_(ss, sheetName);
+  // #region agent log
+  _dbgMark("recreateTempSheet", { sheetName: sheetName });
+  // #endregion
 
   var title = "BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy");
-  reportSheet.getRange(1, 1, 3, 1).setValues([
-    [title],
-    ["Nguồn dữ liệu: Đơn tạo ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã để 1 lượt lấy đủ cho tất cả đơn."],
-    ["Quy trình gợi ý: 1) In tab này 2) Đi theo từng mã từ trên xuống 3) Lấy đủ theo cột Tổng đặt 4) Chia theo cột Q7/Q8/PH... 5) Mã thiếu xử lý theo cột Đề xuất."]
-  ]);
-  reportSheet.getRange(1, 1).setFontSize(14).setFontWeight("bold");
-  reportSheet.getRange(2, 1).setFontStyle("italic");
-
+  var headerRow = 5;
   var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock khả dụng", "Tổng đặt"];
   for (var h = 0; h < storeList.length; h++) {
     headers.push(formatShortStoreLabel(storeList[h]));
@@ -3294,12 +3432,7 @@ function taoBangSoanHangNgayMai(payload) {
   headers.push("Đề xuất xử lý thiếu");
   headers.push("Kho xuất");
 
-  var headerRow = 5;
-  reportSheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
-  reportSheet.setFrozenRows(headerRow);
-
   var rows = [];
-  var backgrounds = [];
   var missingLines = 0;
   var warningCol = 8 + storeList.length;
 
@@ -3333,17 +3466,6 @@ function taoBangSoanHangNgayMai(payload) {
     rowOut.push(deXuat);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));
     rows.push(rowOut);
-
-    var rowBg = [];
-    for (var bg = 0; bg < headers.length; bg++) rowBg.push(null);
-    if (thieu > 0) {
-      rowBg[5] = "#fff2cc";
-      rowBg[6] = "#fce5cd";
-      rowBg[warningCol - 1] = "#f4cccc";
-    } else {
-      rowBg[warningCol - 1] = "#d9ead3";
-    }
-    backgrounds.push(rowBg);
   }
 
   rows.sort(function(a, b) {
@@ -3354,26 +3476,28 @@ function taoBangSoanHangNgayMai(payload) {
   });
   for (var r = 0; r < rows.length; r++) rows[r][0] = r + 1;
 
-  reportSheet.getRange(4, 1).setValue("Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Mã thiếu: " + missingLines).setFontWeight("bold");
-
-  var startRow = headerRow + 1;
-  if (rows.length) {
-    reportSheet.getRange(startRow, 1, rows.length, headers.length).setValues(rows);
-    reportSheet.getRange(startRow, 6, rows.length, 2 + storeList.length).setHorizontalAlignment("right");
-    reportSheet.getRange(startRow, 1, rows.length, headers.length).setBorder(true, true, true, true, true, true, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
-    reportSheet.getRange(startRow, 1, rows.length, headers.length).setBackgrounds(backgrounds);
+  var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Mã thiếu: " + missingLines;
+  var sheetBlock = [
+    [title],
+    ["Nguồn dữ liệu: Đơn tạo ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy")],
+    [""],
+    [summaryLine],
+    headers
+  ];
+  for (var rb = 0; rb < rows.length; rb++) sheetBlock.push(rows[rb]);
+  if (sheetBlock.length && headers.length) {
+    reportSheet.getRange(1, 1, sheetBlock.length, headers.length).setValues(sheetBlock);
+    reportSheet.setFrozenRows(headerRow);
   }
+  // #region agent log
+  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: headers.length, batched: true });
+  // #endregion
 
-  reportSheet.setColumnWidth(1, 48);
-  reportSheet.setColumnWidth(2, 110);
-  reportSheet.setColumnWidth(3, 120);
-  reportSheet.setColumnWidth(4, 260);
-  reportSheet.setColumnWidth(5, 72);
-  reportSheet.setColumnWidth(6, 96);
-  reportSheet.setColumnWidth(7, 88);
-  reportSheet.setColumnWidth(warningCol, 120);
-  reportSheet.setColumnWidth(warningCol + 1, 320);
   SpreadsheetApp.flush();
+  // #region agent log
+  _dbgMark("flush", {});
+  var _dbgTotalMs = Date.now() - _dbgT0;
+  // #endregion
 
   return {
     success: true,
@@ -3381,6 +3505,8 @@ function taoBangSoanHangNgayMai(payload) {
     totalOrders: Object.keys(orderSeen).length,
     totalItems: rows.length,
     missingItems: missingLines,
-    url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId()
+    url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
+    _debugTimings: _dbgSteps,
+    _debugTotalMs: _dbgTotalMs
   };
 }
