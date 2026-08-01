@@ -1751,14 +1751,7 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
       if (!isSameStoreName(rowKhoXuat, filterUserStore) && !isSameStoreName(rowKhoNhan, filterUserStore)) continue;
     }
 
-    if (ngayYYYYMMDD && rowNgay) {
-      var dObj = new Date(rowNgay);
-      if (!isNaN(dObj)) {
-        var m = dObj.getMonth() + 1; var d = dObj.getDate(); var y = dObj.getFullYear();
-        var rowDateStr = y + "-" + (m < 10 ? '0' : '') + m + "-" + (d < 10 ? '0' : '') + d;
-        if (rowDateStr !== ngayYYYYMMDD) continue;
-      }
-    }
+    if (!matchesNgayFilter(rowNgay, ngayYYYYMMDD)) continue;
     
     if (!map[rowSoPhieu]) { 
       map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
@@ -1860,12 +1853,13 @@ function formatDateTime(value) {
 
 function isDateInTimeline(value, timeline, fromDate, toDate) {
   if (!value) return false;
-  var date = value instanceof Date ? new Date(value) : new Date(value);
-  if (isNaN(date.getTime())) return false;
-  date.setHours(0, 0, 0, 0);
+  var dateStr = formatSheetDateYYYYMMDD(value);
+  if (!dateStr) return false;
+  var date = parseDateInputYYYYMMDD(dateStr);
+  if (!date) return false;
 
-  var today = new Date();
-  today.setHours(0, 0, 0, 0);
+  var today = getScriptTodayStart_();
+  if (!today) return false;
   var selected = String(timeline || '2days').trim();
   if (selected === 'all') return true;
   if (selected === 'today') return date.getTime() === today.getTime();
@@ -1885,9 +1879,9 @@ function isDateInTimeline(value, timeline, fromDate, toDate) {
   var days = 2;
   if (selected === '7days') days = 7;
   else if (selected === '30days') days = 30;
-  var start = new Date(today);
-  start.setDate(today.getDate() - (days - 1));
-  return date.getTime() >= start.getTime() && date.getTime() <= today.getTime();
+  var rangeStart = new Date(today);
+  rangeStart.setDate(today.getDate() - (days - 1));
+  return date.getTime() >= rangeStart.getTime() && date.getTime() <= today.getTime();
 }
 
 function getChiTietPhieu(soPhieu, storeName) {
@@ -2735,11 +2729,9 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
   var filterUserStore = normalizeStoreName(userStore || "");
   var data = historySheet.getDataRange().getValues();
   var map = {};
-  var today = new Date(); today.setHours(0,0,0,0);
-  var yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
   
   for (var i = 1; i < data.length; i++) {
-    var rowNgay = new Date(data[i][0]); rowNgay.setHours(0,0,0,0);
+    var rowNgay = data[i][0];
     var rowSoPhieu = data[i][1] ? data[i][1].toString().trim() : "";
     var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
     var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
@@ -2756,12 +2748,10 @@ function getDonHangTheoNgay(ngayChon, userRole, userStore, viewMode) {
 
     var slThucTe = data[i][8];
     var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
-    
-    var match = (ngayChon === 'today' && rowNgay.getTime() === today.getTime()) ||
-                (ngayChon === 'yesterday' && rowNgay.getTime() === yesterday.getTime()) ||
-                (ngayChon === 'all');
-                
-    if (match && rowSoPhieu) { 
+
+    if (!matchesNgayFilter(rowNgay, ngayChon)) continue;
+
+    if (rowSoPhieu) { 
       if(!map[rowSoPhieu]) map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus }; 
       else if(displayStatus === "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã xác nhận";
       else if(displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
@@ -2888,6 +2878,58 @@ function parseDateInputYYYYMMDD(value) {
   if (isNaN(date.getTime())) return null;
   date.setHours(0, 0, 0, 0);
   return date;
+}
+
+function getScriptTodayStart_() {
+  var todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  return parseDateInputYYYYMMDD(todayStr);
+}
+
+function formatSheetDateYYYYMMDD(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  var asString = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(asString)) return asString;
+  var parsed = new Date(value);
+  if (!isNaN(parsed.getTime())) {
+    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  return "";
+}
+
+function matchesNgayFilter(rowDate, ngayFilter) {
+  var filter = String(ngayFilter || "").trim().toLowerCase();
+  if (!filter || filter === "all") return true;
+
+  var rowDateStr = formatSheetDateYYYYMMDD(rowDate);
+  if (!rowDateStr) return false;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(filter)) {
+    return rowDateStr === filter;
+  }
+
+  var today = getScriptTodayStart_();
+  if (!today) return true;
+  var rowDateObj = parseDateInputYYYYMMDD(rowDateStr);
+  if (!rowDateObj) return false;
+
+  if (filter === "today") {
+    return rowDateObj.getTime() === today.getTime();
+  }
+  if (filter === "yesterday") {
+    var yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    return rowDateObj.getTime() === yesterday.getTime();
+  }
+  if (filter === "7days") {
+    var start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    return rowDateObj.getTime() >= start.getTime() && rowDateObj.getTime() <= today.getTime();
+  }
+
+  return rowDateStr === filter;
 }
 
 function formatShortStoreLabel(storeName) {
@@ -3021,11 +3063,8 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore) {
     var soPhieu = row[1] ? String(row[1]).trim() : "";
     if (!soPhieu) continue;
 
-    var ngayTao = row[0] instanceof Date ? new Date(row[0]) : new Date(row[0]);
-    if (isNaN(ngayTao.getTime())) continue;
-    var dateOnly = new Date(ngayTao);
-    dateOnly.setHours(0, 0, 0, 0);
-    if (dateOnly.getTime() !== targetDate.getTime()) continue;
+    var ngayTao = row[0];
+    if (!matchesNgayFilter(ngayTao, Utilities.formatDate(targetDate, Session.getScriptTimeZone(), "yyyy-MM-dd"))) continue;
 
     var khoXuat = row[2] ? String(row[2]).trim() : "";
     var khoNhan = row[3] ? String(row[3]).trim() : "";
@@ -3119,10 +3158,8 @@ function taoBangSoanHangNgayMai(payload) {
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
     if (!row) continue;
-    var ngayTao = row[0] instanceof Date ? new Date(row[0]) : new Date(row[0]);
-    if (isNaN(ngayTao.getTime())) continue;
-    ngayTao.setHours(0, 0, 0, 0);
-    if (ngayTao.getTime() !== baseDate.getTime()) continue;
+    var ngayTao = row[0];
+    if (!matchesNgayFilter(ngayTao, Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "yyyy-MM-dd"))) continue;
 
     var soPhieu = row[1] ? String(row[1]).trim() : "";
     var khoXuat = row[2] ? String(row[2]).trim() : "";

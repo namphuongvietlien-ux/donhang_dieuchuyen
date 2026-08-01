@@ -318,8 +318,8 @@
         <h3 style="margin-top:0; color:var(--primary);">Tra cứu & Quản lý</h3>
         <div class="form-row">
           <div class="form-group"><label>Lọc Kho Nhận:</label><select id="ql-kho-nhan" onchange="ql_loadPhieu()"><option value="all">-- Tất cả --</option></select></div>
-          <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="ql_loadPhieu()"></div>
-          <div class="form-group"><label>Chọn nhanh:</label><select id="ql-ngay-fast" onchange="setQuickDateFilter(this.value, 'ql-ngay'); ql_loadPhieu()">
+          <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="onManualNgayFilterChange('ql-ngay', 'ql-ngay-fast', 'ql')"></div>
+          <div class="form-group"><label>Chọn nhanh:</label><select id="ql-ngay-fast" onchange="setQuickDateFilter(this.value, 'ql-ngay', 'ql-ngay-fast'); ql_loadPhieu()">
             <option value="">-- Tùy chọn --</option>
             <option value="today">Hôm nay</option>
             <option value="yesterday">Hôm qua</option>
@@ -370,11 +370,11 @@
         <div class="form-row">
           <div class="form-group">
             <label>📅 Lọc theo ngày</label>
-            <input type="date" id="confirm-ngay" onchange="confirm_loadPhieu()">
+            <input type="date" id="confirm-ngay" onchange="onManualNgayFilterChange('confirm-ngay', 'confirm-ngay-fast', 'confirm')">
           </div>
           <div class="form-group">
             <label>⚡ Chọn nhanh</label>
-            <select id="confirm-ngay-fast" onchange="setQuickDateFilter(this.value, 'confirm-ngay'); confirm_loadPhieu()">
+            <select id="confirm-ngay-fast" onchange="setQuickDateFilter(this.value, 'confirm-ngay', 'confirm-ngay-fast'); confirm_loadPhieu()">
               <option value="">-- Tùy chọn --</option>
               <option value="today">Hôm nay</option>
               <option value="yesterday">Hôm qua</option>
