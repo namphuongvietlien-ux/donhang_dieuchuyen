@@ -11,7 +11,6 @@ export default async function handler(req, res) {
       return body;
     }
 
-    // Fallback: attempt to read raw stream when body parser doesn't provide req.body.
     try {
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -20,6 +19,18 @@ export default async function handler(req, res) {
       try { return JSON.parse(raw); } catch (_) { return { raw }; }
     } catch (_) {
       return {};
+    }
+  }
+
+  async function fetchGas(url, init, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(function() { controller.abort(); }, timeoutMs || 50000);
+    try {
+      const r = await fetch(url, Object.assign({}, init, { signal: controller.signal, redirect: 'follow' }));
+      const text = await r.text();
+      return { status: r.status, text: text };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -39,9 +50,8 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const qs = new URLSearchParams(req.query || {}).toString();
       const target = qs ? `${GAS_URL}?${qs}` : GAS_URL;
-      const r = await fetch(target, { method: 'GET', headers: { Accept: 'application/json' } });
-      const text = await r.text();
-      res.status(r.status).send(text);
+      const r = await fetchGas(target, { method: 'GET', headers: { Accept: 'application/json' } }, 50000);
+      res.status(r.status).send(r.text);
       return;
     }
 
@@ -52,18 +62,19 @@ export default async function handler(req, res) {
         return;
       }
 
-      const r = await fetch(GAS_URL, {
+      // text/plain giúp GAS nhận body ổn định hơn qua redirect
+      const r = await fetchGas(GAS_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Accept': 'application/json' },
         body: JSON.stringify(body)
-      });
-      const text = await r.text();
-      res.status(r.status).send(text);
+      }, 50000);
+      res.status(r.status).send(r.text);
       return;
     }
 
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const msg = err && err.name === 'AbortError' ? 'GAS proxy timeout' : (err.message || String(err));
+    res.status(504).json({ error: msg });
   }
 }

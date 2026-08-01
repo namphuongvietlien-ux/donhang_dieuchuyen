@@ -35,66 +35,63 @@ async function callJsonApi(urls, options, timeoutMs) {
   throw lastError || new Error('Không thể kết nối tới máy chủ');
 }
 
-async function apiGet(action, params, options) {
-  options = options || {};
+function buildGasGetUrl_(action, params, skipCacheBust) {
+  const directUrl = new URL(GAS_EXEC_URL);
+  directUrl.searchParams.set('action', action);
+  if (!skipCacheBust) directUrl.searchParams.set('_ts', String(Date.now()));
+  if (params) {
+    Object.keys(params).forEach(k => {
+      if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
+    });
+  }
+  return directUrl.toString();
+}
+
+function buildProxyGetUrl_(action, params, skipCacheBust) {
   const proxyUrl = new URL('/api/gas-proxy', location.origin);
   proxyUrl.searchParams.set('action', action);
-  if (!options.skipCacheBust) proxyUrl.searchParams.set('_ts', String(Date.now()));
+  if (!skipCacheBust) proxyUrl.searchParams.set('_ts', String(Date.now()));
   if (params) {
     Object.keys(params).forEach(k => {
       if (params[k] !== undefined && params[k] !== null) proxyUrl.searchParams.set(k, params[k]);
     });
   }
+  return proxyUrl.toString();
+}
 
-  const urls = [proxyUrl.toString()];
+async function apiGet(action, params, options) {
+  options = options || {};
+  const timeoutMs = options.timeoutMs || 90000;
+  // GET thẳng GAS ổn định hơn proxy (proxy từng 404/chậm làm hỏng mọi tab)
   if (options.directOnly) {
-    urls.length = 0;
-    const directUrl = new URL(GAS_EXEC_URL);
-    directUrl.searchParams.set('action', action);
-    directUrl.searchParams.set('_ts', String(Date.now()));
-    if (params) {
-      Object.keys(params).forEach(k => {
-        if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
-      });
-    }
-    urls.push(directUrl.toString());
-  } else if (options.allowDirectFallback !== false) {
-    const directUrl = new URL(GAS_EXEC_URL);
-    directUrl.searchParams.set('action', action);
-    directUrl.searchParams.set('_ts', String(Date.now()));
-    if (params) {
-      Object.keys(params).forEach(k => {
-        if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
-      });
-    }
-    urls.push(directUrl.toString());
+    return callJsonApi([buildGasGetUrl_(action, params, options.skipCacheBust)], { method: 'GET', headers: { 'Accept': 'application/json' } }, timeoutMs);
   }
-  return callJsonApi(urls, { method: 'GET', headers: { 'Accept': 'application/json' } }, options.timeoutMs);
+  const urls = [buildGasGetUrl_(action, params, options.skipCacheBust)];
+  if (options.allowProxyFallback !== false) urls.push(buildProxyGetUrl_(action, params, options.skipCacheBust));
+  return callJsonApi(urls, { method: 'GET', headers: { 'Accept': 'application/json' } }, timeoutMs);
 }
 
 async function apiPost(action, payload, options) {
   options = options || {};
   const body = { action: action, payload: payload };
   const jsonBody = JSON.stringify(body);
-  // text/plain tránh CORS preflight khi POST thẳng GAS
+  // text/plain: không preflight CORS; proxy dùng làm dự phòng
   const plainOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
-  const proxyOptions = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: jsonBody };
-  const timeoutMs = options.timeoutMs || 180000;
+  const proxyOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
+  const timeoutMs = options.timeoutMs || 120000;
 
   if (options.directOnly) {
     return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
   }
 
-  // Ưu tiên proxy; nếu 404/timeout thì fallback text/plain thẳng GAS
+  // Ưu tiên POST thẳng GAS (tránh proxy treo). Proxy chỉ fallback.
   try {
-    return await callJsonApi(['/api/gas-proxy'], proxyOptions, Math.min(timeoutMs, 55000));
-  } catch (proxyErr) {
-    const msg = String(proxyErr && proxyErr.message || proxyErr);
-    console.warn('[donhang] proxy POST failed, fallback GAS text/plain', msg);
-    if (options.allowDirectFallback === false && msg.indexOf('404') === -1 && msg.indexOf('504') === -1 && msg.indexOf('TIMEOUT') === -1) {
-      throw proxyErr;
-    }
-    return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+    return await callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+  } catch (directErr) {
+    const msg = String(directErr && directErr.message || directErr);
+    console.warn('[donhang] direct POST failed, fallback proxy', msg);
+    if (options.allowDirectFallback === false && options.allowProxyFallback === false) throw directErr;
+    return callJsonApi(['/api/gas-proxy'], proxyOptions, Math.min(timeoutMs, 50000));
   }
 }
 
@@ -103,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v11';
+var APP_BUILD = '2026-08-02-v12';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
