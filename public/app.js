@@ -75,15 +75,27 @@ async function apiGet(action, params, options) {
 async function apiPost(action, payload, options) {
   options = options || {};
   const body = { action: action, payload: payload };
-  const reqOptions = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-  let urls;
+  const jsonBody = JSON.stringify(body);
+  // text/plain tránh CORS preflight khi POST thẳng GAS
+  const plainOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
+  const proxyOptions = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: jsonBody };
+  const timeoutMs = options.timeoutMs || 180000;
+
   if (options.directOnly) {
-    urls = [GAS_EXEC_URL];
-  } else {
-    urls = ['/api/gas-proxy'];
-    if (options.allowDirectFallback !== false) urls.push(GAS_EXEC_URL);
+    return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
   }
-  return callJsonApi(urls, reqOptions, options.timeoutMs || 180000);
+
+  // Ưu tiên proxy; nếu 404/timeout thì fallback text/plain thẳng GAS
+  try {
+    return await callJsonApi(['/api/gas-proxy'], proxyOptions, Math.min(timeoutMs, 55000));
+  } catch (proxyErr) {
+    const msg = String(proxyErr && proxyErr.message || proxyErr);
+    console.warn('[donhang] proxy POST failed, fallback GAS text/plain', msg);
+    if (options.allowDirectFallback === false && msg.indexOf('404') === -1 && msg.indexOf('504') === -1 && msg.indexOf('TIMEOUT') === -1) {
+      throw proxyErr;
+    }
+    return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+  }
 }
 
 function showLoginError(message) {
@@ -91,7 +103,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v9';
+var APP_BUILD = '2026-08-02-v10';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0 };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -355,7 +367,8 @@ function initSystemData() {
   var qlNgay = getEl("ql-ngay"); if (qlNgay && !qlNgay.value) qlNgay.valueAsDate = new Date();
   if (!cachedBootstrap) showLoad("Đang tải hệ thống...");
 
-  apiGet('getBootstrapData', null, { allowDirectFallback: false }).then(function(res) {
+  // Proxy có thể 404 — luôn cho phép fallback GET thẳng GAS
+  apiGet('getBootstrapData', null, { allowDirectFallback: true }).then(function(res) {
     hideLoad();
     if (!res || !res.success) {
       if (!cachedBootstrap) alert("Lỗi tải data: " + ((res && (res.error || res.msg)) || res));
@@ -1413,7 +1426,7 @@ function sh_taiDanhSachDonSoanChoBang() {
     ngay: ngay,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
-  }, { allowDirectFallback: false, timeoutMs: 120000 }).then(function(res) {
+  }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {
     hideLoad();
     // #region agent log
     var _dbgListMs = Date.now() - _dbgListStart;
@@ -1498,7 +1511,7 @@ function sh_taoBangSoanTuDonDaChon() {
   // #endregion
   dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD, via: 'proxy', stockReady: shStockWarmState.ready });
   // Timeout client < 60s Vercel để báo lỗi rõ, không treo
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: false, timeoutMs: 55000 }).then(function(res) {
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {
     hideLoad();
     // #region agent log
     var _dbgClientMs = Date.now() - _dbgSoanStart;
