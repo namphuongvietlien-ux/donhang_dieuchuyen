@@ -1835,6 +1835,39 @@ function nhapKhauCapNhatThongTin(payload) {
   var fileData = payload && payload.fileData ? payload.fileData : null;
 
   var ss = getSS();
+
+  // Import nhanh: chỉ nhận map Q7 đã tách phía trình duyệt → ghi sheet TON_Q7
+  if (importType === 'stockQ7') {
+    var tQ7 = Date.now();
+    var entries = payload.q7Entries || [];
+    var mapQ7 = {};
+    for (var ei = 0; ei < entries.length; ei++) {
+      var ent = entries[ei];
+      if (!ent || !ent.k) continue;
+      var keyQ = String(ent.k).trim();
+      if (!keyQ) continue;
+      mapQ7[keyQ] = (Number(mapQ7[keyQ]) || 0) + (Number(ent.q) || 0);
+    }
+    if (!Object.keys(mapQ7).length) {
+      throw new Error("Không có dữ liệu tồn Q7 để ghi. Kiểm tra file có cột/kho Q7 không.");
+    }
+    var q7Fast = writeTonQ7MapToSheet_(ss, mapQ7);
+    return {
+      success: true,
+      importType: importType,
+      targetSheet: TON_Q7_SHEET_NAME,
+      updatedRows: q7Fast.rows || 0,
+      updatedCols: 4,
+      q7Sheet: TON_Q7_SHEET_NAME,
+      q7Rows: q7Fast.rows || 0,
+      done: true,
+      _debugTotalMs: Date.now() - tQ7,
+      _debugQ7Ms: q7Fast.ms || 0,
+      _debugRun: "import-q7-fast-v1",
+      msg: "Đã cập nhật nhanh sheet " + TON_Q7_SHEET_NAME + " (" + (q7Fast.rows || 0) + " mã/ĐVT Q7) — không ghi full TỔNG HỢP TỒN KHO."
+    };
+  }
+
   if (fileData && importType) {
     var chunkIndex = Number(payload.chunkIndex);
     if (isNaN(chunkIndex) || chunkIndex < 0) chunkIndex = 0;
@@ -1856,12 +1889,14 @@ function nhapKhauCapNhatThongTin(payload) {
       SpreadsheetApp.flush();
       if (isFirstChunk) invalidateStoresCache_();
 
-      // Mỗi chunk: merge TON_Q7 (kèm ĐVT) từ parseMatrix hoặc matrix
+      // Full import: chỉ rebuild TON_Q7 ở chunk cuối (tránh ghi lại sheet mỗi lần)
       var q7Info = { rows: 0, ms: 0 };
-      try {
-        q7Info = mergeTonQ7FromMatrix_(ss, parseMatrix || matrix, isFirstChunk);
-      } catch (q7Err) {
-        Logger.log("mergeTonQ7 from import error: " + q7Err);
+      if (isLastChunk) {
+        try {
+          q7Info = rebuildTonKhoQ7Sheet_(ss);
+        } catch (q7Err) {
+          Logger.log("rebuildTonQ7 after full import error: " + q7Err);
+        }
       }
 
       return {
@@ -1877,7 +1912,7 @@ function nhapKhauCapNhatThongTin(payload) {
         q7Rows: q7Info.rows || 0,
         _debugTotalMs: Date.now() - tImport0,
         _debugQ7Ms: q7Info.ms || 0,
-        _debugRun: "import-chunk-v3",
+        _debugRun: "import-chunk-v4",
         msg: isLastChunk
           ? ('Đã cập nhật TỔNG HỢP TỒN KHO và sheet ' + TON_Q7_SHEET_NAME + ' (' + (q7Info.rows || 0) + ' mã/ĐVT Q7).')
           : ('Đã nhận chunk ' + (chunkIndex + 1) + '/' + chunkTotal + '.')

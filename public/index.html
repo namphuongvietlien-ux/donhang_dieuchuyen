@@ -455,7 +455,7 @@
           <div class="form-group" style="max-width:260px;">
             <label>Loại cập nhật</label>
             <select id="imp-type" onchange="imp_handleSelectionChange()">
-              <option value="stock">Cập nhật tồn kho -> TỔNG HỢP TỒN KHO</option>
+              <option value="stock">Cập nhật tồn kho Q7 nhanh -> TON_Q7</option>
               <option value="catalog">Cập nhật file nhập khẩu thông tin -> Data_Excel</option>
             </select>
           </div>
@@ -464,7 +464,15 @@
             <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" onchange="imp_handleSelectionChange()">
           </div>
         </div>
-        <p style="font-size:12px; color:#64748b; margin:6px 0 12px;">File tồn kho sẽ được dán nguyên dữ liệu lên sheet TỔNG HỢP TỒN KHO. File nhập khẩu thông tin sẽ được dán nguyên dữ liệu lên sheet Data_Excel theo cấu trúc file mẫu mới.</p>
+        <p style="font-size:12px; color:#64748b; margin:6px 0 12px;">
+          Tồn kho: trình duyệt tách sẵn tồn <b>Kho Q7</b> rồi ghi sheet nhẹ <b>TON_Q7</b> (nhanh, dùng cho soạn hàng).
+          Tick bên dưới nếu vẫn muốn ghi full sheet TỔNG HỢP TỒN KHO (rất chậm).
+          File nhập khẩu thông tin vẫn ghi Data_Excel.
+        </p>
+        <label id="imp-full-stock-wrap" style="display:flex; align-items:flex-start; gap:8px; margin:0 0 12px; font-size:13px; color:#475569;">
+          <input type="checkbox" id="imp-full-stock">
+          <span>Ghi thêm full sheet TỔNG HỢP TỒN KHO (chậm, chỉ khi cần)</span>
+        </label>
         <div id="imp-preview-card" style="display:none; margin:12px 0; padding:12px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc;">
           <div id="imp-preview-meta" style="font-size:13px; color:#334155; margin-bottom:8px;"></div>
           <div id="imp-preview-warning" style="display:none; font-size:13px; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
@@ -515,6 +523,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v18"></script>
+  <script src="app.js?v=20260802v19"></script>
 </body>
 </html>

@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v18';
+var APP_BUILD = '2026-08-02-v19';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -1824,10 +1824,164 @@ function imp_toggleImportButton() {
   btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
 }
 
+function impFindColByAliases_(header, aliases) {
+  if (!header) return -1;
+  for (var c = 0; c < header.length; c++) {
+    var n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (!n) continue;
+    for (var a = 0; a < aliases.length; a++) {
+      if (n.indexOf(aliases[a]) !== -1) return c;
+    }
+  }
+  return -1;
+}
+
+function impIsQ7Header_(value) {
+  var n = impNormalizeText(value).replace(/\s+/g, '');
+  if (!n) return false;
+  if (n.indexOf('q7') !== -1 || n.indexOf('quan7') !== -1) return true;
+  if (n.indexOf('khodiadiemkinhdoanhq7') !== -1) return true;
+  if (n.indexOf('k9quan7') !== -1) return true;
+  return false;
+}
+
+function impIsQ7StoreName_(value) {
+  return impIsQ7Header_(value);
+}
+
+function impParseQty_(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return isNaN(value) ? 0 : value;
+  var text = String(value).trim().replace(/\s+/g, '').replace(/\u00A0/g, '');
+  if (!text) return 0;
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(text)) text = text.replace(/\./g, '').replace(',', '.');
+  else text = text.replace(/,/g, '');
+  var num = Number(text);
+  return isNaN(num) ? 0 : num;
+}
+
+function impNormCode_(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function impNormDvtKey_(value) {
+  return impNormalizeText(value).replace(/\s+/g, '');
+}
+
+function impAddStockEntry_(map, prefix, code, qty, dvt) {
+  var norm = impNormCode_(code);
+  if (!norm) return;
+  var q = Number(qty) || 0;
+  if (!q) return;
+  var dvtKey = impNormDvtKey_(dvt);
+  var key = prefix + norm + (dvtKey ? ('|DV:' + dvtKey) : '');
+  map[key] = (map[key] || 0) + q;
+}
+
+/** Tách tồn Kho Q7 từ file Excel ngay trên trình duyệt → payload nhỏ */
+function extractTonQ7EntriesFromRows_(rows) {
+  if (!rows || rows.length < 2) return { entries: [], meta: { reason: 'empty' } };
+  var headerIndex = 0;
+  var bestScore = -1;
+  for (var hi = 0; hi < Math.min(rows.length, 10); hi++) {
+    var score = (rows[hi] || []).filter(function(cell) { return impNormalizeText(cell).length > 0; }).length;
+    if (score > bestScore) { bestScore = score; headerIndex = hi; }
+  }
+  var header = rows[headerIndex] || [];
+  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'sku', 'mahh', 'itemcode', 'code']);
+  var maVachIdx = impFindColByAliases_(header, ['mavach', 'barcode', 'ean']);
+  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvt', 'donvi', 'unit', 'uom']);
+  var tonIdx = impFindColByAliases_(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'cuoiky', 'qty']);
+  var tenHangIdx = impFindColByAliases_(header, ['tenhanghoa', 'tenhang', 'name', 'description']);
+  var q7Cols = [];
+  for (var c = 0; c < header.length; c++) {
+    if (c === maHangIdx || c === maVachIdx || c === dvtIdx || c === tonIdx || c === tenHangIdx) continue;
+    if (impIsQ7Header_(header[c])) q7Cols.push(c);
+  }
+
+  var startRow = headerIndex + 1;
+  var marker = rows[startRow] || [];
+  var markerHits = 0;
+  for (var m = 0; m < marker.length; m++) {
+    var mv = marker[m];
+    if (typeof mv === 'number' && mv < 0) markerHits++;
+    else if (/^\(\d+\)/.test(String(mv || '').trim())) markerHits++;
+  }
+  if (markerHits >= 2) startRow++;
+
+  var map = {};
+  var currentMaHang = '';
+  var currentMaVach = '';
+  var currentDvt = '';
+  var matchedRows = 0;
+
+  for (var r = startRow; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row) continue;
+    var maHang = maHangIdx >= 0 ? row[maHangIdx] : '';
+    var maVach = maVachIdx >= 0 ? row[maVachIdx] : '';
+    var dvt = dvtIdx >= 0 ? row[dvtIdx] : '';
+    var hasOwn = !!(String(maHang || '').trim() || String(maVach || '').trim());
+    if (hasOwn) {
+      currentMaHang = maHang;
+      currentMaVach = maVach;
+      if (String(dvt || '').trim()) currentDvt = dvt;
+    }
+    var useMaHang = hasOwn ? maHang : currentMaHang;
+    var useMaVach = hasOwn ? maVach : currentMaVach;
+    var useDvt = String(dvt || '').trim() ? dvt : currentDvt;
+    if (!String(useMaHang || '').trim() && !String(useMaVach || '').trim()) continue;
+
+    var got = false;
+    if (q7Cols.length) {
+      for (var qi = 0; qi < q7Cols.length; qi++) {
+        var qty = impParseQty_(row[q7Cols[qi]]);
+        if (!qty) continue;
+        impAddStockEntry_(map, 'MH:', useMaHang, qty, useDvt);
+        impAddStockEntry_(map, 'MV:', useMaVach, qty, useDvt);
+        got = true;
+      }
+    } else if (tonIdx >= 0) {
+      // Dạng dòng con: tên kho nằm ở cột tên hàng / cột đầu
+      var storeCell = tenHangIdx >= 0 ? row[tenHangIdx] : row[0];
+      if (impIsQ7StoreName_(storeCell)) {
+        var qty2 = impParseQty_(row[tonIdx]);
+        if (qty2) {
+          impAddStockEntry_(map, 'MH:', useMaHang, qty2, useDvt);
+          impAddStockEntry_(map, 'MV:', useMaVach, qty2, useDvt);
+          got = true;
+        }
+      }
+    }
+    if (got) matchedRows++;
+  }
+
+  var entries = [];
+  for (var k in map) {
+    if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+    entries.push({ k: k, q: map[k] });
+  }
+  return {
+    entries: entries,
+    meta: {
+      headerIndex: headerIndex,
+      q7Cols: q7Cols,
+      matchedRows: matchedRows,
+      entryCount: entries.length,
+      maHangIdx: maHangIdx,
+      maVachIdx: maVachIdx,
+      dvtIdx: dvtIdx,
+      tonIdx: tonIdx
+    }
+  };
+}
+
 function imp_handleSelectionChange() {
   var typeEl = document.getElementById('imp-type');
   var fileEl = document.getElementById('imp-file');
   var importType = typeEl && typeEl.value ? typeEl.value : 'stock';
+  var fullWrap = document.getElementById('imp-full-stock-wrap');
+  if (fullWrap) fullWrap.style.display = importType === 'stock' ? 'flex' : 'none';
   var file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
   importPreviewState = null;
   renderImportPreview(null);
@@ -1866,10 +2020,62 @@ function importDanhMucTonKho() {
   var allRows = importPreviewState.rows || [];
   var rowCount = allRows.length;
   if (!rowCount) return alert("File không có dữ liệu.");
+  var wantFullStock = !!(document.getElementById('imp-full-stock') && document.getElementById('imp-full-stock').checked);
+  var t0 = Date.now();
 
-  // Chia nhỏ payload để tránh timeout 1 POST khổng lồ
+  // ===== STOCK: mặc định import nhanh chỉ TON_Q7 =====
+  if (importType === 'stock' && !wantFullStock) {
+    showLoad("Đang tách tồn Q7 từ file...");
+    var extracted;
+    try {
+      extracted = extractTonQ7EntriesFromRows_(allRows);
+    } catch (ex) {
+      hideLoad();
+      alert('Lỗi tách tồn Q7: ' + (ex && ex.message || ex));
+      return;
+    }
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 extract done',data:{rowCount:rowCount,entryCount:extracted.entries.length,meta:extracted.meta,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-C',runId:'import-q7-fast-v1'})}).catch(function(){});
+    // #endregion
+    if (!extracted.entries.length) {
+      hideLoad();
+      alert("Không tách được tồn Kho Q7 từ file.\nKiểm tra file có cột/kho Q7, hoặc tick ghi full sheet.");
+      return;
+    }
+    showLoad("Đang ghi " + extracted.entries.length + " mã Q7 lên TON_Q7...");
+    apiPost('nhapKhauCapNhatThongTin', {
+      importType: 'stockQ7',
+      fileName: file.name,
+      q7Entries: extracted.entries,
+      actor: sessionUser.user
+    }, { directOnly: true, timeoutMs: 120000 }).then(function(res) {
+      hideLoad();
+      // #region agent log
+      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,serverMs:res&&res._debugTotalMs,q7Rows:res&&res.q7Rows,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-C',runId:'import-q7-fast-v1'})}).catch(function(){});
+      // #endregion
+      if (!res || !res.success) {
+        alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
+        return;
+      }
+      alert("✅ Cập nhật nhanh TON_Q7 thành công!\n" +
+        "- Mã/ĐVT Q7: " + (res.q7Rows || extracted.entries.length) + "\n" +
+        "- Thời gian: " + Math.round((Date.now() - t0) / 1000) + "s\n" +
+        (res.msg ? ("\n" + res.msg + "\n") : "") +
+        "[" + APP_BUILD + " / import-q7-fast-v1]");
+      if (fileEl) fileEl.value = '';
+      importPreviewState = null;
+      renderImportPreview(null);
+      shStockWarmState.ready = true;
+    }).catch(function(err) {
+      hideLoad();
+      alert('Lỗi: ' + err.message + '\n[Build: ' + APP_BUILD + ']\nDeploy lại code.gs rồi thử lại.');
+    });
+    return;
+  }
+
+  // ===== CATALOG hoặc STOCK full (chậm) =====
   var HEADER_PREFIX = Math.min(8, rowCount);
-  var BODY_CHUNK = 900;
+  var BODY_CHUNK = importType === 'catalog' ? 1200 : 700;
   var prefix = allRows.slice(0, HEADER_PREFIX);
   var body = allRows.slice(HEADER_PREFIX);
   if (!body.length) body = [[]];
@@ -1879,11 +2085,10 @@ function importDanhMucTonKho() {
   }
   if (!chunks.length) chunks = [[]];
 
-  var t0 = Date.now();
   var totalWritten = 0;
   var lastRes = null;
   // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import start chunks',data:{importType:importType,rowCount:rowCount,chunks:chunks.length,bodyChunk:BODY_CHUNK,fileName:file.name,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import start chunks',data:{importType:importType,wantFullStock:wantFullStock,rowCount:rowCount,chunks:chunks.length,bodyChunk:BODY_CHUNK,fileName:file.name,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
   // #endregion
 
   function sendChunk(idx) {
@@ -1906,9 +2111,6 @@ function importDanhMucTonKho() {
       }
       totalWritten += Number(res.updatedRows) || 0;
       lastRes = res;
-      // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import chunk done',data:{idx:idx,total:chunks.length,serverMs:res&&res._debugTotalMs,q7Rows:res&&res.q7Rows,updatedRows:res&&res.updatedRows,run:res&&res._debugRun},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
-      // #endregion
       if (idx + 1 < chunks.length) return sendChunk(idx + 1);
       return res;
     });
@@ -1930,9 +2132,7 @@ function importDanhMucTonKho() {
       "- Số dòng ghi: " + totalWritten + "\n" +
       "- Số chunk: " + chunks.length + "\n" +
       "- Thời gian: " + Math.round((Date.now() - t0) / 1000) + "s";
-    if (importType === 'stock') {
-      msg += "\n- Sheet TON_Q7: " + (res.q7Rows || 0) + " mã/ĐVT";
-    }
+    if (importType === 'stock') msg += "\n- Sheet TON_Q7: " + (res.q7Rows || 0) + " mã/ĐVT";
     if (res.msg) msg += "\n\n" + res.msg;
     msg += "\n[" + APP_BUILD + "]";
     alert(msg);
@@ -1943,19 +2143,10 @@ function importDanhMucTonKho() {
       clearCatalogLocalStorage();
       loadCatalogInBackground(true);
     } else {
-      if (!(res.q7Rows > 0)) {
-        apiGet('rebuildTonQ7', null, { directOnly: true, timeoutMs: 180000 }).catch(function() {});
-      }
       shStockWarmState.ready = !!(res.q7Rows > 0);
-      apiGet('getBootstrapData').then(function(bootstrap) {
-        if (bootstrap && bootstrap.success) applyBootstrapData(bootstrap);
-      }).catch(function() {});
     }
   }).catch(function(err) {
     hideLoad();
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
-    // #endregion
     alert('Lỗi: ' + err.message + '\n[Build: ' + APP_BUILD + ']\nGợi ý: deploy lại code.gs (New version) rồi thử lại.');
   });
 }
