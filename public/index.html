@@ -418,7 +418,7 @@
           <div class="form-group"><label>Số phiếu cần soạn:</label><select id="sh-phieu" onchange="sh_chonDonMobile()"><option value="">-- Đang tải --</option></select></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Tạo bảng từ đơn ngày:</label><input type="date" id="sh-create-date"></div>
+          <div class="form-group"><label>Tạo bảng từ đơn ngày:</label><input type="date" id="sh-create-date" onchange="if(document.getElementById('sh-order-picker')&&document.getElementById('sh-order-picker').style.display!=='none')sh_taiDanhSachDonSoanChoBang()"></div>
           <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_moBangChonDonSoan()">🧾 TẠO BẢNG SOẠN HÀNG</button></div>
         </div>
         <div class="stats-bar" id="sh-stats"></div>

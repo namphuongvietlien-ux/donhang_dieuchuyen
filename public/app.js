@@ -1341,8 +1341,10 @@ function sh_capNhatTomTatChonDonSoan() {
 function sh_renderDanhSachDonSoan(candidates) {
   var bodyEl = document.getElementById('sh-order-picker-body');
   if (!bodyEl) return;
+  var createDateEl = document.getElementById('sh-create-date');
+  var ngayLabel = createDateEl && createDateEl.value ? createDateEl.value : 'hôm nay';
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ trong ngày này để phân tích.</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ ngày <b>' + escapeHtml(ngayLabel) + '</b>.<br><small style="color:#64748b;">Thử đổi "Tạo bảng từ đơn ngày" sang ngày có đơn (vd. hôm qua).</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
@@ -1369,19 +1371,31 @@ function sh_taiDanhSachDonSoanChoBang() {
   var bodyEl = document.getElementById('sh-order-picker-body');
   if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
 
+  showLoad('Đang tải danh sách đơn soạn...');
+  // #region agent log
+  var _dbgListStart = Date.now();
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan start',data:{ngay:ngay},timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v2'})}).catch(function(){});
+  // #endregion
   apiGet('getDanhSachDonSoanHang', {
     ngay: ngay,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
-  }).then(function(res) {
+  }, { allowDirectFallback: true }).then(function(res) {
+    hideLoad();
+    // #region agent log
+    var _dbgListMs = Date.now() - _dbgListStart;
+    console.log('[debug] listDonSoan', { clientMs: _dbgListMs, serverMs: res && res._debugTotalMs, total: res && res.total, date: res && res.date, run: res && res._debugRun });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan done',data:{clientMs:_dbgListMs,serverMs:res&&res._debugTotalMs,total:res&&res.total,run:res&&res._debugRun},timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v2'})}).catch(function(){});
+    // #endregion
     if (!res || !res.success) {
       throw new Error((res && (res.error || res.msg)) || 'Không thể tải danh sách đơn.');
     }
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
     sh_renderDanhSachDonSoan(shOrderCandidates);
   }).catch(function(err) {
+    hideLoad();
     shOrderCandidates = [];
-    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + err.message + '</td></tr>';
+    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + escapeHtml(err.message) + '</td></tr>';
     sh_capNhatTomTatChonDonSoan();
   });
 }

@@ -3330,17 +3330,25 @@ function getPartialStockIndexForItems_(ss, itemMap, keys) {
 }
 
 function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
+  // #region agent log
+  var _dbgT0 = Date.now();
+  // #endregion
   var dateObj = parseDateInputYYYYMMDD(ngayYYYYMMDD);
   if (!dateObj) {
     dateObj = new Date();
     dateObj.setHours(0, 0, 0, 0);
   }
   var orders = getEligibleOrdersForSoanHang(dateObj, userRole, userStore);
+  // #region agent log
+  var _dbgMs = Date.now() - _dbgT0;
+  // #endregion
   return {
     success: true,
     date: Utilities.formatDate(dateObj, Session.getScriptTimeZone(), "yyyy-MM-dd"),
     total: orders.length,
-    orders: orders
+    orders: orders,
+    _debugTotalMs: _dbgMs,
+    _debugRun: "post-fix-v2"
   };
 }
 
@@ -3348,7 +3356,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
-  historyPack = historyPack || readHistoryDataPack_(historySheet);
+  historyPack = historyPack || readHistoryDataPack_(historySheet, 3500);
   var data = historyPack.data;
   if (!data || data.length < 2) return [];
 
