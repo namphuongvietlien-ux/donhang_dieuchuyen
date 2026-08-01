@@ -326,14 +326,7 @@
         <h3 style="margin-top:0; color:var(--primary);">Tra cứu & Quản lý</h3>
         <div class="form-row">
           <div class="form-group"><label>Lọc Kho Nhận:</label><select id="ql-kho-nhan" onchange="ql_loadPhieu()"><option value="all">-- Tất cả --</option></select></div>
-          <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="onManualNgayFilterChange('ql-ngay', 'ql-ngay-fast', 'ql')"></div>
-          <div class="form-group"><label>Chọn nhanh:</label><select id="ql-ngay-fast" onchange="setQuickDateFilter(this.value, 'ql-ngay', 'ql-ngay-fast'); ql_loadPhieu()">
-            <option value="">-- Tùy chọn --</option>
-            <option value="today" selected>Hôm nay</option>
-            <option value="yesterday">Hôm qua</option>
-            <option value="7days">7 ngày gần đây</option>
-            <option value="all">Tất cả</option>
-          </select></div>
+          <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="ql_loadPhieu()"></div>
         </div>
         <div class="stats-bar" id="ql-stats"></div>
         <div class="form-group">
@@ -378,17 +371,7 @@
         <div class="form-row">
           <div class="form-group">
             <label>📅 Lọc theo ngày</label>
-            <input type="date" id="confirm-ngay" onchange="onManualNgayFilterChange('confirm-ngay', 'confirm-ngay-fast', 'confirm')">
-          </div>
-          <div class="form-group">
-            <label>⚡ Chọn nhanh</label>
-            <select id="confirm-ngay-fast" onchange="setQuickDateFilter(this.value, 'confirm-ngay', 'confirm-ngay-fast'); confirm_loadPhieu()">
-              <option value="">-- Tùy chọn --</option>
-              <option value="today" selected>Hôm nay</option>
-              <option value="yesterday">Hôm qua</option>
-              <option value="7days">7 ngày gần đây</option>
-              <option value="all">Tất cả</option>
-            </select>
+            <input type="date" id="confirm-ngay" onchange="confirm_loadPhieu()">
           </div>
         </div>
         <div class="form-group">
@@ -416,11 +399,12 @@
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
         <div class="form-row">
-          <div class="form-group"><label>Ngày xem đơn:</label><select id="sh-ngay" onchange="sh_taiDanhSachDon()"><option value="today">Hôm nay</option><option value="yesterday">Hôm qua</option><option value="all">Tất cả</option></select></div>
+          <div class="form-group"><label>Ngày xem đơn:</label><input type="date" id="sh-ngay" onchange="sh_taiDanhSachDon()"></div>
           <div class="form-group"><label>Số phiếu cần soạn:</label><select id="sh-phieu" onchange="sh_chonDonMobile()"><option value="">-- Đang tải --</option></select></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Tạo bảng từ đơn ngày:</label><input type="date" id="sh-create-date" onchange="if(document.getElementById('sh-order-picker')&&document.getElementById('sh-order-picker').style.display!=='none')sh_taiDanhSachDonSoanChoBang()"></div>
+          <div class="form-group"><label>Tạo bảng từ ngày:</label><input type="date" id="sh-create-from" onchange="sh_onCreateDateRangeChange()"></div>
+          <div class="form-group"><label>đến ngày:</label><input type="date" id="sh-create-to" onchange="sh_onCreateDateRangeChange()"></div>
           <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_moBangChonDonSoan()">🧾 TẠO BẢNG SOẠN HÀNG</button></div>
         </div>
         <div class="stats-bar" id="sh-stats"></div>
@@ -531,6 +515,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v16"></script>
+  <script src="app.js?v=20260802v18"></script>
 </body>
 </html>

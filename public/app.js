@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v16';
+var APP_BUILD = '2026-08-02-v18';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -361,10 +361,11 @@ function initSystemData() {
     loadCatalogInBackground(false, cachedBootstrap.catalogVersion || '');
   }
 
-  var qlNgay = getEl("ql-ngay"); if (qlNgay && !qlNgay.value) qlNgay.valueAsDate = new Date();
-  var qlNgayFast = getEl("ql-ngay-fast"); if (qlNgayFast && !qlNgayFast.value) qlNgayFast.value = "today";
-  var confirmNgay = getEl("confirm-ngay"); if (confirmNgay && !confirmNgay.value) confirmNgay.valueAsDate = new Date();
-  var confirmNgayFast = getEl("confirm-ngay-fast"); if (confirmNgayFast && !confirmNgayFast.value) confirmNgayFast.value = "today";
+  var todayStr = formatDateInputValue(new Date());
+  var qlNgay = getEl("ql-ngay"); if (qlNgay && !qlNgay.value) qlNgay.value = todayStr;
+  var confirmNgay = getEl("confirm-ngay"); if (confirmNgay && !confirmNgay.value) confirmNgay.value = todayStr;
+  var shNgay = getEl("sh-ngay"); if (shNgay && !shNgay.value) shNgay.value = todayStr;
+  sh_ensureCreateDateDefaults_();
   if (!cachedBootstrap) showLoad("Đang tải hệ thống...");
 
   // Proxy có thể 404 — luôn cho phép fallback GET thẳng GAS
@@ -822,45 +823,55 @@ function executeExportExcel(soPhieu, khoXuat, khoNhan, itemsArray) {
 }
 
 // ================= QUẢN LÝ PHIẾU =================
-function getNgayFilterParam(inputId, fastSelectId) {
-  var fastEl = document.getElementById(fastSelectId);
-  var fast = fastEl && fastEl.value ? fastEl.value.trim() : '';
-  if (fast === '7days' || fast === 'all') return fast;
-  if (fast === 'today' || fast === 'yesterday') return fast;
+function getNgayFilterParam(inputId) {
   var inputEl = document.getElementById(inputId);
   return inputEl && inputEl.value ? inputEl.value : '';
 }
 
-function resetQuickDateFilter(fastSelectId) {
-  var fastEl = document.getElementById(fastSelectId);
-  if (fastEl) fastEl.value = '';
-}
-
-function setQuickDateFilter(value, targetId, fastSelectId) {
-  var inputEl = document.getElementById(targetId);
-  if (!inputEl) return;
-  if (!value || value === 'all') {
-    inputEl.value = '';
-    return;
-  }
-  if (value === '7days') {
-    inputEl.value = '';
-    return;
-  }
+function sh_ensureCreateDateDefaults_() {
+  var fromEl = document.getElementById('sh-create-from');
+  var toEl = document.getElementById('sh-create-to');
+  if (!fromEl || !toEl) return;
   var today = new Date();
-  if (value === 'today') {
-    inputEl.value = formatDateInputValue(today);
-  } else if (value === 'yesterday') {
-    var y = new Date(today);
-    y.setDate(today.getDate() - 1);
-    inputEl.value = formatDateInputValue(y);
-  }
+  var yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (!fromEl.value) fromEl.value = formatDateInputValue(yesterday);
+  if (!toEl.value) toEl.value = formatDateInputValue(today);
 }
 
-function onManualNgayFilterChange(inputId, fastSelectId, reloadFn) {
-  resetQuickDateFilter(fastSelectId);
-  if (reloadFn === 'confirm') confirm_loadPhieu();
-  else ql_loadPhieu();
+function sh_getCreateDateRange_() {
+  sh_ensureCreateDateDefaults_();
+  var fromEl = document.getElementById('sh-create-from');
+  var toEl = document.getElementById('sh-create-to');
+  var from = fromEl && fromEl.value ? fromEl.value : '';
+  var to = toEl && toEl.value ? toEl.value : from;
+  if (!from && to) from = to;
+  if (from && !to) to = from;
+  if (from && to && from > to) {
+    var tmp = from; from = to; to = tmp;
+    if (fromEl) fromEl.value = from;
+    if (toEl) toEl.value = to;
+  }
+  if (from && to) {
+    var d0 = new Date(from + 'T00:00:00');
+    var d1 = new Date(to + 'T00:00:00');
+    var diffDays = Math.round((d1 - d0) / 86400000);
+    if (diffDays > 1) {
+      // Chỉ cho phép 2 ngày liên tiếp
+      var capped = new Date(d0);
+      capped.setDate(d0.getDate() + 1);
+      to = formatDateInputValue(capped);
+      if (toEl) toEl.value = to;
+      alert('Chỉ được chọn tối đa 2 ngày liên tiếp. Đã chỉnh "đến ngày" thành ' + to + '.');
+    }
+  }
+  return { from: from, to: to };
+}
+
+function sh_onCreateDateRangeChange() {
+  sh_getCreateDateRange_();
+  var pickerEl = document.getElementById('sh-order-picker');
+  if (pickerEl && pickerEl.style.display !== 'none') sh_taiDanhSachDonSoanChoBang();
 }
 
 function resetManagementViewAfterSave() {
@@ -904,7 +915,7 @@ function ql_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("ql-phieu");
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
-  var ngay = getNgayFilterParam('ql-ngay', 'ql-ngay-fast');
+  var ngay = getNgayFilterParam('ql-ngay');
   var t0 = Date.now();
   // #region agent log
   fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list start',data:{ngay:ngay,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
@@ -957,7 +968,7 @@ function confirm_loadPhieu(selectedSoPhieu) {
   if (!selectedSoPhieu) currentConfirmPhieuObj = null;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
-  var ngay = getNgayFilterParam('confirm-ngay', 'confirm-ngay-fast');
+  var ngay = getNgayFilterParam('confirm-ngay');
   var t0 = Date.now();
   // #region agent log
   fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_loadPhieu',message:'confirm list start',data:{ngay:ngay,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QL-B',runId:'ql-fast-v1'})}).catch(function(){});
@@ -1361,18 +1372,13 @@ function ql_xuatExcel_FromEdit() { executeExportExcel(currentPhieuObj.soPhieu, c
 
 // ================= SOẠN HÀNG MOBILE =================
 function sh_taiDanhSachDon() {
-  var createDateEl = document.getElementById("sh-create-date");
-  if (createDateEl && !createDateEl.value) {
-    var now = new Date();
-    var yyyy = now.getFullYear();
-    var mm = String(now.getMonth() + 1).padStart(2, '0');
-    var dd = String(now.getDate()).padStart(2, '0');
-    createDateEl.value = yyyy + '-' + mm + '-' + dd;
-  }
+  sh_ensureCreateDateDefaults_();
+  var shNgayEl = document.getElementById("sh-ngay");
+  if (shNgayEl && !shNgayEl.value) shNgayEl.value = formatDateInputValue(new Date());
   document.getElementById("sh-list-container").innerHTML = '<div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div>';
   document.getElementById("sh-footer").style.display = "none";
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
-  apiGet('getDonHangTheoNgay', { ngay: document.getElementById("sh-ngay").value, userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }, { allowDirectFallback: true }).then(function(res) {
+  apiGet('getDonHangTheoNgay', { ngay: shNgayEl ? shNgayEl.value : '', userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }, { allowDirectFallback: true }).then(function(res) {
     var parsed = unwrapListResponse_(res);
     var rows = parsed.rows;
     var countMoi = 0; var countDone = 0;
@@ -1447,10 +1453,10 @@ function sh_capNhatTomTatChonDonSoan() {
 function sh_renderDanhSachDonSoan(candidates) {
   var bodyEl = document.getElementById('sh-order-picker-body');
   if (!bodyEl) return;
-  var createDateEl = document.getElementById('sh-create-date');
-  var ngayLabel = createDateEl && createDateEl.value ? createDateEl.value : 'hôm nay';
+  var range = sh_getCreateDateRange_();
+  var ngayLabel = range.from === range.to ? range.from : (range.from + ' → ' + range.to);
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ ngày <b>' + escapeHtml(ngayLabel) + '</b>.<br><small style="color:#64748b;">Thử đổi "Tạo bảng từ đơn ngày" sang ngày có đơn (vd. hôm qua).</small></td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ trong <b>' + escapeHtml(ngayLabel) + '</b>.<br><small style="color:#64748b;">Thử đổi khoảng "Tạo bảng từ ngày / đến ngày".</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
@@ -1474,8 +1480,9 @@ function dbgSoanLine_(label, data) {
 }
 
 function sh_taiDanhSachDonSoanChoBang() {
-  var createDateEl = document.getElementById('sh-create-date');
-  var ngay = createDateEl && createDateEl.value ? createDateEl.value : '';
+  var range = sh_getCreateDateRange_();
+  var ngay = range.from || '';
+  var ngayTo = range.to || ngay;
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl) pickerEl.style.display = 'block';
   var bodyEl = document.getElementById('sh-order-picker-body');
@@ -1484,11 +1491,12 @@ function sh_taiDanhSachDonSoanChoBang() {
   showLoad('Đang tải danh sách đơn soạn...');
   // #region agent log
   var _dbgListStart = Date.now();
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan start',data:{ngay:ngay},timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v2'})}).catch(function(){});
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan start',data:{ngay:ngay,ngayTo:ngayTo},timestamp:Date.now(),hypothesisId:'F',runId:'date-range-v1'})}).catch(function(){});
   // #endregion
-  dbgSoanLine_('listDonSoan.start', { ngay: ngay, build: APP_BUILD, via: 'proxy' });
+  dbgSoanLine_('listDonSoan.start', { ngay: ngay, ngayTo: ngayTo, build: APP_BUILD, via: 'proxy' });
   apiGet('getDanhSachDonSoanHang', {
     ngay: ngay,
+    ngayTo: ngayTo,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
   }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {
@@ -1585,8 +1593,8 @@ function sh_taoBangSoanTuDonDaChon() {
     alert("Vui lòng đăng nhập trước khi tạo bảng soạn.");
     return;
   }
-  var createDateEl = document.getElementById("sh-create-date");
-  var ngay = createDateEl && createDateEl.value ? createDateEl.value : "";
+  var range = sh_getCreateDateRange_();
+  var ngay = range.from || "";
   var selectedOrders = [];
   document.querySelectorAll('.sh-order-check').forEach(function(cb) {
     if (cb.checked) {
@@ -1601,7 +1609,7 @@ function sh_taoBangSoanTuDonDaChon() {
 
   var _dbgSoanStart = Date.now();
   showLoad("Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
-  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD });
+  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, ngayTo: range.to, selectedCount: selectedOrders.length, build: APP_BUILD });
 
   sh_ensureStockReady_().then(function(stockOk) {
     showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (đọc TON_Q7)..." : "Bước 2/2: Đang tạo bảng (rebuild TON_Q7 nếu thiếu)...");
@@ -1609,6 +1617,7 @@ function sh_taoBangSoanTuDonDaChon() {
     // forceStock=true nếu chưa có TON_Q7 — POST text/plain thẳng GAS để rebuild
     var payload = {
       ngay: ngay,
+      ngayTo: range.to || ngay,
       actor: sessionUser.user,
       userRole: sessionUser.role || '',
       userStore: sessionUser.store || '',
@@ -1853,25 +1862,63 @@ function importDanhMucTonKho() {
   }
   var confirmEl = document.getElementById('imp-confirm');
   if (!confirmEl || !confirmEl.checked) return alert('Vui lòng xác nhận sau khi xem trước dữ liệu.');
-  var rowCount = (importPreviewState.rows && importPreviewState.rows.length) || 0;
-  showLoad("Đang cập nhật " + rowCount + " dòng lên Google Sheet (có thể 1–3 phút)...");
+
+  var allRows = importPreviewState.rows || [];
+  var rowCount = allRows.length;
+  if (!rowCount) return alert("File không có dữ liệu.");
+
+  // Chia nhỏ payload để tránh timeout 1 POST khổng lồ
+  var HEADER_PREFIX = Math.min(8, rowCount);
+  var BODY_CHUNK = 900;
+  var prefix = allRows.slice(0, HEADER_PREFIX);
+  var body = allRows.slice(HEADER_PREFIX);
+  if (!body.length) body = [[]];
+  var chunks = [];
+  for (var i = 0; i < body.length; i += BODY_CHUNK) {
+    chunks.push(body.slice(i, i + BODY_CHUNK));
+  }
+  if (!chunks.length) chunks = [[]];
+
   var t0 = Date.now();
+  var totalWritten = 0;
+  var lastRes = null;
   // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import start',data:{importType:importType,rowCount:rowCount,fileName:file.name,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-A',runId:'import-q7-v2'})}).catch(function(){});
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import start chunks',data:{importType:importType,rowCount:rowCount,chunks:chunks.length,bodyChunk:BODY_CHUNK,fileName:file.name,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
   // #endregion
-  Promise.resolve({ rows: importPreviewState.rows, sheetName: importPreviewState.sheetName }).then(function(parsed) {
-    // File lớn: POST thẳng GAS, timeout 5 phút (không qua Vercel 60s)
+
+  function sendChunk(idx) {
+    var bodyPart = chunks[idx] || [];
+    var writeRows = idx === 0 ? prefix.concat(bodyPart) : bodyPart;
+    var parseRows = prefix.concat(bodyPart);
+    showLoad("Đang tải lên " + (idx + 1) + "/" + chunks.length + " (" + rowCount + " dòng)...");
     return apiPost('nhapKhauCapNhatThongTin', {
       importType: importType,
       fileName: file.name,
-      sourceSheet: parsed.sheetName,
-      fileData: parsed.rows,
+      sourceSheet: importPreviewState.sheetName,
+      fileData: writeRows,
+      parseMatrix: parseRows,
+      chunkIndex: idx,
+      chunkTotal: chunks.length,
       actor: sessionUser.user
-    }, { directOnly: true, timeoutMs: 300000 });
-  }).then(function(res) {
+    }, { directOnly: true, timeoutMs: 180000 }).then(function(res) {
+      if (!res || !res.success) {
+        throw new Error((res && (res.error || res.msg)) || ("Chunk " + (idx + 1) + " thất bại"));
+      }
+      totalWritten += Number(res.updatedRows) || 0;
+      lastRes = res;
+      // #region agent log
+      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import chunk done',data:{idx:idx,total:chunks.length,serverMs:res&&res._debugTotalMs,q7Rows:res&&res.q7Rows,updatedRows:res&&res.updatedRows,run:res&&res._debugRun},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
+      // #endregion
+      if (idx + 1 < chunks.length) return sendChunk(idx + 1);
+      return res;
+    });
+  }
+
+  sendChunk(0).then(function(res) {
     hideLoad();
+    res = res || lastRes;
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,serverMs:res&&res._debugTotalMs,q7Ms:res&&res._debugQ7Ms,q7Rows:res&&res.q7Rows,updatedRows:res&&res.updatedRows,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-A',runId:'import-q7-v2'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import all done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,chunks:chunks.length,totalWritten:totalWritten,q7Rows:res&&res.q7Rows,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
       alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
@@ -1880,11 +1927,11 @@ function importDanhMucTonKho() {
     var targetSheet = res.targetSheet || (importType === 'stock' ? 'TỔNG HỢP TỒN KHO' : 'Data_Excel');
     var msg = "✅ Cập nhật thành công!\n" +
       "- Sheet đích: " + targetSheet + "\n" +
-      "- Số dòng: " + (res.updatedRows || 0) + "\n" +
-      "- Số cột: " + (res.updatedCols || 0);
+      "- Số dòng ghi: " + totalWritten + "\n" +
+      "- Số chunk: " + chunks.length + "\n" +
+      "- Thời gian: " + Math.round((Date.now() - t0) / 1000) + "s";
     if (importType === 'stock') {
-      msg += "\n- Sheet TON_Q7: " + (res.q7Rows || 0) + " mã";
-      if (res._debugTotalMs) msg += "\n(Server: " + Math.round(res._debugTotalMs / 1000) + "s)";
+      msg += "\n- Sheet TON_Q7: " + (res.q7Rows || 0) + " mã/ĐVT";
     }
     if (res.msg) msg += "\n\n" + res.msg;
     msg += "\n[" + APP_BUILD + "]";
@@ -1896,7 +1943,6 @@ function importDanhMucTonKho() {
       clearCatalogLocalStorage();
       loadCatalogInBackground(true);
     } else {
-      // Nếu Q7 chưa tách được, thử rebuild riêng
       if (!(res.q7Rows > 0)) {
         apiGet('rebuildTonQ7', null, { directOnly: true, timeoutMs: 180000 }).catch(function() {});
       }
@@ -1908,7 +1954,7 @@ function importDanhMucTonKho() {
   }).catch(function(err) {
     hideLoad();
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-A',runId:'import-q7-v2'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
     // #endregion
     alert('Lỗi: ' + err.message + '\n[Build: ' + APP_BUILD + ']\nGợi ý: deploy lại code.gs (New version) rồi thử lại.');
   });
