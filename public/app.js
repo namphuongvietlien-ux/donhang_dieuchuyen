@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v12';
+var APP_BUILD = '2026-08-02-v13';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -1453,29 +1453,35 @@ function sh_ensureStockReady_() {
   if (shStockWarmState.promise) return shStockWarmState.promise;
   shStockWarmState.warming = true;
   var summaryEl = document.getElementById('sh-order-picker-summary');
-  if (summaryEl) summaryEl.innerText = 'Đang tải tồn kho (có thể 1–2 phút lần đầu)...';
+  if (summaryEl) summaryEl.innerText = 'Đang kiểm tra sheet TON_Q7 (tồn Kho Q7)...';
 
   shStockWarmState.promise = apiGet('getStockCacheStatus', null, { directOnly: true, timeoutMs: 30000 })
     .then(function(st) {
+      // #region agent log
+      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_ensureStockReady_',message:'getStockCacheStatus',data:{ready:!!(st&&st.ready),source:st&&st.source,stores:st&&st.stores,run:st&&st._debugRun},timestamp:Date.now(),hypothesisId:'A',runId:'q7-v1'})}).catch(function(){});
+      // #endregion
       if (st && st.ready) {
         shStockWarmState.ready = true;
         shStockWarmState.warming = false;
         shStockWarmState.promise = null;
         dbgSoanLine_('warmStock.alreadyReady', { source: st.source, stores: st.stores });
-        if (summaryEl) summaryEl.innerText = 'Tồn kho sẵn sàng (' + (st.source || 'cache') + ').';
+        if (summaryEl) summaryEl.innerText = 'Tồn Q7 sẵn sàng (' + (st.source || 'TON_Q7') + ', ' + (st.stores || 0) + ' mã).';
         return true;
       }
-      // Build + lưu cache (ScriptCache + sheet) — GET thẳng GAS, không qua Vercel
+      // Chưa có TON_Q7 → rebuild 1 lần từ sheet tổng (có thể lâu), rồi các lần sau đọc sheet nhẹ
       return apiGet('warmStockIndex', null, { directOnly: true, timeoutMs: 180000 }).then(function(w) {
         shStockWarmState.warming = false;
         shStockWarmState.promise = null;
         shStockWarmState.ready = !!(w && w.success && (w.ready !== false));
         shStockWarmState.lastMs = (w && w._debugTotalMs) || 0;
-        dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun, stores: w && w.stores, ready: shStockWarmState.ready, source: w && w.cacheSource, via: 'direct-get' });
+        dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun, stores: w && w.stores, rows: w && w.rows, ready: shStockWarmState.ready, source: w && w.cacheSource, rebuilt: w && w.rebuilt, via: 'direct-get' });
+        // #region agent log
+        fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_ensureStockReady_',message:'warmStockIndex done',data:{ready:shStockWarmState.ready,source:w&&w.cacheSource,rows:w&&w.rows,rebuilt:w&&w.rebuilt,serverMs:w&&w._debugTotalMs,run:w&&w._debugRun},timestamp:Date.now(),hypothesisId:'C',runId:'q7-v1'})}).catch(function(){});
+        // #endregion
         if (summaryEl) {
           summaryEl.innerText = shStockWarmState.ready
-            ? ('Tồn kho sẵn sàng (' + Math.round(shStockWarmState.lastMs / 1000) + 's).')
-            : 'Tồn kho chưa lưu được cache — sẽ thử force khi xuất bảng.';
+            ? ('Tồn Q7 sẵn sàng (' + (w.cacheSource || 'TON_Q7') + ', ' + Math.round(shStockWarmState.lastMs / 1000) + 's).')
+            : 'Chưa có TON_Q7 — Admin import lại file tồn kho.';
         }
         return shStockWarmState.ready;
       });
@@ -1485,7 +1491,7 @@ function sh_ensureStockReady_() {
       shStockWarmState.promise = null;
       shStockWarmState.ready = false;
       dbgSoanLine_('warmStock.error', { error: String(err && err.message || err), via: 'direct-get' });
-      if (summaryEl) summaryEl.innerText = 'Lỗi tải tồn kho: ' + String(err && err.message || err);
+      if (summaryEl) summaryEl.innerText = 'Lỗi tải tồn Q7: ' + String(err && err.message || err);
       return false;
     });
   return shStockWarmState.promise;
@@ -1526,13 +1532,13 @@ function sh_taoBangSoanTuDonDaChon() {
   }
 
   var _dbgSoanStart = Date.now();
-  showLoad("Bước 1/2: Đang tải tồn kho...");
+  showLoad("Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
   dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD });
 
   sh_ensureStockReady_().then(function(stockOk) {
-    showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (có tồn kho)..." : "Bước 2/2: Đang tạo bảng (force tồn kho qua GAS)...");
+    showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (đọc TON_Q7)..." : "Bước 2/2: Đang tạo bảng (rebuild TON_Q7 nếu thiếu)...");
     dbgSoanLine_('taoBangSoan.afterWarm', { stockOk: stockOk, warmMs: Date.now() - _dbgSoanStart });
-    // forceStock=true nếu warm chưa ready — POST text/plain thẳng GAS (không bị Vercel 60s)
+    // forceStock=true nếu chưa có TON_Q7 — POST text/plain thẳng GAS để rebuild
     var payload = {
       ngay: ngay,
       actor: sessionUser.user,
@@ -1548,7 +1554,16 @@ function sh_taoBangSoanTuDonDaChon() {
   }).then(function(res) {
     hideLoad();
     var _dbgClientMs = Date.now() - _dbgSoanStart;
-    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, build: APP_BUILD, steps: res && res._debugTimings });
+    var stockStep = null;
+    if (res && res._debugTimings) {
+      for (var si = 0; si < res._debugTimings.length; si++) {
+        if (res._debugTimings[si] && res._debugTimings[si].step === 'stockIndex') stockStep = res._debugTimings[si];
+      }
+    }
+    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, stockSource: res && res.stockSource, stockStep: stockStep, build: APP_BUILD, steps: res && res._debugTimings });
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{success:!!(res&&res.success),stockReady:res&&res.stockReady,stockSource:res&&res.stockSource,q7Keys:stockStep&&stockStep.q7Keys,via:stockStep&&stockStep.via,serverMs:res&&res._debugTotalMs,clientMs:_dbgClientMs,run:res&&res._debugRun,missingItems:res&&res.missingItems,totalItems:res&&res.totalItems},timestamp:Date.now(),hypothesisId:'D',runId:'q7-v1'})}).catch(function(){});
+    // #endregion
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại:\n" + ((res && (res.msg || res.error)) || "Không rõ lỗi") + "\n[Build FE: " + APP_BUILD + "]" + (res && res._debugRun ? (" [GAS: " + res._debugRun + "]") : ""));
       return;
@@ -1558,9 +1573,9 @@ function sh_taoBangSoanTuDonDaChon() {
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
-      "- Tồn kho: " + (res.stockReady ? "CÓ" : "KHÔNG có — kiểm tra sheet TỔNG HỢP TỒN KHO");
+      "- Tồn kho: " + (res.stockReady ? ("CÓ (" + (res.stockSource || "TON_Q7") + ")") : "KHÔNG — Admin import lại file tồn để tạo sheet TON_Q7");
     if (res._debugTotalMs) msg += "\n(Server tạo bảng: " + Math.round(res._debugTotalMs / 1000) + "s)";
-    msg += "\n(Tổng chờ: " + Math.round(_dbgClientMs / 1000) + "s)\n[fast-v10 / " + APP_BUILD + "]";
+    msg += "\n(Tổng chờ: " + Math.round(_dbgClientMs / 1000) + "s)\n[q7-v1 / " + APP_BUILD + "]";
     alert(msg);
     if (res.url) window.open(res.url, '_blank', 'noopener,noreferrer');
   }).catch(function(err) {

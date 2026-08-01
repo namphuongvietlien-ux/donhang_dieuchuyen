@@ -20,9 +20,129 @@ var CACHE_CATALOG_PREFIX = "catalog_data_v2_";
 var CACHE_STOCK_INDEX_PREFIX = "stock_index_v1_";
 var CACHE_TTL_SECONDS = 1800;
 var HISTORY_MAX_ROWS_DEFAULT = 8000;
+// Kho soạn hàng chính — sheet nhẹ chỉ chứa tồn Q7 (tạo lúc import file tồn)
+var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
+var TON_Q7_SHEET_NAME = "TON_Q7";
+var CACHE_TON_Q7_KEY = "ton_q7_map_v1";
 
 function getScriptCache_() {
   return CacheService.getScriptCache();
+}
+
+function isPackingQ7Store_(storeName) {
+  if (!storeName) return false;
+  if (isStoreNameMatch(storeName, PACKING_STOCK_STORE)) return true;
+  return formatShortStoreLabel(storeName) === "Q7";
+}
+
+function rebuildTonKhoQ7Sheet_(ss) {
+  ss = ss || getSS();
+  var t0 = Date.now();
+  var map = getStockMapForStoreFromFullSheet_(ss, PACKING_STOCK_STORE);
+  var keyCount = Object.keys(map).length;
+  var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(TON_Q7_SHEET_NAME);
+  sh.clear();
+  sh.getRange(1, 1, 1, 3).setValues([["Key", "Qty", "UpdatedAt"]]);
+  var rows = [];
+  for (var k in map) {
+    if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+    rows.push([k, Number(map[k]) || 0, ""]);
+  }
+  // getRange(r1,c1,r2,c2) — hàng cuối = 1 + rows.length
+  if (rows.length) sh.getRange(2, 1, rows.length + 1, 3).setValues(rows);
+  sh.getRange(1, 3).setValue(new Date());
+  try { SpreadsheetApp.flush(); } catch (e) {}
+  try {
+    putCacheJson_(getScriptCache_(), CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS);
+  } catch (e2) {}
+  return {
+    success: true,
+    sheetName: TON_Q7_SHEET_NAME,
+    rows: rows.length,
+    keyCount: keyCount,
+    store: PACKING_STOCK_STORE,
+    ms: Date.now() - t0,
+    _debugRun: "q7-v1"
+  };
+}
+
+function readTonKhoQ7Map_(ss) {
+  ss = ss || getSS();
+  var cache = getScriptCache_();
+  var cached = getCacheJson_(cache, CACHE_TON_Q7_KEY);
+  if (cached && typeof cached === "object" && Object.keys(cached).length) return cached;
+
+  var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
+  if (!sh || sh.getLastRow() < 2) return null;
+  var lastRow = sh.getLastRow();
+  var data = sh.getRange(2, 1, lastRow, 2).getValues();
+  var map = {};
+  for (var i = 0; i < data.length; i++) {
+    var key = String(data[i][0] || "").trim();
+    if (!key) continue;
+    map[key] = Number(data[i][1]) || 0;
+  }
+  if (!Object.keys(map).length) return null;
+  try { putCacheJson_(cache, CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS); } catch (e) {}
+  return map;
+}
+
+/** Đọc full sheet tổng hợp — chỉ gọi lúc import / rebuild Q7 */
+function getStockMapForStoreFromFullSheet_(ss, storeName) {
+  var tonKhoMap = {};
+  if (!storeName) return tonKhoMap;
+  var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!tonKhoSheet) return tonKhoMap;
+
+  var tkData = tonKhoSheet.getDataRange().getValues();
+  var stockConfig = getStockSheetConfig(tkData);
+  var header = tkData[stockConfig.headerIndex] || [];
+  var currentMaHang = "";
+  var currentMaVach = "";
+  for (var k = stockConfig.startRow; k < tkData.length; k++) {
+    var row = tkData[k];
+    if (!row) continue;
+    var rowMaHangRaw = getCellValue(row, stockConfig.maHangIdx, "");
+    var rowMaVachRaw = getCellValue(row, stockConfig.maVachIdx, "");
+    var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
+    if (hasOwnCode) {
+      currentMaHang = rowMaHangRaw;
+      currentMaVach = rowMaVachRaw;
+    }
+    var maHangTon = (hasOwnCode ? rowMaHangRaw : currentMaHang) || "";
+    var maVachTon = (hasOwnCode ? rowMaVachRaw : currentMaVach) || "";
+    if (!maHangTon && !maVachTon) continue;
+
+    var rowStores = getRowStoreNames(row, stockConfig);
+    var match = false;
+    if (stockConfig.storeHeaderIndexes && stockConfig.storeHeaderIndexes.length) {
+      for (var c = 0; c < stockConfig.storeHeaderIndexes.length; c++) {
+        var storeHeaderIdx = stockConfig.storeHeaderIndexes[c];
+        var storeNameCandidate = getCellValue(header, storeHeaderIdx, "");
+        var qty = parseQuantityValue(row[storeHeaderIdx]);
+        if (!storeNameCandidate) continue;
+        if (isStoreNameMatch(storeNameCandidate, storeName) && qty !== 0) {
+          match = true;
+          if (maHangTon) addStockValueByCode(tonKhoMap, "MH:", maHangTon, qty);
+          if (maVachTon) addStockValueByCode(tonKhoMap, "MV:", maVachTon, qty);
+        }
+      }
+    }
+    if (match) continue;
+
+    for (var s = 0; s < rowStores.length; s++) {
+      if (isStoreNameMatch(rowStores[s], storeName)) {
+        match = true;
+        break;
+      }
+    }
+    if (!match) continue;
+    var ton = parseQuantityValue(row[stockConfig.tonKhoIdx]);
+    if (maHangTon) addStockValueByCode(tonKhoMap, "MH:", maHangTon, ton);
+    if (maVachTon) addStockValueByCode(tonKhoMap, "MV:", maVachTon, ton);
+  }
+  return tonKhoMap;
 }
 
 function invalidateCatalogCache_() {
@@ -677,6 +797,10 @@ function doGet(e) {
           break;
         case 'getStockCacheStatus':
           res = getStockCacheStatus();
+          break;
+        case 'rebuildTonQ7':
+          res = rebuildTonKhoQ7Sheet_(getSS());
+          res._debugRun = "q7-v1";
           break;
         case 'getDashboardSummary':
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');
@@ -1652,13 +1776,21 @@ function nhapKhauCapNhatThongTin(payload) {
       var stockWriteInfo = writeImportedDataToSheet(stockSheetDirect, fileData);
       SpreadsheetApp.flush();
       invalidateStoresCache_();
+      var q7Info = { rows: 0 };
+      try {
+        q7Info = rebuildTonKhoQ7Sheet_(ss);
+      } catch (q7Err) {
+        Logger.log("rebuildTonKhoQ7Sheet_ error: " + q7Err);
+      }
       return {
         success: true,
         importType: importType,
         targetSheet: 'TỔNG HỢP TỒN KHO',
         updatedRows: stockWriteInfo.rows,
         updatedCols: stockWriteInfo.cols,
-        msg: 'Đã cập nhật file tồn kho lên sheet TỔNG HỢP TỒN KHO.'
+        q7Sheet: TON_Q7_SHEET_NAME,
+        q7Rows: q7Info.rows || 0,
+        msg: 'Đã cập nhật TỔNG HỢP TỒN KHO và tách sheet nhẹ ' + TON_Q7_SHEET_NAME + ' (' + (q7Info.rows || 0) + ' mã Q7) để tạo bảng soạn nhanh.'
       };
     }
     if (importType === 'catalog') {
@@ -2099,64 +2231,13 @@ function getChiTietPhieu(soPhieu, storeName) {
 }
 
 function getStockMapForStore(ss, storeName) {
-  var tonKhoMap = {};
-  if (!storeName) return tonKhoMap;
-  var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-  if (!tonKhoSheet) return tonKhoMap;
-
-  var tkData = tonKhoSheet.getDataRange().getValues();
-  var stockConfig = getStockSheetConfig(tkData);
-  var header = tkData[stockConfig.headerIndex] || [];
-  var currentMaHang = "";
-  var currentMaVach = "";
-  for (var k = stockConfig.startRow; k < tkData.length; k++) {
-    var row = tkData[k];
-    if (!row) continue;
-    var rowMaHangRaw = getCellValue(row, stockConfig.maHangIdx, "");
-    var rowMaVachRaw = getCellValue(row, stockConfig.maVachIdx, "");
-    var hasOwnCode = !!(rowMaHangRaw || rowMaVachRaw);
-    if (hasOwnCode) {
-      currentMaHang = rowMaHangRaw;
-      currentMaVach = rowMaVachRaw;
-    }
-
-    var maHangTon = (hasOwnCode ? rowMaHangRaw : currentMaHang) || "";
-    var maVachTon = (hasOwnCode ? rowMaVachRaw : currentMaVach) || "";
-    if (!maHangTon && !maVachTon) continue;
-
-    var rowStores = getRowStoreNames(row, stockConfig);
-    var match = false;
-    if (stockConfig.storeHeaderIndexes && stockConfig.storeHeaderIndexes.length) {
-      for (var c = 0; c < stockConfig.storeHeaderIndexes.length; c++) {
-        var storeHeaderIdx = stockConfig.storeHeaderIndexes[c];
-        var storeNameCandidate = getCellValue(header, storeHeaderIdx, "");
-        var qty = parseQuantityValue(row[storeHeaderIdx]);
-        if (!storeNameCandidate) continue;
-        if (isStoreNameMatch(storeNameCandidate, storeName) && qty !== 0) {
-          match = true;
-          if (maHangTon) addStockValueByCode(tonKhoMap, "MH:", maHangTon, qty);
-          if (maVachTon) addStockValueByCode(tonKhoMap, "MV:", maVachTon, qty);
-        }
-      }
-    }
-    if (match) continue;
-
-    for (var s = 0; s < rowStores.length; s++) {
-      if (isStoreNameMatch(rowStores[s], storeName)) {
-        match = true;
-        break;
-      }
-    }
-    if (!match) continue;
-    var ton = parseQuantityValue(row[stockConfig.tonKhoIdx]);
-    if (maHangTon) {
-      addStockValueByCode(tonKhoMap, "MH:", maHangTon, ton);
-    }
-    if (maVachTon) {
-      addStockValueByCode(tonKhoMap, "MV:", maVachTon, ton);
-    }
+  if (!storeName) return {};
+  // Ưu tiên sheet nhẹ TON_Q7 khi hỏi tồn kho Q7
+  if (isPackingQ7Store_(storeName)) {
+    var light = readTonKhoQ7Map_(ss);
+    if (light && Object.keys(light).length) return light;
   }
-  return tonKhoMap;
+  return getStockMapForStoreFromFullSheet_(ss, storeName);
 }
 
 function parseQuantityValue(value) {
@@ -3518,7 +3599,7 @@ function taoBangSoanHangNgayMai(payload) {
     }
     _dbgSteps.push(entry);
   }
-  _dbgMark("start", { selectedCount: payload && payload.selectedOrders ? payload.selectedOrders.length : 0, algo: "fast-no-stock" });
+  _dbgMark("start", { selectedCount: payload && payload.selectedOrders ? payload.selectedOrders.length : 0, algo: "ton-q7" });
   // #endregion
 
   var ss = getSS();
@@ -3653,20 +3734,24 @@ function taoBangSoanHangNgayMai(payload) {
   });
   var activeMap = getActiveStoreMap();
 
-  // Ưu tiên cache; nếu payload.forceStock=true thì được phép build (chỉ khi gọi thẳng GAS)
+  // Tồn kho soạn hàng: chỉ dùng sheet nhẹ TON_Q7 (tách lúc import file tồn)
   var forceStock = !!(payload && payload.forceStock);
-  var stockIndex = getStockIndexCached_(ss, { onlyCached: !forceStock });
-  var stockReady = !!(stockIndex && typeof stockIndex === "object" && Object.keys(stockIndex).length);
-  if (!stockReady) stockIndex = {};
+  var q7Map = readTonKhoQ7Map_(ss);
+  if ((!q7Map || !Object.keys(q7Map).length) && forceStock) {
+    try { rebuildTonKhoQ7Sheet_(ss); } catch (rebuildErr) { Logger.log(rebuildErr); }
+    q7Map = readTonKhoQ7Map_(ss);
+  }
+  var stockReady = !!(q7Map && Object.keys(q7Map).length);
+  if (!q7Map) q7Map = {};
   // #region agent log
-  _dbgMark("stockIndex", { via: stockReady ? (forceStock ? "built-or-cache" : "cache-hit") : "cache-miss", forceStock: forceStock, itemCount: keys.length });
+  _dbgMark("stockIndex", { via: "TON_Q7", stockReady: stockReady, q7Keys: Object.keys(q7Map).length, forceStock: forceStock, itemCount: keys.length });
   // #endregion
 
   var sheetName = "__TMP_SOAN_NGAY_MAI";
   var reportSheet = recreateTempSheetFast_(ss, sheetName);
   var title = "BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy");
   var headerRow = 5;
-  var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock khả dụng", "Tổng đặt"];
+  var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
   for (var h = 0; h < storeList.length; h++) headers.push(formatShortStoreLabel(storeList[h]));
   headers.push("Cảnh báo");
   headers.push("Đề xuất xử lý thiếu");
@@ -3678,30 +3763,14 @@ function taoBangSoanHangNgayMai(payload) {
   for (var k = 0; k < keys.length; k++) {
     var it = itemMap[keys[k]];
     var sourceStores = Object.keys(it.sourceStores);
-    var stock = 0;
-    var canhBao = "Chưa có cache tồn";
-    var deXuat = "Đợi tải tồn kho xong rồi tạo lại bảng để có số tồn.";
+    var stock = stockReady ? getStockValueForItem(q7Map, it.maHang, it.maVach) : 0;
+    var canhBao = "Chưa có TON_Q7";
+    var deXuat = "Admin hãy import lại file tồn kho (tự tạo sheet TON_Q7) hoặc bấm rebuildTonQ7.";
     if (stockReady) {
-      for (var s = 0; s < sourceStores.length; s++) {
-        var storeStockMap = getStockMapByStoreName(stockIndex, sourceStores[s]);
-        var codeA = normalizeProductCode(it.maHang || "");
-        var codeB = normalizeProductCode(it.maVach || "");
-        var qtyByMaHang = codeA ? (storeStockMap[codeA] || 0) : 0;
-        var qtyByMaVach = codeB ? (storeStockMap[codeB] || 0) : 0;
-        if (!qtyByMaHang && codeA) {
-          var compactA = normalizeNumericCode(codeA);
-          if (compactA) qtyByMaHang = storeStockMap[compactA] || 0;
-        }
-        if (!qtyByMaVach && codeB) {
-          var compactB = normalizeNumericCode(codeB);
-          if (compactB) qtyByMaVach = storeStockMap[compactB] || 0;
-        }
-        stock += qtyByMaHang > 0 ? qtyByMaHang : qtyByMaVach;
-      }
       var thieu = it.totalQty - stock;
       canhBao = thieu > 0 ? ("THIẾU " + thieu) : "ĐỦ";
       deXuat = thieu > 0
-        ? ("Thiếu " + thieu + ": ưu tiên đơn gấp, điều chuyển nội bộ hoặc nhập bổ sung.")
+        ? ("Thiếu " + thieu + " tại Q7: ưu tiên đơn gấp, điều chuyển nội bộ hoặc nhập bổ sung.")
         : "OK - có thể soạn gộp theo mã.";
       if (thieu > 0) missingLines += 1;
     }
@@ -3728,10 +3797,10 @@ function taoBangSoanHangNgayMai(payload) {
   }
   var colCount = headers.length;
   var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length +
-    (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: cache") : " | Tồn: chưa sẵn sàng (tạo lại sau khi tải tồn)");
+    (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: TON_Q7") : " | Tồn: chưa có sheet TON_Q7 — Admin import lại file tồn");
   var sheetBlock = [
     padRow_([title], colCount),
-    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã"], colCount),
+    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã | Stock từ " + TON_Q7_SHEET_NAME], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
     padRow_(headers, colCount)
@@ -3755,41 +3824,52 @@ function taoBangSoanHangNgayMai(payload) {
     totalItems: rows.length,
     missingItems: missingLines,
     stockReady: stockReady,
+    stockSource: TON_Q7_SHEET_NAME,
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "fast-v10"
+    _debugRun: "q7-v1"
   };
 }
 
 function warmStockIndex() {
   var t0 = Date.now();
   var ss = getSS();
-  var index = getStockIndexCached_(ss, {});
-  var storeCount = index ? Object.keys(index).length : 0;
-  var status = getStockCacheStatus();
+  var map = readTonKhoQ7Map_(ss);
+  var rebuilt = false;
+  if (!map || !Object.keys(map).length) {
+    var info = rebuildTonKhoQ7Sheet_(ss);
+    rebuilt = true;
+    map = readTonKhoQ7Map_(ss);
+    return {
+      success: true,
+      ready: !!(map && Object.keys(map).length),
+      stores: 1,
+      rows: (map && Object.keys(map).length) || (info && info.rows) || 0,
+      cacheSource: "TON_Q7-rebuild",
+      rebuilt: rebuilt,
+      _debugRun: "q7-v1",
+      _debugTotalMs: Date.now() - t0
+    };
+  }
   return {
     success: true,
-    stores: storeCount,
-    ready: !!(status && status.ready),
-    cacheSource: status && status.source,
-    _debugRun: "fast-v10",
+    ready: true,
+    stores: 1,
+    rows: Object.keys(map).length,
+    cacheSource: "TON_Q7",
+    rebuilt: false,
+    _debugRun: "q7-v1",
     _debugTotalMs: Date.now() - t0
   };
 }
 
 function getStockCacheStatus() {
   var ss = getSS();
-  var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-  if (!stockSheet) return { success: true, ready: false, source: "none", _debugRun: "fast-v10" };
-  var version = String(stockSheet.getLastRow()) + "_" + String(stockSheet.getLastColumn());
-  var cached = getCacheJson_(getScriptCache_(), CACHE_STOCK_INDEX_PREFIX + version);
-  if (cached && Object.keys(cached).length) {
-    return { success: true, ready: true, source: "script-cache", stores: Object.keys(cached).length, _debugRun: "fast-v10" };
+  var map = readTonKhoQ7Map_(ss);
+  if (map && Object.keys(map).length) {
+    return { success: true, ready: true, source: "TON_Q7", stores: Object.keys(map).length, _debugRun: "q7-v1" };
   }
-  var sheetCached = readStockIndexFromSheet_(ss, version);
-  if (sheetCached && Object.keys(sheetCached).length) {
-    return { success: true, ready: true, source: "sheet-cache", stores: Object.keys(sheetCached).length, _debugRun: "fast-v10" };
-  }
-  return { success: true, ready: false, source: "none", _debugRun: "fast-v10" };
+  var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
+  return { success: true, ready: false, source: sh ? "TON_Q7-empty" : "none", _debugRun: "q7-v1" };
 }
