@@ -3,7 +3,8 @@ const GAS_EXEC_URL = 'https://script.google.com/macros/s/AKfycbwhqeAzzNrPTm1cH7K
 
 async function callJsonApi(urls, options) {
   let lastError = null;
-  for (const target of urls) {
+  const uniqueUrls = Array.isArray(urls) ? urls.filter(function(u, i, arr) { return u && arr.indexOf(u) === i; }) : [urls];
+  for (const target of uniqueUrls) {
     try {
       const res = await fetch(target, options);
       const txt = await res.text();
@@ -14,7 +15,6 @@ async function callJsonApi(urls, options) {
       try {
         return JSON.parse(txt);
       } catch (e) {
-        // GAS can return plain "OK" when payload is invalid; treat as failure and try fallback endpoint.
         lastError = new Error('Invalid JSON response from ' + target + ': ' + txt);
         continue;
       }
@@ -25,32 +25,39 @@ async function callJsonApi(urls, options) {
   throw lastError || new Error('Không thể kết nối tới máy chủ');
 }
 
-async function apiGet(action, params) {
+async function apiGet(action, params, options) {
+  options = options || {};
   const proxyUrl = new URL('/api/gas-proxy', location.origin);
   proxyUrl.searchParams.set('action', action);
-  proxyUrl.searchParams.set('_ts', String(Date.now()));
+  if (!options.skipCacheBust) proxyUrl.searchParams.set('_ts', String(Date.now()));
   if (params) {
     Object.keys(params).forEach(k => {
       if (params[k] !== undefined && params[k] !== null) proxyUrl.searchParams.set(k, params[k]);
     });
   }
 
-  const directUrl = new URL(GAS_EXEC_URL);
-  directUrl.searchParams.set('action', action);
-  directUrl.searchParams.set('_ts', String(Date.now()));
-  if (params) {
-    Object.keys(params).forEach(k => {
-      if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
-    });
+  const urls = [proxyUrl.toString()];
+  if (options.allowDirectFallback !== false) {
+    const directUrl = new URL(GAS_EXEC_URL);
+    directUrl.searchParams.set('action', action);
+    directUrl.searchParams.set('_ts', String(Date.now()));
+    if (params) {
+      Object.keys(params).forEach(k => {
+        if (params[k] !== undefined && params[k] !== null) directUrl.searchParams.set(k, params[k]);
+      });
+    }
+    urls.push(directUrl.toString());
   }
-
-  return callJsonApi([proxyUrl.toString(), directUrl.toString()], { method: 'GET', headers: { 'Accept': 'application/json' } });
+  return callJsonApi(urls, { method: 'GET', headers: { 'Accept': 'application/json' } });
 }
 
-async function apiPost(action, payload) {
+async function apiPost(action, payload, options) {
+  options = options || {};
   const body = { action: action, payload: payload };
-  const options = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-  return callJsonApi(['/api/gas-proxy', GAS_EXEC_URL], options);
+  const reqOptions = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const urls = ['/api/gas-proxy'];
+  if (options.allowDirectFallback !== false) urls.push(GAS_EXEC_URL);
+  return callJsonApi(urls, reqOptions);
 }
 
 function showLoginError(message) {
@@ -65,6 +72,9 @@ var CATALOG_CACHE_KEY = 'donhang_catalog_v2';
 var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v2';
 var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v2';
 var CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
+var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v1';
+var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v1';
+var BOOTSTRAP_CACHE_TTL_MS = 60 * 60 * 1000;
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -204,6 +214,27 @@ function applyBootstrapData(res) {
   applyQuyenKho();
 }
 
+function readBootstrapFromLocalStorage() {
+  try {
+    var ts = Number(localStorage.getItem(BOOTSTRAP_CACHE_TS_KEY) || '0');
+    if (!ts || (Date.now() - ts) > BOOTSTRAP_CACHE_TTL_MS) return null;
+    var raw = localStorage.getItem(BOOTSTRAP_CACHE_KEY);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    return parsed && parsed.success ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveBootstrapToLocalStorage(res) {
+  try {
+    if (!res || !res.success) return;
+    localStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify(res));
+    localStorage.setItem(BOOTSTRAP_CACHE_TS_KEY, String(Date.now()));
+  } catch (e) {}
+}
+
 var phieuData = []; var editRows = []; var currentLoadedRows = []; var currentPhieuObj = null; var currentConfirmPhieuObj = null;
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
@@ -282,15 +313,31 @@ function doLogin() {
 }
 
 function initSystemData() {
-  showLoad("Đang tải hệ thống...");
-  var qlNgay = getEl("ql-ngay"); if (qlNgay) qlNgay.valueAsDate = new Date();
-  apiGet('getBootstrapData').then(function(res) {
+  var cachedBootstrap = readBootstrapFromLocalStorage();
+  if (cachedBootstrap) {
+    applyBootstrapData(cachedBootstrap);
+    loadCatalogInBackground(false, cachedBootstrap.catalogVersion || '');
+  }
+
+  var qlNgay = getEl("ql-ngay"); if (qlNgay && !qlNgay.value) qlNgay.valueAsDate = new Date();
+  if (!cachedBootstrap) showLoad("Đang tải hệ thống...");
+
+  apiGet('getBootstrapData', null, { allowDirectFallback: false }).then(function(res) {
     hideLoad();
-    if (!res || !res.success) { alert("Lỗi tải data: " + ((res && (res.error || res.msg)) || res)); return; }
+    if (!res || !res.success) {
+      if (!cachedBootstrap) alert("Lỗi tải data: " + ((res && (res.error || res.msg)) || res));
+      return;
+    }
     applyBootstrapData(res);
+    saveBootstrapToLocalStorage(res);
     loadCatalogInBackground(false, res.catalogVersion || '');
     openDeepLinkedOrder();
-  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+  }).catch(function(err) {
+    hideLoad();
+    if (!cachedBootstrap) alert('Lỗi: ' + err.message);
+  });
+
+  if (cachedBootstrap) openDeepLinkedOrder();
 }
 
 function updateDashboardHero() {
@@ -684,12 +731,12 @@ function submitPhieuMoi() {
        arrItems = []; renderTable();
        if (document.getElementById("input-scan")) document.getElementById("input-scan").focus();
        if (res.soPhieu && !res.coLoi) {
-         apiPost('postProcessNewOrder', {
+  apiPost('postProcessNewOrder', {
            soPhieu: res.soPhieu,
            khoXuat: res.khoXuat || khoXuat,
            khoNhan: res.khoNhan || khoNhan,
            itemCount: res.itemCount || itemCount
-         }).catch(function() {});
+         }, { allowDirectFallback: false }).catch(function() {});
        }
     }
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
@@ -1368,8 +1415,8 @@ function sh_taoBangSoanTuDonDaChon() {
     return;
   }
 
-  showLoad("Đang tạo bảng soạn hàng từ các đơn đã chọn...");
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }).then(function(res) {
+  showLoad("Đang tạo bảng soạn hàng...");
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: false }).then(function(res) {
     hideLoad();
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi"));

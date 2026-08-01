@@ -151,6 +151,12 @@
 
   <!-- Loading -->
   <div id="loading-overlay"><h2>⏳ Đang kết nối...</h2><span id="loading-text">Chờ chút nhé...</span></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      var overlay = document.getElementById('loading-overlay');
+      if (overlay) overlay.style.display = 'none';
+    });
+  </script>
   
   <!-- Màn Hình Đăng Nhập -->
   <div id="login-screen">
