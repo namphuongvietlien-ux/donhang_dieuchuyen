@@ -91,7 +91,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v5';
+var APP_BUILD = '2026-08-02-v6';
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
@@ -1477,14 +1477,16 @@ function sh_taoBangSoanTuDonDaChon() {
     hideLoad();
     // #region agent log
     var _dbgClientMs = Date.now() - _dbgSoanStart;
-    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), build: APP_BUILD, via: 'proxy', steps: res && res._debugTimings, debug: res && res._debugInfo });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,via:'proxy'},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v5'})}).catch(function(){});
+    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), build: APP_BUILD, via: 'proxy', msg: res && (res.msg || res.error), action: res && res.action, steps: res && res._debugTimings, debug: res && res._debugInfo, resKeys: res ? Object.keys(res) : [] });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,msg:res&&(res.msg||res.error),via:'proxy'},timestamp:Date.now(),hypothesisId:'C',runId:'post-fix-v6'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
-      var failMsg = "❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi");
+      var errText = (res && (res.msg || res.error)) || "Không rõ lỗi";
+      var failMsg = "❌ Tạo bảng thất bại:\n" + errText;
       failMsg += "\n[Build FE: " + APP_BUILD + "]";
       if (res && res._debugRun) failMsg += " [GAS: " + res._debugRun + "]";
-      else failMsg += " [GAS: chưa deploy bản mới]";
+      else if (res && (res.msg || res.error)) failMsg += " [GAS có phản hồi lỗi]";
+      else failMsg += " [GAS: phản hồi không hợp lệ]";
       if (res && res._debugTotalMs) failMsg += "\n(Server: " + Math.round(res._debugTotalMs / 1000) + "s)";
       if (res && res._debugInfo) failMsg += "\n" + JSON.stringify(res._debugInfo);
       alert(failMsg);

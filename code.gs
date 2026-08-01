@@ -428,7 +428,13 @@ function doPost(e) {
         }
         return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
       } catch(apiErr) {
-        return ContentService.createTextOutput(JSON.stringify({ error: apiErr.message })).setMimeType(ContentService.MimeType.JSON);
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          error: apiErr.message || String(apiErr),
+          msg: apiErr.message || String(apiErr),
+          action: action,
+          _debugRun: "post-fix-v3-catch"
+        })).setMimeType(ContentService.MimeType.JSON);
       }
     }
 
@@ -3348,7 +3354,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "post-fix-v3"
+    _debugRun: "post-fix-v6"
   };
 }
 
@@ -3646,20 +3652,26 @@ function taoBangSoanHangNgayMai(payload) {
   for (var r = 0; r < rows.length; r++) rows[r][0] = r + 1;
 
   var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length + " | Mã thiếu: " + missingLines;
+  function padRow_(arr, width) {
+    var out = [];
+    for (var pi = 0; pi < width; pi++) out.push(pi < arr.length ? arr[pi] : "");
+    return out;
+  }
+  var colCount = headers.length;
   var sheetBlock = [
-    [title],
-    ["Nguồn dữ liệu: Đơn tạo ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy")],
-    [""],
-    [summaryLine],
-    headers
+    padRow_([title], colCount),
+    padRow_(["Nguồn dữ liệu: Đơn tạo ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy")], colCount),
+    padRow_([""], colCount),
+    padRow_([summaryLine], colCount),
+    padRow_(headers, colCount)
   ];
-  for (var rb = 0; rb < rows.length; rb++) sheetBlock.push(rows[rb]);
-  if (sheetBlock.length && headers.length) {
-    reportSheet.getRange(1, 1, sheetBlock.length, headers.length).setValues(sheetBlock);
+  for (var rb = 0; rb < rows.length; rb++) sheetBlock.push(padRow_(rows[rb], colCount));
+  if (sheetBlock.length && colCount) {
+    reportSheet.getRange(1, 1, sheetBlock.length, colCount).setValues(sheetBlock);
     reportSheet.setFrozenRows(headerRow);
   }
   // #region agent log
-  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: headers.length, batched: true });
+  _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount, batched: true, padded: true });
   // #endregion
 
   SpreadsheetApp.flush();
@@ -3677,6 +3689,6 @@ function taoBangSoanHangNgayMai(payload) {
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "post-fix-v3"
+    _debugRun: "post-fix-v6"
   };
 }
