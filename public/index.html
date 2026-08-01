@@ -150,11 +150,13 @@
 <body>
 
   <!-- Loading -->
-  <div id="loading-overlay"><h2>⏳ Đang kết nối...</h2><span id="loading-text">Chờ chút nhé...</span></div>
+  <div id="loading-overlay"><h2>⏳ Đang kết nối...</h2><span id="loading-text">Chờ chút nhé...</span><small id="app-build-tag" style="display:block;margin-top:8px;opacity:0.5;font-size:11px;">build: loading...</small></div>
   <script>
     document.addEventListener('DOMContentLoaded', function() {
       var overlay = document.getElementById('loading-overlay');
       if (overlay) overlay.style.display = 'none';
+      var buildTag = document.getElementById('app-build-tag');
+      if (buildTag) buildTag.textContent = 'build: check app.js';
     });
   </script>
   

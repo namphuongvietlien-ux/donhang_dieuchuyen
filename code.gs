@@ -3348,7 +3348,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore) {
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "post-fix-v2"
+    _debugRun: "post-fix-v3"
   };
 }
 
@@ -3356,7 +3356,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
-  historyPack = historyPack || readHistoryDataPack_(historySheet, 3500);
+  historyPack = historyPack || readHistoryDataPack_(historySheet, 5000);
   var data = historyPack.data;
   if (!data || data.length < 2) return [];
 
@@ -3458,7 +3458,7 @@ function taoBangSoanHangNgayMai(payload) {
   }
   var historyPack;
   if (Object.keys(selectedSetEarly).length) {
-    historyPack = readHistoryForSelectedOrders_(historySheet, selectedSetEarly, baseDateStr, 4000);
+    historyPack = readHistoryDataPack_(historySheet, 5000);
   } else {
     historyPack = readHistoryDataPack_(historySheet, 8000);
   }
@@ -3552,7 +3552,20 @@ function taoBangSoanHangNgayMai(payload) {
   var keys = [];
   for (var key in itemMap) keys.push(key);
   if (!keys.length) {
-    return { success: false, msg: "Không có đơn hợp lệ trong ngày đã chọn để tạo bảng soạn.", _debugTimings: _dbgSteps, _debugTotalMs: Date.now() - _dbgT0 };
+    return {
+      success: false,
+      msg: "Không có đơn hợp lệ trong ngày đã chọn để tạo bảng soạn.",
+      _debugTimings: _dbgSteps,
+      _debugTotalMs: Date.now() - _dbgT0,
+      _debugRun: "post-fix-v3",
+      _debugInfo: {
+        baseDateStr: baseDateStr,
+        selectedOrders: selectedOrderCount,
+        historyRows: data.length - 1,
+        historyStartRow: historyPack.startRow,
+        selectedList: Object.keys(selectedSet)
+      }
+    };
   }
 
   // #region agent log
@@ -3664,6 +3677,6 @@ function taoBangSoanHangNgayMai(payload) {
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "post-fix-v2"
+    _debugRun: "post-fix-v3"
   };
 }
