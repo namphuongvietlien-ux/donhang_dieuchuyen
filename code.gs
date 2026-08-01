@@ -14,6 +14,237 @@ var STORE_MAP = {
   "Kho Địa điểm kinh doanh 05": "K9 Quận 1",
   "Kho Địa điểm kinh doanh 06": "K9 Quận 4 Cũ"
 };
+var GUIDE_SHEET_NAME = "Hướng dẫn";
+var CACHE_STORES_KEY = "stores_registry_v1";
+var CACHE_CATALOG_PREFIX = "catalog_data_v2_";
+var CACHE_TTL_SECONDS = 1800;
+
+function getScriptCache_() {
+  return CacheService.getScriptCache();
+}
+
+function invalidateCatalogCache_() {
+  // Catalog cache keys include sheet version suffix; bump is handled on next read.
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty("catalog_version_bump", String(Date.now()));
+  } catch (e) {}
+}
+
+function invalidateStoresCache_() {
+  getScriptCache_().remove(CACHE_STORES_KEY);
+}
+
+function extractStoreFullNameFromCell_(value) {
+  var text = String(value || "").trim();
+  if (!text) return "";
+  var pipeIdx = text.indexOf("|");
+  if (pipeIdx !== -1) return String(text.substring(pipeIdx + 1)).trim();
+  return text;
+}
+
+function extractStoreCodeFromCell_(value) {
+  var text = String(value || "").trim();
+  if (!text) return "";
+  var pipeIdx = text.indexOf("|");
+  if (pipeIdx !== -1) return String(text.substring(0, pipeIdx)).trim();
+  return text.split(/\s+/)[0] || text;
+}
+
+function findGuideSheetColumns_(headerRow) {
+  var cols = { stt: -1, khoCode: -1, diaChi: -1, khoFull: -1, tenNgan: -1 };
+  if (!headerRow) return cols;
+  var khoCols = [];
+  for (var c = 0; c < headerRow.length; c++) {
+    var token = normalizeHeaderText(headerRow[c]);
+    if (!token) continue;
+    if (token === "stt") cols.stt = c;
+    else if (token.indexOf("diachi") !== -1 || token.indexOf("dia chi") !== -1) cols.diaChi = c;
+    else if (token.indexOf("tenngan") !== -1 || token.indexOf("ten ngan") !== -1) cols.tenNgan = c;
+    else if (token.indexOf("kho") !== -1) khoCols.push(c);
+  }
+  if (khoCols.length >= 2) {
+    cols.khoCode = khoCols[0];
+    cols.khoFull = khoCols[1];
+  } else if (khoCols.length === 1) {
+    cols.khoFull = khoCols[0];
+    cols.khoCode = khoCols[0];
+  }
+  return cols;
+}
+
+function buildFallbackStoreRegistry_() {
+  var stores = Object.keys(STORE_MAP);
+  return { stores: stores, storeMap: copyObject_(STORE_MAP), storeDetails: [] };
+}
+
+function copyObject_(obj) {
+  var out = {};
+  for (var key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) out[key] = obj[key];
+  }
+  return out;
+}
+
+function loadStoresFromGuideSheet(ss) {
+  ss = ss || getSS();
+  var sheet = ss.getSheetByName(GUIDE_SHEET_NAME);
+  if (!sheet) return buildFallbackStoreRegistry_();
+
+  var data = sheet.getDataRange().getValues();
+  if (!data || data.length < 2) return buildFallbackStoreRegistry_();
+
+  var headerIndex = -1;
+  var cols = null;
+  for (var r = 0; r < Math.min(data.length, 20); r++) {
+    var row = data[r];
+    if (!row) continue;
+    var probe = findGuideSheetColumns_(row);
+    if (probe.khoFull !== -1 && probe.tenNgan !== -1) {
+      headerIndex = r;
+      cols = probe;
+      break;
+    }
+  }
+  if (headerIndex < 0 || !cols) {
+    headerIndex = 0;
+    cols = { stt: 0, khoCode: 1, diaChi: 2, khoFull: 3, tenNgan: 4 };
+  }
+
+  var stores = [];
+  var storeMap = {};
+  var storeDetails = [];
+  for (var i = headerIndex + 1; i < data.length; i++) {
+    var row = data[i];
+    if (!row) continue;
+    var fullName = getCellValue(row, cols.khoFull, "");
+    if (!fullName) fullName = extractStoreFullNameFromCell_(getCellValue(row, cols.khoCode, ""));
+    fullName = String(fullName).trim();
+    if (!fullName) continue;
+
+    var shortName = String(getCellValue(row, cols.tenNgan, "")).trim();
+    var codeCell = getCellValue(row, cols.khoCode, "");
+    var address = getCellValue(row, cols.diaChi, "");
+    var sttVal = getCellValue(row, cols.stt, "");
+
+    if (stores.indexOf(fullName) === -1) stores.push(fullName);
+    storeMap[fullName] = shortName || fullName;
+    storeDetails.push({
+      stt: sttVal,
+      code: extractStoreCodeFromCell_(codeCell),
+      fullName: fullName,
+      shortName: shortName || fullName,
+      address: address
+    });
+  }
+
+  if (!stores.length) return buildFallbackStoreRegistry_();
+  return { stores: stores, storeMap: storeMap, storeDetails: storeDetails };
+}
+
+function getStoreRegistry(ss) {
+  var cache = getScriptCache_();
+  var cached = cache.get(CACHE_STORES_KEY);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (e) {}
+  }
+  var registry = loadStoresFromGuideSheet(ss);
+  try {
+    cache.put(CACHE_STORES_KEY, JSON.stringify(registry), CACHE_TTL_SECONDS);
+  } catch (e) {}
+  return registry;
+}
+
+function getActiveStoreMap() {
+  try {
+    var registry = getStoreRegistry();
+    var merged = copyObject_(STORE_MAP);
+    if (registry && registry.storeMap) {
+      for (var key in registry.storeMap) {
+        if (Object.prototype.hasOwnProperty.call(registry.storeMap, key)) {
+          merged[key] = registry.storeMap[key];
+        }
+      }
+    }
+    return merged;
+  } catch (e) {
+    return STORE_MAP;
+  }
+}
+
+function getRuntimeStores() {
+  try {
+    var registry = getStoreRegistry();
+    if (registry && registry.stores && registry.stores.length) return registry.stores;
+  } catch (e) {}
+  return Object.keys(STORE_MAP);
+}
+
+function getCatalogVersion_() {
+  var ss = getSS();
+  var sheet = ss.getSheetByName("Data_Excel");
+  if (!sheet) return "0";
+  var bump = "";
+  try {
+    bump = PropertiesService.getScriptProperties().getProperty("catalog_version_bump") || "";
+  } catch (e) {}
+  return String(sheet.getLastRow()) + "_" + String(sheet.getLastColumn()) + "_" + bump;
+}
+
+function buildCatalogFromSheet_(ss) {
+  var danhMucHangHoa = {};
+  ss = ss || getSS();
+  var dataSheet = ss.getSheetByName("Data_Excel");
+  if (!dataSheet) return danhMucHangHoa;
+
+  var rawData = dataSheet.getDataRange().getValues();
+  var tenHangChuanTheoMa = {};
+  var headerRowIndex = -1;
+  var headerRow = null;
+  for (var hdr = 0; hdr < Math.min(rawData.length, 6); hdr++) {
+    if (!rawData[hdr]) continue;
+    var normalizedHeaderText = "";
+    for (var c = 0; c < rawData[hdr].length; c++) {
+      var cellText = normalizeHeaderText(rawData[hdr][c]);
+      if (cellText.indexOf("mahang") !== -1 || cellText.indexOf("mavach") !== -1 || cellText.indexOf("tenhang") !== -1 || cellText.indexOf("dvt") !== -1 || cellText.indexOf("donvi") !== -1 || cellText.indexOf("unit") !== -1) {
+        normalizedHeaderText = cellText;
+        break;
+      }
+    }
+    if (normalizedHeaderText) {
+      headerRowIndex = hdr;
+      headerRow = rawData[hdr];
+      break;
+    }
+  }
+  var maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
+  var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid']);
+  var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
+  var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
+  for (var k = startRow; k < rawData.length; k++) {
+    if (!rawData[k]) continue;
+    var ma = getCellValue(rawData[k], maHangIdx !== -1 ? maHangIdx : 0, "").toUpperCase();
+    var ten = getCellValue(rawData[k], tenHangIdx !== -1 ? tenHangIdx : 5, "");
+    if (ma !== "" && ten !== "") tenHangChuanTheoMa[ma] = ten;
+  }
+  for (var i = startRow; i < rawData.length; i++) {
+    if (!rawData[i]) continue;
+    var maHang = getCellValue(rawData[i], maHangIdx !== -1 ? maHangIdx : 0, "");
+    var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
+    var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
+    var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
+    if (dvt === "" && dvtIdx === -1) {
+      var fallbackDvt = getCellValue(rawData[i], 6, "");
+      if (fallbackDvt !== "") dvt = fallbackDvt;
+    }
+    if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
+    var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "" };
+    if (maVach !== "") danhMucHangHoa[maVach.toUpperCase()] = obj;
+    if (maHang !== "" && !danhMucHangHoa[maHang.toUpperCase()]) danhMucHangHoa[maHang.toUpperCase()] = obj;
+  }
+  return danhMucHangHoa;
+}
 // ========================================================================
 function doPost(e) {
   try {
@@ -76,6 +307,12 @@ function doPost(e) {
           case 'taoBangSoanHangNgayMai':
             requireAuthenticatedAction(payload.payload || {});
             result = taoBangSoanHangNgayMai(payload.payload || {});
+            break;
+          case 'postProcessNewOrder':
+            result = postProcessNewOrder(payload.payload || {});
+            break;
+          case 'postProcessPackingOrder':
+            result = postProcessPackingOrder(payload.payload || {});
             break;
           default:
             result = { error: 'Unknown action: ' + action };
@@ -229,6 +466,12 @@ function doGet(e) {
       switch(action) {
         case 'getInitialData':
           res = getInitialData();
+          break;
+        case 'getBootstrapData':
+          res = getBootstrapData();
+          break;
+        case 'getCatalogData':
+          res = getCatalogData();
           break;
         case 'layDanhSachPhieuTheoFilter':
           res = layDanhSachPhieuTheoFilter(e.parameter.khoNhan || '', e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');
@@ -748,16 +991,52 @@ function getDanhSachTaiKhoan() {
   var sheet = getOrCreateUserSheet(ss);
   var data = sheet.getDataRange().getValues();
   var users = [];
-  for (var i = 1; i < data.length; i++) { users.push({ user: data[i][0], pass: data[i][1], role: data[i][2], store: data[i][3] }); }
+  for (var i = 1; i < data.length; i++) {
+    users.push({ user: data[i][0], role: data[i][2], store: data[i][3] });
+  }
   return users;
 }
 
 function taoTaiKhoanMoi(payload) {
+  var user = String(payload && payload.user ? payload.user : "").trim();
+  var pass = String(payload && payload.pass ? payload.pass : "").trim();
+  var role = String(payload && payload.role ? payload.role : "").trim();
+  var storeRaw = String(payload && payload.store ? payload.store : "").trim();
+
+  if (!user || !pass) return { success: false, msg: "Thiếu tên đăng nhập hoặc mật khẩu." };
+  if (!role) return { success: false, msg: "Thiếu phân quyền." };
+  if (pass.length < 4) return { success: false, msg: "Mật khẩu phải có ít nhất 4 ký tự." };
+
+  if (role === "Admin") {
+    storeRaw = "Tất cả";
+  } else {
+    if (!storeRaw || storeRaw === "Tất cả") {
+      return { success: false, msg: "Chi nhánh phải chọn kho quản lý cụ thể." };
+    }
+    var normalized = normalizeStoreName(storeRaw);
+    var validStores = getRuntimeStores();
+    var matchedStore = "";
+    for (var s = 0; s < validStores.length; s++) {
+      if (isSameStoreName(validStores[s], normalized)) {
+        matchedStore = validStores[s];
+        break;
+      }
+    }
+    if (!matchedStore) {
+      return { success: false, msg: "Kho/chi nhánh không hợp lệ: " + storeRaw };
+    }
+    storeRaw = matchedStore;
+  }
+
   var ss = getSS();
   var sheet = getOrCreateUserSheet(ss);
   var data = sheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) { if (String(data[i][0]).trim() === payload.user) return { success: false, msg: "Tên đăng nhập đã tồn tại!" }; }
-  sheet.appendRow([payload.user, payload.pass, payload.role, payload.store]);
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).trim().toLowerCase() === user.toLowerCase()) {
+      return { success: false, msg: "Tên đăng nhập đã tồn tại!" };
+    }
+  }
+  sheet.appendRow([user, pass, role, storeRaw]);
   return { success: true };
 }
 
@@ -825,32 +1104,16 @@ function getCellValue(row, index, fallback) {
 
 function getCatalogLookup(ss) {
   var lookup = { byMaHang: {}, byMaVach: {} };
-  var dataSheet = ss.getSheetByName("Data_Excel");
-  if (!dataSheet) return lookup;
+  var catalogResult = getCatalogData();
+  if (!catalogResult || !catalogResult.success || !catalogResult.danhMuc) return lookup;
 
-  var rawData = dataSheet.getDataRange().getValues();
-  if (!rawData || !rawData.length) return lookup;
-
-  var headerRowIndex = findHeaderRowIndex(rawData, 10);
-  var headerRow = headerRowIndex >= 0 ? rawData[headerRowIndex] : null;
-  var maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
-  var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid', 'ean']);
-  var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
-  var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
-  var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
-
-  for (var i = startRow; i < rawData.length; i++) {
-    var row = rawData[i];
-    if (!row) continue;
-    var maHang = getCellValue(row, maHangIdx !== -1 ? maHangIdx : 0, "");
-    var maVach = getCellValue(row, maVachIdx !== -1 ? maVachIdx : 2, "");
-    var tenHang = getCellValue(row, tenHangIdx !== -1 ? tenHangIdx : 5, "");
-    var dvt = getCellValue(row, dvtIdx !== -1 ? dvtIdx : 7, "");
-    if (!dvt && dvtIdx === -1) dvt = getCellValue(row, 6, "");
-
-    var rec = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt };
-    if (maHang) lookup.byMaHang[String(maHang).trim().toUpperCase()] = rec;
-    if (maVach) lookup.byMaVach[String(maVach).trim().toUpperCase()] = rec;
+  var danhMuc = catalogResult.danhMuc;
+  for (var key in danhMuc) {
+    if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
+    var item = danhMuc[key];
+    if (!item) continue;
+    if (item.maHang) lookup.byMaHang[String(item.maHang).trim().toUpperCase()] = item;
+    if (item.maVach) lookup.byMaVach[String(item.maVach).trim().toUpperCase()] = item;
   }
   return lookup;
 }
@@ -1195,6 +1458,7 @@ function nhapKhauCapNhatThongTin(payload) {
       var stockSheetDirect = getOrCreateStockSheet(ss);
       var stockWriteInfo = writeImportedDataToSheet(stockSheetDirect, fileData);
       SpreadsheetApp.flush();
+      invalidateStoresCache_();
       return {
         success: true,
         importType: importType,
@@ -1209,6 +1473,7 @@ function nhapKhauCapNhatThongTin(payload) {
       var adjustedCatalogData = removeColumnFromMatrix(fileData, 3);
       var catalogWriteInfo = writeImportedDataToSheet(catalogSheetDirect, adjustedCatalogData);
       SpreadsheetApp.flush();
+      invalidateCatalogCache_();
       return {
         success: true,
         importType: importType,
@@ -1314,6 +1579,8 @@ function nhapKhauCapNhatThongTin(payload) {
   }
 
   SpreadsheetApp.flush();
+  invalidateCatalogCache_();
+  invalidateStoresCache_();
 
   return {
     success: true,
@@ -1325,91 +1592,54 @@ function nhapKhauCapNhatThongTin(payload) {
 }
 
 // --- API: LẤY DATA BAN ĐẦU ---
-function getInitialData() {
+function getBootstrapData() {
   try {
-    var ss = getSS();
-    var danhMucHangHoa = {};
-    var stores = ["Kho Địa điểm kinh doanh Q7"];
-    
-    var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-    if (tonKhoSheet) {
-      var tonKhoData = tonKhoSheet.getDataRange().getValues();
-      var stockConfig = getStockSheetConfig(tonKhoData);
-      for (var i = stockConfig.startRow; i < tonKhoData.length; i++) {
-        if(!tonKhoData[i]) continue;
-        var rowStores = getRowStoreNames(tonKhoData[i], stockConfig);
-        for (var s = 0; s < rowStores.length; s++) {
-          if (stores.indexOf(rowStores[s]) === -1) stores.push(rowStores[s]);
-        }
-      }
+    var registry = getStoreRegistry();
+    return {
+      success: true,
+      stores: registry.stores,
+      storeMap: registry.storeMap,
+      storeDetails: registry.storeDetails || [],
+      catalogVersion: getCatalogVersion_()
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function getCatalogData() {
+  try {
+    var version = getCatalogVersion_();
+    var cacheKey = CACHE_CATALOG_PREFIX + version;
+    var cache = getScriptCache_();
+    var cached = cache.get(cacheKey);
+    if (cached) {
+      try { return JSON.parse(cached); } catch (e) {}
     }
 
-    var dataSheet = ss.getSheetByName("Data_Excel");
-    if (dataSheet) {
-      var rawData = dataSheet.getDataRange().getValues();
-      var tenHangChuanTheoMa = {};
-      var headerRowIndex = -1;
-      var headerRow = null;
-      for (var hdr = 0; hdr < Math.min(rawData.length, 6); hdr++) {
-        if (!rawData[hdr]) continue;
-        var normalizedHeaderText = "";
-        for (var c = 0; c < rawData[hdr].length; c++) {
-          var cellText = normalizeHeaderText(rawData[hdr][c]);
-          if (cellText.indexOf("mahang") !== -1 || cellText.indexOf("mavach") !== -1 || cellText.indexOf("tenhang") !== -1 || cellText.indexOf("dvt") !== -1 || cellText.indexOf("donvi") !== -1 || cellText.indexOf("unit") !== -1) {
-            normalizedHeaderText = cellText;
-            break;
-          }
-        }
-        if (normalizedHeaderText) {
-          headerRowIndex = hdr;
-          headerRow = rawData[hdr];
-          break;
-        }
-      }
-      var maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
-      var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid']);
-      var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
-      var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
-      var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
-      for (var k = startRow; k < rawData.length; k++) {
-        if(!rawData[k]) continue;
-        var ma = getCellValue(rawData[k], maHangIdx !== -1 ? maHangIdx : 0, "").toUpperCase();
-        var ten = getCellValue(rawData[k], tenHangIdx !== -1 ? tenHangIdx : 5, "");
-        if (ma !== "" && ten !== "") tenHangChuanTheoMa[ma] = ten;
-      }
-      for (var i = startRow; i < rawData.length; i++) {
-        if(!rawData[i]) continue;
-        var maHang = getCellValue(rawData[i], maHangIdx !== -1 ? maHangIdx : 0, "");
-        var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
-        var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
-        var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
-        if (dvt === "" && dvtIdx === -1) {
-          var fallbackDvt = getCellValue(rawData[i], 6, "");
-          if (fallbackDvt !== "") dvt = fallbackDvt;
-        }
-        if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
-        var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "" };
-        if (maVach !== "") danhMucHangHoa[maVach.toUpperCase()] = obj;
-        if (maHang !== "" && !danhMucHangHoa[maHang.toUpperCase()]) danhMucHangHoa[maHang.toUpperCase()] = obj;
-      }
-    }
-    // Mapping original store names -> display (short) names
-    var storeMap = {
-      "Kho Địa điểm kinh doanh Q7": "K9 Quận 7",
-      "Kho Địa điểm kinh doanh 01": "K9 Quận 4 Mới",
-      "Kho Địa điểm kinh doanh 02": "K9 Quận 8",
-      "Kho Địa điểm kinh doanh 03": "K9 Phạm Hùng",
-      "Kho Địa điểm kinh doanh 04": "K9 Quận 5",
-      "Kho Địa điểm kinh doanh 05": "K9 Quận 1",
-      "Kho Địa điểm kinh doanh 06": "K9 Quận 4 Cũ"
-    };
-    // Ensure every store has a mapping (fallback to itself)
-    for (var i = 0; i < stores.length; i++) {
-      var s = stores[i];
-      if (!storeMap[s]) storeMap[s] = s;
-    }
-    return { success: true, stores: stores, danhMuc: danhMucHangHoa, storeMap: storeMap };
-  } catch(e) { return { success: false, error: e.message }; }
+    var danhMuc = buildCatalogFromSheet_(getSS());
+    var result = { success: true, danhMuc: danhMuc, version: version };
+    try {
+      var json = JSON.stringify(result);
+      if (json.length < 90000) cache.put(cacheKey, json, CACHE_TTL_SECONDS);
+    } catch (e) {}
+    return result;
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function getInitialData() {
+  var bootstrap = getBootstrapData();
+  if (!bootstrap.success) return bootstrap;
+  var catalog = getCatalogData();
+  if (!catalog.success) return catalog;
+  return {
+    success: true,
+    stores: bootstrap.stores,
+    storeMap: bootstrap.storeMap,
+    danhMuc: catalog.danhMuc
+  };
 }
 
 // --- API: LƯU ĐƠN / PHIẾU TẠO MỚI ---
@@ -1453,12 +1683,45 @@ function luuPhieuTuWebApp(payload) {
     historySheet.getRange(lastRow + 1, 1, dataLichSuArr.length, 1).setNumberFormat("dd/MM/yyyy HH:mm:ss");
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
-  
-  if (!coLoiCanDieuChinh) {
+
+  return { success: true, soPhieu: soPhieu, coLoi: coLoiCanDieuChinh, itemCount: payload.items.length, khoXuat: khoXuatNormalized, khoNhan: khoNhanNormalized };
+}
+
+function postProcessNewOrder(payload) {
+  var soPhieu = String(payload && payload.soPhieu ? payload.soPhieu : "").trim();
+  if (!soPhieu) return { success: false, error: "Thiếu số phiếu." };
+  var khoXuat = normalizeStoreName(payload && payload.khoXuat ? payload.khoXuat : "");
+  var khoNhan = normalizeStoreName(payload && payload.khoNhan ? payload.khoNhan : "");
+  var itemCount = Number(payload && payload.itemCount ? payload.itemCount : 0) || 0;
+  try {
     var createPdfUrl = taoPdfDonHangVaLayLink(soPhieu);
-    sendTelegramMessage(soPhieu, khoXuatNormalized, khoNhanNormalized, payload.items.length, createPdfUrl);
+    sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount, createPdfUrl);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
   }
-  return { success: true, soPhieu: soPhieu, coLoi: coLoiCanDieuChinh };
+}
+
+function postProcessPackingOrder(payload) {
+  var soPhieu = String(payload && payload.soPhieu ? payload.soPhieu : "").trim();
+  if (!soPhieu) return { success: false, error: "Thiếu số phiếu." };
+  try {
+    var khoXuat = normalizeStoreName(payload && payload.khoXuat ? payload.khoXuat : "");
+    var khoNhan = normalizeStoreName(payload && payload.khoNhan ? payload.khoNhan : "");
+    var updatesCount = Number(payload && payload.updatesCount ? payload.updatesCount : 0) || 0;
+    var totalRows = Number(payload && payload.totalRows ? payload.totalRows : 0) || 0;
+    var missingCount = Number(payload && payload.missingCount ? payload.missingCount : 0) || 0;
+    var extraCount = Number(payload && payload.extraCount ? payload.extraCount : 0) || 0;
+    var actor = String(payload && payload.actor ? payload.actor : "Chi nhánh");
+    var packedPdfUrl = taoPdfDonHangVaLayLink(soPhieu);
+    if (!khoNhan) khoNhan = getKhoNhanBySoPhieu(soPhieu);
+    if (khoNhan) sendTelegramOrderReady(soPhieu, khoNhan, packedPdfUrl);
+    var statusLabel = (totalRows > 0 && missingCount === 0 && extraCount === 0) ? "Đủ hàng" : (extraCount > 0 && missingCount > 0 ? "Thiếu và thừa hàng" : (extraCount > 0 ? "Thừa hàng" : "Thiếu hàng"));
+    sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, updatesCount, totalRows, statusLabel, missingCount, extraCount, actor, packedPdfUrl);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 }
 
 // --- API: QUẢN LÝ PHIẾU (CÓ PHÂN QUYỀN) ---
@@ -1815,12 +2078,13 @@ function normalizeStoreName(storeName) {
   var raw = String(storeName || "").trim();
   if (!raw) return "";
   if (raw === "all" || raw === "Tất cả") return raw;
-  if (STORE_MAP[raw]) return raw;
+  var activeMap = getActiveStoreMap();
+  if (activeMap[raw]) return raw;
 
   var normalizedRaw = normalizeHeaderText(raw);
-  for (var fullName in STORE_MAP) {
-    if (!Object.prototype.hasOwnProperty.call(STORE_MAP, fullName)) continue;
-    var shortName = STORE_MAP[fullName];
+  for (var fullName in activeMap) {
+    if (!Object.prototype.hasOwnProperty.call(activeMap, fullName)) continue;
+    var shortName = activeMap[fullName];
     if (normalizeHeaderText(fullName) === normalizedRaw || normalizeHeaderText(shortName) === normalizedRaw) {
       return fullName;
     }
@@ -2577,34 +2841,38 @@ function luuSoSoanHangVaAnh(payload) {
     var totalRows = 0;
     var missingCount = 0;
     var extraCount = 0;
-    for (var i = 0; i < updates.length; i++) {
-      var row = updates[i].row;
-      var currentSoPhieu = historySheet.getRange(row, 2).getValue();
+    for (var u = 0; u < updates.length; u++) {
+      var notifyRow = updates[u].row;
+      var currentSoPhieu = historySheet.getRange(notifyRow, 2).getValue();
       if (currentSoPhieu) { soPhieu = String(currentSoPhieu).trim(); break; }
     }
     var allRows = historySheet.getDataRange().getValues();
-    for (var i = 1; i < allRows.length; i++) {
-      var rowSoPhieu = allRows[i][1] ? String(allRows[i][1]).trim() : "";
+    for (var j = 1; j < allRows.length; j++) {
+      var rowSoPhieu = allRows[j][1] ? String(allRows[j][1]).trim() : "";
       if (!rowSoPhieu || rowSoPhieu !== soPhieu) continue;
       totalRows += 1;
-      var requestedQty = Number(allRows[i][7]) || 0;
-      var actualQty = (allRows[i][8] !== "" && allRows[i][8] !== undefined) ? Number(allRows[i][8]) : requestedQty;
+      var requestedQty = Number(allRows[j][7]) || 0;
+      var actualQty = (allRows[j][8] !== "" && allRows[j][8] !== undefined) ? Number(allRows[j][8]) : requestedQty;
       if (actualQty < requestedQty) missingCount += 1;
       if (actualQty > requestedQty) extraCount += 1;
-      if (!khoXuat && allRows[i][2]) khoXuat = String(allRows[i][2]).trim();
-      if (!khoNhan && allRows[i][3]) khoNhan = String(allRows[i][3]).trim();
-    }
-    if (soPhieu) {
-      var packedPdfUrl = taoPdfDonHangVaLayLink(soPhieu);
-      if (!khoNhan) khoNhan = getKhoNhanBySoPhieu(soPhieu);
-      if (khoNhan) {
-        sendTelegramOrderReady(soPhieu, khoNhan, packedPdfUrl);
-      }
-      var statusLabel = (totalRows > 0 && missingCount === 0 && extraCount === 0) ? "Đủ hàng" : (extraCount > 0 && missingCount > 0 ? "Thiếu và thừa hàng" : (extraCount > 0 ? "Thừa hàng" : "Thiếu hàng"));
-      sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, updates.length, totalRows, statusLabel, missingCount, extraCount, payload.actor || "Chi nhánh", packedPdfUrl);
+      if (!khoXuat && allRows[j][2]) khoXuat = String(allRows[j][2]).trim();
+      if (!khoNhan && allRows[j][3]) khoNhan = String(allRows[j][3]).trim();
     }
 
-    return "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!";
+    return {
+      success: true,
+      message: "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!",
+      notify: {
+        soPhieu: soPhieu,
+        khoXuat: khoXuat,
+        khoNhan: khoNhan,
+        updatesCount: updates.length,
+        totalRows: totalRows,
+        missingCount: missingCount,
+        extraCount: extraCount,
+        actor: payload.actor || "Chi nhánh"
+      }
+    };
   } finally { lock.releaseLock(); }
 }
 
@@ -2623,7 +2891,8 @@ function parseDateInputYYYYMMDD(value) {
 }
 
 function formatShortStoreLabel(storeName) {
-  var name = String(STORE_MAP[storeName] || storeName || "").trim();
+  var activeMap = getActiveStoreMap();
+  var name = String(activeMap[storeName] || storeName || "").trim();
   var normalized = normalizeHeaderText(name);
   if (normalized.indexOf("q7") !== -1 || normalized.indexOf("quan7") !== -1) return "Q7";
   if (normalized.indexOf("q8") !== -1 || normalized.indexOf("quan8") !== -1) return "Q8";

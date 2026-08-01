@@ -60,6 +60,150 @@ function showLoginError(message) {
 // --- App logic (extracted from original webapp) ---
 var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
 var storeMap = {};
+var catalogLoadState = { loading: false, ready: false, version: '' };
+var CATALOG_CACHE_KEY = 'donhang_catalog_v2';
+var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v2';
+var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v2';
+var CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function rebuildCatalogArray() {
+  var seenCatalogKeys = {};
+  danhMucArr = Object.values(danhMucGoc).filter(function(item) {
+    if (!item) return false;
+    var key = String(item.maHang || '').trim().toUpperCase() + '|' + String(item.maVach || '').trim().toUpperCase() + '|' + String(item.tenHang || '').trim().toUpperCase();
+    if (!key || seenCatalogKeys[key]) return false;
+    seenCatalogKeys[key] = true;
+    return true;
+  });
+}
+
+function applyCatalogData(res) {
+  if (!res || !res.danhMuc) return;
+  danhMucGoc = res.danhMuc;
+  rebuildCatalogArray();
+  catalogLoadState.ready = true;
+  catalogLoadState.version = res.version || '';
+}
+
+function readCatalogFromLocalStorage(expectedVersion) {
+  try {
+    var ts = Number(localStorage.getItem(CATALOG_CACHE_TS_KEY) || '0');
+    var version = localStorage.getItem(CATALOG_CACHE_VERSION_KEY) || '';
+    if (!ts || (Date.now() - ts) > CATALOG_CACHE_TTL_MS) return null;
+    if (expectedVersion && version && expectedVersion !== version) return null;
+    var raw = localStorage.getItem(CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveCatalogToLocalStorage(res) {
+  try {
+    if (!res || !res.danhMuc) return;
+    localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify(res));
+    localStorage.setItem(CATALOG_CACHE_TS_KEY, String(Date.now()));
+    localStorage.setItem(CATALOG_CACHE_VERSION_KEY, res.version || '');
+  } catch (e) {}
+}
+
+function clearCatalogLocalStorage() {
+  try {
+    localStorage.removeItem(CATALOG_CACHE_KEY);
+    localStorage.removeItem(CATALOG_CACHE_TS_KEY);
+    localStorage.removeItem(CATALOG_CACHE_VERSION_KEY);
+  } catch (e) {}
+  catalogLoadState.ready = false;
+}
+
+function getDefaultExportStore() {
+  for (var i = 0; i < gStores.length; i++) {
+    var label = storeMap[gStores[i]] || gStores[i];
+    if (String(label).indexOf('Q7') !== -1 || String(gStores[i]).indexOf('Q7') !== -1) return gStores[i];
+  }
+  return gStores[0] || 'Kho Địa điểm kinh doanh Q7';
+}
+
+function setCatalogStatus(text) {
+  var scanInput = getEl('input-scan');
+  if (!scanInput) return;
+  scanInput.placeholder = text || 'Nhập để tìm kiếm hoặc quét mã...';
+}
+
+function renderStoreDropdowns() {
+  var htmlStores = '';
+  gStores.forEach(function(s) {
+    var disp = storeMap[s] || s;
+    htmlStores += '<option value="' + escapeHtml(s) + '">' + escapeHtml(disp) + '</option>';
+  });
+  var elX = getEl('select-kho-xuat'); if (elX) elX.innerHTML = htmlStores;
+  var elN = getEl('select-kho-nhan'); if (elN) elN.innerHTML = htmlStores;
+  var elQ = getEl('ql-kho-nhan'); if (elQ) elQ.innerHTML = '<option value="all">-- Tất cả --</option>' + htmlStores;
+}
+
+function renderAdminStoreDropdown() {
+  var elA = getEl('adm-store');
+  var roleEl = getEl('adm-role');
+  if (!elA) return;
+  var role = roleEl && roleEl.value ? roleEl.value : 'Chi nhánh';
+  var html = role === 'Admin'
+    ? '<option value="Tất cả">Tất cả (Admin)</option>'
+    : '<option value="">-- Chọn kho quản lý --</option>';
+  gStores.forEach(function(s) {
+    var disp = storeMap[s] || s;
+    html += '<option value="' + escapeHtml(s) + '">' + escapeHtml(disp) + '</option>';
+  });
+  elA.innerHTML = html;
+  if (role === 'Admin') elA.value = 'Tất cả';
+}
+
+function loadCatalogInBackground(forceReload, expectedVersion) {
+  if (catalogLoadState.loading) return Promise.resolve();
+  var cached = !forceReload ? readCatalogFromLocalStorage(expectedVersion) : null;
+  if (cached && cached.danhMuc) {
+    applyCatalogData(cached);
+    setCatalogStatus('Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:');
+    return Promise.resolve(cached);
+  }
+
+  catalogLoadState.loading = true;
+  setCatalogStatus('Đang tải danh mục hàng ở nền...');
+  return apiGet('getCatalogData').then(function(res) {
+    catalogLoadState.loading = false;
+    if (!res || !res.success) {
+      setCatalogStatus('Danh mục chưa tải xong - thử lại sau vài giây');
+      return res;
+    }
+    applyCatalogData(res);
+    saveCatalogToLocalStorage(res);
+    setCatalogStatus('Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:');
+    return res;
+  }).catch(function(err) {
+    catalogLoadState.loading = false;
+    setCatalogStatus('Lỗi tải danh mục: ' + err.message);
+    throw err;
+  });
+}
+
+function applyBootstrapData(res) {
+  gStores = res.stores || [];
+  storeMap = res.storeMap || {};
+  renderStoreDropdowns();
+  renderAdminStoreDropdown();
+  var nav = getEl('nav-tab-admin');
+  if (nav) nav.style.display = sessionUser.role === 'Admin' ? 'block' : 'none';
+  updateDashboardHero();
+  applyQuyenKho();
+}
+
 var phieuData = []; var editRows = []; var currentLoadedRows = []; var currentPhieuObj = null; var currentConfirmPhieuObj = null;
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
@@ -138,33 +282,13 @@ function doLogin() {
 }
 
 function initSystemData() {
-  showLoad("Đang tải dữ liệu hệ thống...");
+  showLoad("Đang tải hệ thống...");
   var qlNgay = getEl("ql-ngay"); if (qlNgay) qlNgay.valueAsDate = new Date();
-  apiGet('getInitialData').then(function(res) {
+  apiGet('getBootstrapData').then(function(res) {
     hideLoad();
-    if(!res.success) { alert("Lỗi tải data: " + (res.error||res)); return; }
-    gStores = res.stores; danhMucGoc = res.danhMuc;
-    var seenCatalogKeys = {};
-    danhMucArr = Object.values(danhMucGoc).filter(function(item) {
-      if (!item) return false;
-      var key = String(item.maHang || "").trim().toUpperCase() + '|' + String(item.maVach || "").trim().toUpperCase() + '|' + String(item.tenHang || "").trim().toUpperCase();
-      if (!key || seenCatalogKeys[key]) return false;
-      seenCatalogKeys[key] = true;
-      return true;
-    });
-    storeMap = res.storeMap || {};
-
-    var htmlStores = ""; gStores.forEach(function(s) { var disp = storeMap[s] || s; htmlStores += '<option value="'+s+'">'+disp+'</option>'; });
-    var elX = document.getElementById("select-kho-xuat"); if(elX) elX.innerHTML = htmlStores;
-    var elN = document.getElementById("select-kho-nhan"); if(elN) elN.innerHTML = htmlStores;
-    var elQ = document.getElementById("ql-kho-nhan"); if(elQ) elQ.innerHTML = '<option value="all">-- Tất cả --</option>' + htmlStores;
-    var elA = document.getElementById("adm-store"); if(elA) elA.innerHTML = '<option value="Tất cả">-- Chọn kho quản lý --</option>' + htmlStores;
-
-    var nav = document.getElementById("nav-tab-admin");
-    if (nav) nav.style.display = sessionUser.role === "Admin" ? "block" : "none";
-    updateDashboardHero();
-    applyQuyenKho();
-    loadDashboardSummary();
+    if (!res || !res.success) { alert("Lỗi tải data: " + ((res && (res.error || res.msg)) || res)); return; }
+    applyBootstrapData(res);
+    loadCatalogInBackground(false, res.catalogVersion || '');
     openDeepLinkedOrder();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
@@ -336,7 +460,7 @@ function applyQuyenKho() {
   var khoNhanEl = document.getElementById("select-kho-nhan");
 
   if (loaiDon === "DonHang") {
-    if(khoXuatEl) { khoXuatEl.value = "Kho Địa điểm kinh doanh Q7"; khoXuatEl.setAttribute("disabled", "true"); }
+    if(khoXuatEl) { khoXuatEl.value = getDefaultExportStore(); khoXuatEl.setAttribute("disabled", "true"); }
     if (sessionUser.role !== "Admin") {
       if(khoNhanEl) { khoNhanEl.value = sessionUser.store; khoNhanEl.setAttribute("disabled", "true"); }
     } else { if(khoNhanEl) khoNhanEl.removeAttribute("disabled"); }
@@ -374,6 +498,14 @@ function getSearchScore(item, query) {
 }
 
 function handleSearchInput(e) {
+  if (!catalogLoadState.ready) {
+    var box = document.getElementById("suggest-box");
+    if (box) {
+      box.innerHTML = '<div class="suggest-empty">Danh mục hàng đang tải. Vui lòng đợi vài giây...</div>';
+      box.style.display = "block";
+    }
+    return;
+  }
   var inputEl = document.getElementById("input-scan");
   var val = inputEl.value.trim();
   var box = document.getElementById("suggest-box");
@@ -536,10 +668,12 @@ function quickAddSuggestedItem(item) {
 
 function submitPhieuMoi() {
   if(arrItems.length === 0) return alert("Chưa có hàng!");
+  if (!catalogLoadState.ready) return alert("Danh mục hàng đang tải. Vui lòng đợi vài giây rồi thử lại.");
   showLoad("Đang tạo đơn...");
   var lPhieu = document.querySelector('input[name="loaiPhieu"]:checked').value;
   var khoXuat = document.getElementById("select-kho-xuat").value;
   var khoNhan = document.getElementById("select-kho-nhan").value;
+  var itemCount = arrItems.length;
 
   apiPost('luuPhieuTuWebApp', { loaiPhieu: lPhieu, khoXuat: khoXuat, khoNhan: khoNhan, items: arrItems }).then(function(res) {
     hideLoad();
@@ -549,6 +683,14 @@ function submitPhieuMoi() {
        document.getElementById("modal-sophieu").innerText = res.soPhieu; document.getElementById("modal-action").style.display = "flex";
        arrItems = []; renderTable();
        if (document.getElementById("input-scan")) document.getElementById("input-scan").focus();
+       if (res.soPhieu && !res.coLoi) {
+         apiPost('postProcessNewOrder', {
+           soPhieu: res.soPhieu,
+           khoXuat: res.khoXuat || khoXuat,
+           khoNhan: res.khoNhan || khoNhan,
+           itemCount: res.itemCount || itemCount
+         }).catch(function() {});
+       }
     }
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
@@ -1100,7 +1242,16 @@ function sh_luuPhieu() {
   if(isCompressing > 0) return alert("Đợi ảnh nén xong!");
   showLoad("Đang lưu kết quả lên hệ thống...");
   var inputs = document.querySelectorAll(".sl-thuc-te"), updates = []; inputs.forEach(ip => updates.push({ row: parseInt(ip.getAttribute("data-row")), val: ip.value }));
-  apiPost('luuSoSoanHangVaAnh', { updates: updates, images: pendingImages, actor: sessionUser ? sessionUser.user : '' }).then(function(res) { hideLoad(); alert(res); pendingImages = {}; sh_taiDanhSachDon(); }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+  apiPost('luuSoSoanHangVaAnh', { updates: updates, images: pendingImages, actor: sessionUser ? sessionUser.user : '' }).then(function(res) {
+    hideLoad();
+    var message = (res && res.message) ? res.message : String(res || 'Đã lưu.');
+    alert(message);
+    pendingImages = {};
+    sh_taiDanhSachDon();
+    if (res && res.notify && res.notify.soPhieu) {
+      apiPost('postProcessPackingOrder', res.notify).catch(function() {});
+    }
+  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
 var shOrderCandidates = [];
@@ -1219,22 +1370,33 @@ function sh_taoBangSoanTuDonDaChon() {
 }
 
 // ================= ADMIN: QUẢN LÝ TÀI KHOẢN =================
-function checkAdminRole() { var r = document.getElementById("adm-role").value; if(r === "Admin") document.getElementById("adm-store").value = "Tất cả"; }
+function checkAdminRole() { renderAdminStoreDropdown(); }
 function loadDSUser() {
   showLoad("Đang tải...");
   apiGet('getDanhSachTaiKhoan').then(function(users) {
     hideLoad(); var tb = document.getElementById("adm-table-users"); tb.innerHTML = "";
-    users.forEach(u => tb.insertAdjacentHTML('beforeend', '<tr><td><b>'+u.user+'</b></td><td>'+u.role+'</td><td>'+u.store+'</td></tr>'));
+    (users || []).forEach(function(u) {
+      var storeLabel = storeMap[u.store] || u.store;
+      tb.insertAdjacentHTML('beforeend', '<tr><td><b>'+escapeHtml(u.user)+'</b></td><td>'+escapeHtml(u.role)+'</td><td>'+escapeHtml(storeLabel)+'</td></tr>');
+    });
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 function taoTaiKhoan() {
-  var payload = { user: document.getElementById("adm-user").value.trim(), pass: document.getElementById("adm-pass").value.trim(), role: document.getElementById("adm-role").value, store: document.getElementById("adm-store").value, actor: sessionUser.user };
-  if(!payload.user || !payload.pass || !payload.store) return alert("Vui lòng điền đủ thông tin!");
+  var role = document.getElementById("adm-role").value;
+  var store = document.getElementById("adm-store").value;
+  var payload = { user: document.getElementById("adm-user").value.trim(), pass: document.getElementById("adm-pass").value.trim(), role: role, store: store, actor: sessionUser.user };
+  if(!payload.user || !payload.pass) return alert("Vui lòng nhập tên đăng nhập và mật khẩu.");
+  if(role !== "Admin" && (!store || store === "Tất cả")) return alert("Chi nhánh phải chọn kho quản lý cụ thể.");
   showLoad("Đang tạo...");
   apiPost('taoTaiKhoanMoi', payload).then(function(res) {
     hideLoad();
-    if(res.success) { alert("Tạo thành công!"); document.getElementById("adm-user").value=""; document.getElementById("adm-pass").value=""; loadDSUser(); }
-    else alert(res.msg);
+    if(res.success) {
+      alert("Tạo thành công!");
+      document.getElementById("adm-user").value="";
+      document.getElementById("adm-pass").value="";
+      renderAdminStoreDropdown();
+      loadDSUser();
+    } else alert(res.msg || res.error || "Không thể tạo tài khoản.");
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
@@ -1432,7 +1594,14 @@ function importDanhMucTonKho() {
     if (fileEl) fileEl.value = '';
     importPreviewState = null;
     renderImportPreview(null);
-    initSystemData();
+    if (importType === 'catalog') {
+      clearCatalogLocalStorage();
+      loadCatalogInBackground(true);
+    } else {
+      apiGet('getBootstrapData').then(function(bootstrap) {
+        if (bootstrap && bootstrap.success) applyBootstrapData(bootstrap);
+      }).catch(function() {});
+    }
   }).catch(function(err) {
     hideLoad();
     alert('Lỗi: ' + err.message);
