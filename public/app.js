@@ -91,7 +91,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v4';
+var APP_BUILD = '2026-08-02-v5';
 console.warn('[donhang] build', APP_BUILD);
 (function() {
   var el = document.getElementById('app-build-tag');
@@ -1407,12 +1407,12 @@ function sh_taiDanhSachDonSoanChoBang() {
   var _dbgListStart = Date.now();
   fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan start',data:{ngay:ngay},timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v2'})}).catch(function(){});
   // #endregion
-  dbgSoanLine_('listDonSoan.start', { ngay: ngay, build: APP_BUILD });
+  dbgSoanLine_('listDonSoan.start', { ngay: ngay, build: APP_BUILD, via: 'proxy' });
   apiGet('getDanhSachDonSoanHang', {
     ngay: ngay,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
-  }, { directOnly: true }).then(function(res) {
+  }, { allowDirectFallback: false, timeoutMs: 120000 }).then(function(res) {
     hideLoad();
     // #region agent log
     var _dbgListMs = Date.now() - _dbgListStart;
@@ -1469,15 +1469,16 @@ function sh_taoBangSoanTuDonDaChon() {
   showLoad("Đang tạo bảng soạn hàng...");
   // #region agent log
   var _dbgSoanStart = Date.now();
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length,directOnly:true},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v2'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan start',data:{ngay:ngay,selectedCount:selectedOrders.length,via:'proxy',hypothesisId:'D'},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v5'})}).catch(function(){});
   // #endregion
-  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD });
-  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { directOnly: true }).then(function(res) {
+  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, selectedCount: selectedOrders.length, build: APP_BUILD, via: 'proxy' });
+  // POST thẳng GAS bị CORS preflight chặn — bắt buộc đi qua /api/gas-proxy
+  apiPost('taoBangSoanHangNgayMai', { ngay: ngay, actor: sessionUser.user, userRole: sessionUser.role || '', userStore: sessionUser.store || '', selectedOrders: selectedOrders }, { allowDirectFallback: false, timeoutMs: 280000 }).then(function(res) {
     hideLoad();
     // #region agent log
     var _dbgClientMs = Date.now() - _dbgSoanStart;
-    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), build: APP_BUILD, steps: res && res._debugTimings, debug: res && res._debugInfo });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,steps:res&&res._debugTimings},timestamp:Date.now(),hypothesisId:'A-D',runId:'post-fix-v2'})}).catch(function(){});
+    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), build: APP_BUILD, via: 'proxy', steps: res && res._debugTimings, debug: res && res._debugInfo });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{clientMs:_dbgClientMs,success:!!(res&&res.success),serverMs:res&&res._debugTotalMs,run:res&&res._debugRun,via:'proxy'},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v5'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
       var failMsg = "❌ Tạo bảng thất bại: " + ((res && (res.msg || res.error)) || "Không rõ lỗi");
@@ -1501,7 +1502,8 @@ function sh_taoBangSoanTuDonDaChon() {
   }).catch(function(err) {
     hideLoad();
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan error',data:{clientMs:Date.now()-_dbgSoanStart,error:String(err&&err.message||err)},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v2'})}).catch(function(){});
+    dbgSoanLine_('taoBangSoan.error', { clientMs: Date.now() - _dbgSoanStart, error: String(err && err.message || err), build: APP_BUILD, via: 'proxy' });
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan error',data:{clientMs:Date.now()-_dbgSoanStart,error:String(err&&err.message||err),via:'proxy'},timestamp:Date.now(),hypothesisId:'D',runId:'post-fix-v5'})}).catch(function(){});
     // #endregion
     alert('Lỗi: ' + err.message);
   });
