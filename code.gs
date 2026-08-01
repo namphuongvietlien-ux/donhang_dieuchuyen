@@ -51,10 +51,11 @@ function dvtFromStockKey_(key) {
   return text.substring(idx + 4);
 }
 
-function writeTonQ7MapToSheet_(ss, map) {
+function writeTonQ7MapToSheet_(ss, map, dvtLabelByKey) {
   ss = ss || getSS();
   var t0 = Date.now();
   map = map || {};
+  dvtLabelByKey = dvtLabelByKey || {};
   var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
   if (!sh) sh = ss.insertSheet(TON_Q7_SHEET_NAME);
   sh.clear();
@@ -63,14 +64,17 @@ function writeTonQ7MapToSheet_(ss, map) {
   for (var k in map) {
     if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
     if (k === "__meta") continue;
-    rows.push([k, Number(map[k]) || 0, dvtFromStockKey_(k), ""]);
+    var dvtLabel = dvtLabelByKey[k] || dvtFromStockKey_(k) || "";
+    rows.push([k, Number(map[k]) || 0, dvtLabel, ""]);
   }
   // Sheet.getRange(row, column, numRows, numColumns)
   if (rows.length) sh.getRange(2, 1, rows.length, 4).setValues(rows);
   sh.getRange(1, 4).setValue(new Date());
   try { SpreadsheetApp.flush(); } catch (e) {}
   try {
-    putCacheJson_(getScriptCache_(), CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS);
+    var cache = getScriptCache_();
+    putCacheJson_(cache, CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS);
+    putCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt", dvtLabelByKey, CACHE_TTL_SECONDS);
   } catch (e2) {}
   return {
     success: true,
@@ -79,8 +83,25 @@ function writeTonQ7MapToSheet_(ss, map) {
     keyCount: rows.length,
     store: PACKING_STOCK_STORE,
     ms: Date.now() - t0,
-    _debugRun: "q7-v2"
+    _debugRun: "q7-v3"
   };
+}
+
+/** Ghi TON_Q7 từ entries {k,q,d} — giữ ĐVT gốc để hiển thị */
+function writeTonQ7EntriesToSheet_(ss, entries) {
+  var map = {};
+  var dvtLabels = {};
+  for (var i = 0; i < (entries || []).length; i++) {
+    var ent = entries[i];
+    if (!ent || !ent.k) continue;
+    var key = String(ent.k).trim();
+    if (!key) continue;
+    map[key] = (Number(map[key]) || 0) + (Number(ent.q) || 0);
+    var dLabel = String(ent.d || "").trim();
+    if (dLabel) dvtLabels[key] = dLabel;
+    else if (!dvtLabels[key]) dvtLabels[key] = dvtFromStockKey_(key);
+  }
+  return writeTonQ7MapToSheet_(ss, map, dvtLabels);
 }
 
 function rebuildTonKhoQ7Sheet_(ss) {
@@ -99,19 +120,23 @@ function mergeTonQ7FromMatrix_(ss, matrix, reset) {
   return writeTonQ7MapToSheet_(ss, map);
 }
 
-function readTonKhoQ7Map_(ss) {
+function readTonKhoQ7Bundle_(ss) {
   ss = ss || getSS();
   var cache = getScriptCache_();
   var cached = getCacheJson_(cache, CACHE_TON_Q7_KEY);
-  if (cached && typeof cached === "object" && Object.keys(cached).length) return cached;
+  var labelCached = getCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt");
+  if (cached && typeof cached === "object" && Object.keys(cached).length) {
+    return { map: cached, dvtLabels: labelCached || {} };
+  }
 
   var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
-  if (!sh || sh.getLastRow() < 2) return null;
+  if (!sh || sh.getLastRow() < 2) return { map: null, dvtLabels: {} };
   var lastRow = sh.getLastRow();
   var numRows = lastRow - 1;
   var lastCol = Math.max(sh.getLastColumn(), 3);
   var data = sh.getRange(2, 1, numRows, Math.min(lastCol, 3)).getValues();
   var map = {};
+  var dvtLabels = {};
   for (var i = 0; i < data.length; i++) {
     var key = String(data[i][0] || "").trim();
     if (!key) continue;
@@ -123,10 +148,20 @@ function readTonKhoQ7Map_(ss) {
       if (dvtNorm) key = key + "|DV:" + dvtNorm;
     }
     map[key] = (Number(map[key]) || 0) + qty;
+    if (dvtCol) dvtLabels[key] = dvtCol;
+    else if (!dvtLabels[key]) dvtLabels[key] = dvtFromStockKey_(key);
   }
-  if (!Object.keys(map).length) return null;
-  try { putCacheJson_(cache, CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS); } catch (e) {}
-  return map;
+  if (!Object.keys(map).length) return { map: null, dvtLabels: {} };
+  try {
+    putCacheJson_(cache, CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS);
+    putCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt", dvtLabels, CACHE_TTL_SECONDS);
+  } catch (e) {}
+  return { map: map, dvtLabels: dvtLabels };
+}
+
+function readTonKhoQ7Map_(ss) {
+  var bundle = readTonKhoQ7Bundle_(ss);
+  return bundle.map;
 }
 
 /** Parse matrix tồn kho (từ file import hoặc sheet) → map mã+ĐVT cho 1 kho */
@@ -1840,18 +1875,14 @@ function nhapKhauCapNhatThongTin(payload) {
   if (importType === 'stockQ7') {
     var tQ7 = Date.now();
     var entries = payload.q7Entries || [];
-    var mapQ7 = {};
-    for (var ei = 0; ei < entries.length; ei++) {
-      var ent = entries[ei];
-      if (!ent || !ent.k) continue;
-      var keyQ = String(ent.k).trim();
-      if (!keyQ) continue;
-      mapQ7[keyQ] = (Number(mapQ7[keyQ]) || 0) + (Number(ent.q) || 0);
+    if (!entries.length) {
+      throw new Error("Không có dữ liệu tồn Q7 để ghi. Kiểm tra file có cột/kho Q7 và cột ĐVT không.");
     }
-    if (!Object.keys(mapQ7).length) {
-      throw new Error("Không có dữ liệu tồn Q7 để ghi. Kiểm tra file có cột/kho Q7 không.");
+    var q7Fast = writeTonQ7EntriesToSheet_(ss, entries);
+    var withDvt = 0;
+    for (var wi = 0; wi < entries.length; wi++) {
+      if (entries[wi] && (entries[wi].d || (entries[wi].k && String(entries[wi].k).indexOf("|DV:") !== -1))) withDvt++;
     }
-    var q7Fast = writeTonQ7MapToSheet_(ss, mapQ7);
     return {
       success: true,
       importType: importType,
@@ -1860,11 +1891,12 @@ function nhapKhauCapNhatThongTin(payload) {
       updatedCols: 4,
       q7Sheet: TON_Q7_SHEET_NAME,
       q7Rows: q7Fast.rows || 0,
+      q7WithDvt: withDvt,
       done: true,
       _debugTotalMs: Date.now() - tQ7,
       _debugQ7Ms: q7Fast.ms || 0,
-      _debugRun: "import-q7-fast-v1",
-      msg: "Đã cập nhật nhanh sheet " + TON_Q7_SHEET_NAME + " (" + (q7Fast.rows || 0) + " mã/ĐVT Q7) — không ghi full TỔNG HỢP TỒN KHO."
+      _debugRun: "import-q7-fast-v2",
+      msg: "Đã cập nhật nhanh sheet " + TON_Q7_SHEET_NAME + " (" + (q7Fast.rows || 0) + " dòng, " + withDvt + " có ĐVT) — không ghi full TỔNG HỢP TỒN KHO."
     };
   }
 
@@ -2631,6 +2663,30 @@ function getStockValueForItem(tonKhoMap, maHang, maVach, dvt) {
   if (byMaHang !== null) return byMaHang;
   var byMaVach = lookupStockByPrefixCode_(tonKhoMap, "MV:", maVach, dvt);
   return byMaVach !== null ? byMaVach : 0;
+}
+
+/** Lấy nhãn ĐVT duy nhất từ TON_Q7 nếu đơn thiếu ĐVT */
+function inferDvtLabelFromStockMap_(tonKhoMap, dvtLabels, maHang, maVach) {
+  if (!tonKhoMap) return "";
+  dvtLabels = dvtLabels || {};
+  var codes = [];
+  var mh = normalizeProductCode(maHang);
+  var mv = normalizeProductCode(maVach);
+  if (mh) codes.push("MH:" + mh);
+  if (mv) codes.push("MV:" + mv);
+  if (!codes.length) return "";
+  var found = {};
+  for (var k in tonKhoMap) {
+    if (!Object.prototype.hasOwnProperty.call(tonKhoMap, k) || k === "__meta") continue;
+    for (var c = 0; c < codes.length; c++) {
+      if (k === codes[c] || k.indexOf(codes[c] + "|DV:") === 0) {
+        var label = dvtLabels[k] || dvtFromStockKey_(k);
+        if (label) found[label] = true;
+      }
+    }
+  }
+  var list = Object.keys(found);
+  return list.length === 1 ? list[0] : "";
 }
 
 function isStoreNameMatch(stockStoreName, targetStoreName) {
@@ -4111,10 +4167,14 @@ function taoBangSoanHangNgayMai(payload) {
 
   // Tồn kho soạn hàng: chỉ dùng sheet nhẹ TON_Q7 (tách lúc import file tồn)
   var forceStock = !!(payload && payload.forceStock);
-  var q7Map = readTonKhoQ7Map_(ss);
+  var q7Bundle = readTonKhoQ7Bundle_(ss);
+  var q7Map = q7Bundle.map;
+  var q7DvtLabels = q7Bundle.dvtLabels || {};
   if ((!q7Map || !Object.keys(q7Map).length) && forceStock) {
     try { rebuildTonKhoQ7Sheet_(ss); } catch (rebuildErr) { Logger.log(rebuildErr); }
-    q7Map = readTonKhoQ7Map_(ss);
+    q7Bundle = readTonKhoQ7Bundle_(ss);
+    q7Map = q7Bundle.map;
+    q7DvtLabels = q7Bundle.dvtLabels || {};
   }
   var stockReady = !!(q7Map && Object.keys(q7Map).length);
   if (!q7Map) q7Map = {};
@@ -4134,10 +4194,30 @@ function taoBangSoanHangNgayMai(payload) {
   var rows = [];
   var missingLines = 0;
   var warningCol = 8 + storeList.length;
+  // #region agent log
+  var _dbgDvtFromOrder = 0;
+  var _dbgDvtInferred = 0;
+  var _dbgDvtEmpty = 0;
+  var _dbgDvtSample = [];
+  // #endregion
   for (var k = 0; k < keys.length; k++) {
     var it = itemMap[keys[k]];
     var sourceStores = Object.keys(it.sourceStores);
-    var stock = stockReady ? getStockValueForItem(q7Map, it.maHang, it.maVach, it.dvt) : 0;
+    var dvtOut = it.dvt || "";
+    var dvtSource = dvtOut ? "order" : "";
+    if (!dvtOut && stockReady) {
+      dvtOut = inferDvtLabelFromStockMap_(q7Map, q7DvtLabels, it.maHang, it.maVach) || "";
+      if (dvtOut) dvtSource = "ton_q7";
+    }
+    // #region agent log
+    if (dvtSource === "order") _dbgDvtFromOrder++;
+    else if (dvtSource === "ton_q7") _dbgDvtInferred++;
+    else _dbgDvtEmpty++;
+    if (_dbgDvtSample.length < 5) {
+      _dbgDvtSample.push({ ma: it.maHang || it.maVach, orderDvt: it.dvt || "", out: dvtOut || "", src: dvtSource || "empty" });
+    }
+    // #endregion
+    var stock = stockReady ? getStockValueForItem(q7Map, it.maHang, it.maVach, dvtOut || it.dvt) : 0;
     var canhBao = "Chưa có TON_Q7";
     if (stockReady) {
       var thieu = it.totalQty - stock;
@@ -4145,7 +4225,7 @@ function taoBangSoanHangNgayMai(payload) {
       if (thieu > 0) missingLines += 1;
     }
 
-    var rowOut = [0, it.maHang || "", it.maVach || "", it.tenHang || "", it.dvt || "", stockReady ? stock : "", it.totalQty];
+    var rowOut = [0, it.maHang || "", it.maVach || "", it.tenHang || "", dvtOut || "", stockReady ? stock : "", it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
     rowOut.push(canhBao);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));
@@ -4197,7 +4277,11 @@ function taoBangSoanHangNgayMai(payload) {
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "q7-v1"
+    _debugRun: "dvt-v1",
+    _debugDvtFromOrder: _dbgDvtFromOrder,
+    _debugDvtInferred: _dbgDvtInferred,
+    _debugDvtEmpty: _dbgDvtEmpty,
+    _debugDvtSample: _dbgDvtSample
   };
 }
 

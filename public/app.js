@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v19';
+var APP_BUILD = '2026-08-02-v20';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -1639,7 +1639,7 @@ function sh_taoBangSoanTuDonDaChon() {
     }
     dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, stockSource: res && res.stockSource, stockStep: stockStep, build: APP_BUILD, steps: res && res._debugTimings });
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{success:!!(res&&res.success),stockReady:res&&res.stockReady,stockSource:res&&res.stockSource,q7Keys:stockStep&&stockStep.q7Keys,via:stockStep&&stockStep.via,serverMs:res&&res._debugTotalMs,clientMs:_dbgClientMs,run:res&&res._debugRun,missingItems:res&&res.missingItems,totalItems:res&&res.totalItems},timestamp:Date.now(),hypothesisId:'D',runId:'q7-v1'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{success:!!(res&&res.success),stockReady:res&&res.stockReady,stockSource:res&&res.stockSource,q7Keys:stockStep&&stockStep.q7Keys,via:stockStep&&stockStep.via,serverMs:res&&res._debugTotalMs,clientMs:_dbgClientMs,run:res&&res._debugRun,missingItems:res&&res.missingItems,totalItems:res&&res.totalItems,dvtFromOrder:res&&res._debugDvtFromOrder,dvtInferred:res&&res._debugDvtInferred,dvtEmpty:res&&res._debugDvtEmpty,dvtSample:res&&res._debugDvtSample,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'DVT-C',runId:'dvt-v1'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại:\n" + ((res && (res.msg || res.error)) || "Không rõ lỗi") + "\n[Build FE: " + APP_BUILD + "]" + (res && res._debugRun ? (" [GAS: " + res._debugRun + "]") : ""));
@@ -1754,12 +1754,15 @@ function analyzeImportRows(rows, importType) {
   if (importType === 'stock' && !hasStockSignals) warnings.push('Không tìm thấy dấu hiệu cột tồn kho hoặc tên kho trong file.');
   if (importType === 'catalog' && !hasCatalogSignals) warnings.push('Không tìm thấy đủ dấu hiệu cột thông tin hàng hóa trong file.');
   if (normalized.length < 3) warnings.push('Dòng tiêu đề quá ít cột, có thể chọn nhầm sheet hoặc nhầm file.');
+  var dvtColIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'unit', 'uom']);
+  if (importType === 'stock' && dvtColIdx < 0) warnings.push('Không thấy cột Đơn vị tính (ĐVT) trong tiêu đề — sheet TON_Q7 sẽ thiếu ĐVT.');
   return {
     header: header,
     detectedType: detectedType,
     warnings: warnings,
     rowCount: rows ? rows.length : 0,
-    colCount: header ? header.length : 0
+    colCount: header ? header.length : 0,
+    dvtColIdx: dvtColIdx
   };
 }
 
@@ -1873,25 +1876,40 @@ function impAddStockEntry_(map, prefix, code, qty, dvt) {
   if (!norm) return;
   var q = Number(qty) || 0;
   if (!q) return;
-  var dvtKey = impNormDvtKey_(dvt);
+  var dvtRaw = String(dvt || '').trim();
+  var dvtKey = impNormDvtKey_(dvtRaw);
   var key = prefix + norm + (dvtKey ? ('|DV:' + dvtKey) : '');
-  map[key] = (map[key] || 0) + q;
+  if (!map[key]) map[key] = { q: 0, d: dvtRaw };
+  map[key].q += q;
+  if (dvtRaw && !map[key].d) map[key].d = dvtRaw;
 }
 
 /** Tách tồn Kho Q7 từ file Excel ngay trên trình duyệt → payload nhỏ */
 function extractTonQ7EntriesFromRows_(rows) {
   if (!rows || rows.length < 2) return { entries: [], meta: { reason: 'empty' } };
+  // Ưu tiên dòng header có cả mã hàng + ĐVT (tránh nhận nhầm dòng tiêu đề báo cáo)
   var headerIndex = 0;
   var bestScore = -1;
-  for (var hi = 0; hi < Math.min(rows.length, 10); hi++) {
+  for (var hi = 0; hi < Math.min(rows.length, 12); hi++) {
+    var joined = (rows[hi] || []).map(impNormalizeText).join(' ');
     var score = (rows[hi] || []).filter(function(cell) { return impNormalizeText(cell).length > 0; }).length;
+    if (/ma hang|mahang|sku|mavach|ma vach/.test(joined)) score += 5;
+    if (/dvt|don vi|donvi|unit|uom|dvtinh/.test(joined)) score += 8;
+    if (/ton kho|tonkho|stock|q7|quan 7/.test(joined)) score += 3;
     if (score > bestScore) { bestScore = score; headerIndex = hi; }
   }
   var header = rows[headerIndex] || [];
-  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'sku', 'mahh', 'itemcode', 'code']);
+  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'sku', 'mahh', 'itemcode']);
   var maVachIdx = impFindColByAliases_(header, ['mavach', 'barcode', 'ean']);
-  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvt', 'donvi', 'unit', 'uom']);
-  var tonIdx = impFindColByAliases_(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'cuoiky', 'qty']);
+  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'unit', 'uom', 'basicunit', 'unitname']);
+  // Fallback: cột có chữ "đơn vị" trong header
+  if (dvtIdx < 0) {
+    for (var dc = 0; dc < header.length; dc++) {
+      var hn = impNormalizeText(header[dc]);
+      if (hn.indexOf('don vi') !== -1 || hn === 'dv' || hn.indexOf('dvt') !== -1) { dvtIdx = dc; break; }
+    }
+  }
+  var tonIdx = impFindColByAliases_(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'cuoiky']);
   var tenHangIdx = impFindColByAliases_(header, ['tenhanghoa', 'tenhang', 'name', 'description']);
   var q7Cols = [];
   for (var c = 0; c < header.length; c++) {
@@ -1914,6 +1932,7 @@ function extractTonQ7EntriesFromRows_(rows) {
   var currentMaVach = '';
   var currentDvt = '';
   var matchedRows = 0;
+  var rowsWithDvt = 0;
 
   for (var r = startRow; r < rows.length; r++) {
     var row = rows[r];
@@ -1953,20 +1972,25 @@ function extractTonQ7EntriesFromRows_(rows) {
         }
       }
     }
-    if (got) matchedRows++;
+    if (got) {
+      matchedRows++;
+      if (String(useDvt || '').trim()) rowsWithDvt++;
+    }
   }
 
   var entries = [];
   for (var k in map) {
     if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
-    entries.push({ k: k, q: map[k] });
+    entries.push({ k: k, q: map[k].q, d: map[k].d || '' });
   }
   return {
     entries: entries,
     meta: {
       headerIndex: headerIndex,
+      headerSample: (header || []).slice(0, 12),
       q7Cols: q7Cols,
       matchedRows: matchedRows,
+      rowsWithDvt: rowsWithDvt,
       entryCount: entries.length,
       maHangIdx: maHangIdx,
       maVachIdx: maVachIdx,
@@ -2035,7 +2059,12 @@ function importDanhMucTonKho() {
       return;
     }
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 extract done',data:{rowCount:rowCount,entryCount:extracted.entries.length,meta:extracted.meta,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-C',runId:'import-q7-fast-v1'})}).catch(function(){});
+    var _dvtSamples = (extracted.entries || []).filter(function(e){ return e && e.d; }).slice(0, 5).map(function(e){ return {k:e.k,q:e.q,d:e.d}; });
+    var _withD = 0;
+    for (var _di = 0; _di < (extracted.entries || []).length; _di++) {
+      if (extracted.entries[_di] && (extracted.entries[_di].d || (String(extracted.entries[_di].k||'').indexOf('|DV:') !== -1))) _withD++;
+    }
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 extract done',data:{rowCount:rowCount,entryCount:extracted.entries.length,withDvtEntries:_withD,dvtIdx:extracted.meta&&extracted.meta.dvtIdx,headerSample:extracted.meta&&extracted.meta.headerSample,rowsWithDvt:extracted.meta&&extracted.meta.rowsWithDvt,sampleWithDvt:_dvtSamples,sampleFirst3:(extracted.entries||[]).slice(0,3),build:APP_BUILD},timestamp:Date.now(),hypothesisId:'DVT-A',runId:'dvt-v1'})}).catch(function(){});
     // #endregion
     if (!extracted.entries.length) {
       hideLoad();
@@ -2051,17 +2080,20 @@ function importDanhMucTonKho() {
     }, { directOnly: true, timeoutMs: 120000 }).then(function(res) {
       hideLoad();
       // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,serverMs:res&&res._debugTotalMs,q7Rows:res&&res.q7Rows,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-C',runId:'import-q7-fast-v1'})}).catch(function(){});
+      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,serverMs:res&&res._debugTotalMs,q7Rows:res&&res.q7Rows,q7WithDvt:res&&res.q7WithDvt,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'DVT-B',runId:'dvt-v1'})}).catch(function(){});
       // #endregion
       if (!res || !res.success) {
         alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
         return;
       }
+      var dvtColOk = extracted.meta && extracted.meta.dvtIdx >= 0;
       alert("✅ Cập nhật nhanh TON_Q7 thành công!\n" +
-        "- Mã/ĐVT Q7: " + (res.q7Rows || extracted.entries.length) + "\n" +
+        "- Dòng TON_Q7: " + (res.q7Rows || extracted.entries.length) + "\n" +
+        "- Có ĐVT: " + (res.q7WithDvt != null ? res.q7WithDvt : (extracted.meta.rowsWithDvt || 0)) +
+        (dvtColOk ? (" (cột ĐVT #" + (extracted.meta.dvtIdx + 1) + ")") : " (⚠️ không thấy cột ĐVT trong file)") + "\n" +
         "- Thời gian: " + Math.round((Date.now() - t0) / 1000) + "s\n" +
         (res.msg ? ("\n" + res.msg + "\n") : "") +
-        "[" + APP_BUILD + " / import-q7-fast-v1]");
+        "[" + APP_BUILD + " / import-q7-fast-v2]");
       if (fileEl) fileEl.value = '';
       importPreviewState = null;
       renderImportPreview(null);
