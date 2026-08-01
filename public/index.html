@@ -329,7 +329,7 @@
           <div class="form-group"><label>Lọc Ngày:</label><input type="date" id="ql-ngay" onchange="onManualNgayFilterChange('ql-ngay', 'ql-ngay-fast', 'ql')"></div>
           <div class="form-group"><label>Chọn nhanh:</label><select id="ql-ngay-fast" onchange="setQuickDateFilter(this.value, 'ql-ngay', 'ql-ngay-fast'); ql_loadPhieu()">
             <option value="">-- Tùy chọn --</option>
-            <option value="today">Hôm nay</option>
+            <option value="today" selected>Hôm nay</option>
             <option value="yesterday">Hôm qua</option>
             <option value="7days">7 ngày gần đây</option>
             <option value="all">Tất cả</option>
@@ -384,7 +384,7 @@
             <label>⚡ Chọn nhanh</label>
             <select id="confirm-ngay-fast" onchange="setQuickDateFilter(this.value, 'confirm-ngay', 'confirm-ngay-fast'); confirm_loadPhieu()">
               <option value="">-- Tùy chọn --</option>
-              <option value="today">Hôm nay</option>
+              <option value="today" selected>Hôm nay</option>
               <option value="yesterday">Hôm qua</option>
               <option value="7days">7 ngày gần đây</option>
               <option value="all">Tất cả</option>
@@ -531,6 +531,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v13"></script>
+  <script src="app.js?v=20260802v15"></script>
 </body>
 </html>

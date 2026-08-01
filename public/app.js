@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v13';
+var APP_BUILD = '2026-08-02-v15';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -362,6 +362,9 @@ function initSystemData() {
   }
 
   var qlNgay = getEl("ql-ngay"); if (qlNgay && !qlNgay.value) qlNgay.valueAsDate = new Date();
+  var qlNgayFast = getEl("ql-ngay-fast"); if (qlNgayFast && !qlNgayFast.value) qlNgayFast.value = "today";
+  var confirmNgay = getEl("confirm-ngay"); if (confirmNgay && !confirmNgay.value) confirmNgay.valueAsDate = new Date();
+  var confirmNgayFast = getEl("confirm-ngay-fast"); if (confirmNgayFast && !confirmNgayFast.value) confirmNgayFast.value = "today";
   if (!cachedBootstrap) showLoad("Đang tải hệ thống...");
 
   // Proxy có thể 404 — luôn cho phép fallback GET thẳng GAS
@@ -879,28 +882,53 @@ function resetConfirmViewAfterSave() {
   confirm_loadPhieu();
 }
 
+function unwrapListResponse_(res) {
+  if (Array.isArray(res)) return { rows: res, meta: {} };
+  if (res && Array.isArray(res.data)) return { rows: res.data, meta: res };
+  return { rows: [], meta: res || {} };
+}
+
 function ql_loadPhieu(selectedSoPhieu) {
   var selectEl = document.getElementById("ql-phieu");
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
-  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: getNgayFilterParam('ql-ngay', 'ql-ngay-fast'), userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
-    phieuData = res; var countMoi = 0; var countDone = 0; var countCancel = 0;
-    var html = '<option value="">-- Chọn Đơn ('+res.length+') --</option>';
-    res.forEach(r => {
+  var ngay = getNgayFilterParam('ql-ngay', 'ql-ngay-fast');
+  var t0 = Date.now();
+  // #region agent log
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list start',data:{ngay:ngay,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
+  // #endregion
+  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+    var parsed = unwrapListResponse_(res);
+    var rows = parsed.rows;
+    phieuData = rows;
+    var countMoi = 0; var countDone = 0; var countCancel = 0;
+    var html = '<option value="">-- Chọn Đơn ('+rows.length+') --</option>';
+    rows.forEach(function(r) {
       if(r.trangThai === "Mới") countMoi++; else if(r.trangThai === "Đã hủy") countCancel++; else countDone++;
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
     });
     selectEl.innerHTML = html; document.getElementById("ql-view-phieu").style.display = "none";
-    document.getElementById("ql-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 MỚI: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ XỬ LÝ: '+countDone+'</div> | <div class="stat-box" style="color:#8b5a2b;">🚫 HỦY: '+countCancel+'</div>';
+    var serverMs = parsed.meta && parsed.meta._debugTotalMs;
+    document.getElementById("ql-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 MỚI: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ XỬ LÝ: '+countDone+'</div> | <div class="stat-box" style="color:#8b5a2b;">🚫 HỦY: '+countCancel+'</div>' +
+      (serverMs ? (' <span style="color:#64748b;font-size:12px;">(' + Math.round(serverMs/1000) + 's)</span>') : '');
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list done',data:{clientMs:Date.now()-t0,serverMs:serverMs,scanned:parsed.meta&&parsed.meta._debugScanned,count:rows.length,run:parsed.meta&&parsed.meta._debugRun,ngay:ngay},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
+    // #endregion
     if (selectedSoPhieu) {
-      var matched = res.find(function(item) { return item.soPhieu === selectedSoPhieu; });
+      var matched = rows.find(function(item) { return item.soPhieu === selectedSoPhieu; });
       if (matched) {
         selectEl.value = selectedSoPhieu;
         ql_hienThiChiTiet(matched);
       }
     }
-  }).catch(function(err){ alert('Lỗi: '+err.message); });
+  }).catch(function(err){
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
+    // #endregion
+    selectEl.innerHTML = '<option value="">-- Lỗi tải --</option>';
+    alert('Lỗi: '+err.message);
+  });
 }
 
 function ql_onSelectPhieu() {
@@ -917,14 +945,23 @@ function confirm_loadPhieu(selectedSoPhieu) {
   if (!selectedSoPhieu) currentConfirmPhieuObj = null;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
-  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: getNgayFilterParam('confirm-ngay', 'confirm-ngay-fast'), userRole: sessionUser.role, userStore: sessionUser.store }).then(function(res) {
-    var confirmableOrders = (res || []).filter(function(r) { return r.trangThai === "Đã soạn"; });
-    var html = '<option value="">-- Chọn Phiếu --</option>';
+  var ngay = getNgayFilterParam('confirm-ngay', 'confirm-ngay-fast');
+  var t0 = Date.now();
+  // #region agent log
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_loadPhieu',message:'confirm list start',data:{ngay:ngay,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QL-B',runId:'ql-fast-v1'})}).catch(function(){});
+  // #endregion
+  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+    var parsed = unwrapListResponse_(res);
+    var confirmableOrders = parsed.rows.filter(function(r) { return r.trangThai === "Đã soạn"; });
+    var html = '<option value="">-- Chọn Phiếu (' + confirmableOrders.length + ') --</option>';
     confirmableOrders.forEach(function(r) {
       var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
     });
     selectEl.innerHTML = html;
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_loadPhieu',message:'confirm list done',data:{clientMs:Date.now()-t0,serverMs:parsed.meta&&parsed.meta._debugTotalMs,scanned:parsed.meta&&parsed.meta._debugScanned,count:confirmableOrders.length,run:parsed.meta&&parsed.meta._debugRun,ngay:ngay},timestamp:Date.now(),hypothesisId:'QL-B',runId:'ql-fast-v1'})}).catch(function(){});
+    // #endregion
     if (selectedSoPhieu) {
       var found = confirmableOrders.some(function(item) { return item.soPhieu === selectedSoPhieu; });
       if (found) {
@@ -932,19 +969,29 @@ function confirm_loadPhieu(selectedSoPhieu) {
         confirm_onSelectPhieu();
       }
     }
-  }).catch(function(err){ alert('Lỗi: '+err.message); });
+  }).catch(function(err){
+    selectEl.innerHTML = '<option value="">-- Lỗi tải --</option>';
+    alert('Lỗi: '+err.message);
+  });
 }
 
 function confirm_onSelectPhieu() {
   var val = document.getElementById("confirm-phieu").value;
   if (!val) { document.getElementById("confirm-view").style.display = "none"; return; }
   showLoad("Đang tải dữ liệu nhận hàng...");
-  apiGet('getChiTietPhieu', { soPhieu: val, storeName: sessionUser.store }).then(function(rows) {
+  var t0 = Date.now();
+  apiGet('getChiTietPhieu', { soPhieu: val, storeName: sessionUser.store, includeStock: '0' }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     hideLoad();
+    var parsed = unwrapListResponse_(res);
+    var rows = parsed.rows;
     currentConfirmPhieuObj = { soPhieu: val };
     var viewEl = document.getElementById("confirm-view");
     document.getElementById("confirm-lbl-sophieu").innerText = val;
-    document.getElementById("confirm-meta").innerText = "Đã tải " + rows.length + " dòng để xác nhận.";
+    var serverMs = parsed.meta && parsed.meta._debugTotalMs;
+    document.getElementById("confirm-meta").innerText = "Đã tải " + rows.length + " dòng để xác nhận." + (serverMs ? (" (" + Math.round(serverMs/1000) + "s)") : "");
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_onSelectPhieu',message:'confirm detail done',data:{clientMs:Date.now()-t0,serverMs:serverMs,rows:rows.length,run:parsed.meta&&parsed.meta._debugRun,stock:parsed.meta&&parsed.meta._debugStock},timestamp:Date.now(),hypothesisId:'QL-C',runId:'ql-fast-v1'})}).catch(function(){});
+    // #endregion
     var tbody = document.getElementById("confirm-tbody");
     tbody.innerHTML = "";
     rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
@@ -1023,8 +1070,15 @@ function ql_hienThiChiTiet(phieu, options) {
   var isPublicView = !!(options && options.publicView);
   var isAdmin = sessionUser.role === "Admin";
   showLoad("Tải chi tiết...");
-  apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat }).then(function(rows) {
-    hideLoad(); editRows = rows; currentLoadedRows = rows || []; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
+  var t0Detail = Date.now();
+  apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat, includeStock: '1' }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+    hideLoad();
+    var parsed = unwrapListResponse_(res);
+    var rows = parsed.rows;
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_hienThiChiTiet',message:'ql detail done',data:{clientMs:Date.now()-t0Detail,serverMs:parsed.meta&&parsed.meta._debugTotalMs,rows:rows.length,run:parsed.meta&&parsed.meta._debugRun,stock:parsed.meta&&parsed.meta._debugStock,khoXuat:currentPhieuObj&&currentPhieuObj.khoXuat},timestamp:Date.now(),hypothesisId:'QL-C',runId:'ql-fast-v1'})}).catch(function(){});
+    // #endregion
+    editRows = rows; currentLoadedRows = rows || []; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     var isConfirmedOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
     var isPackedOrder = rows.some(function(r) { return r.trangThai === "Đã soạn hàng"; });
     var canEditRows = !!sessionUser.user && !isPublicView && !isConfirmedOrder && (isAdmin || !isPackedOrder);
@@ -1785,19 +1839,28 @@ function importDanhMucTonKho() {
   }
   var confirmEl = document.getElementById('imp-confirm');
   if (!confirmEl || !confirmEl.checked) return alert('Vui lòng xác nhận sau khi xem trước dữ liệu.');
-  showLoad("Đang cập nhật dữ liệu...");
+  var rowCount = (importPreviewState.rows && importPreviewState.rows.length) || 0;
+  showLoad("Đang cập nhật " + rowCount + " dòng lên Google Sheet (có thể 1–3 phút)...");
+  var t0 = Date.now();
+  // #region agent log
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import start',data:{importType:importType,rowCount:rowCount,fileName:file.name,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-A',runId:'import-q7-v2'})}).catch(function(){});
+  // #endregion
   Promise.resolve({ rows: importPreviewState.rows, sheetName: importPreviewState.sheetName }).then(function(parsed) {
+    // File lớn: POST thẳng GAS, timeout 5 phút (không qua Vercel 60s)
     return apiPost('nhapKhauCapNhatThongTin', {
       importType: importType,
       fileName: file.name,
       sourceSheet: parsed.sheetName,
       fileData: parsed.rows,
       actor: sessionUser.user
-    });
+    }, { directOnly: true, timeoutMs: 300000 });
   }).then(function(res) {
     hideLoad();
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,serverMs:res&&res._debugTotalMs,q7Ms:res&&res._debugQ7Ms,q7Rows:res&&res.q7Rows,updatedRows:res&&res.updatedRows,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-A',runId:'import-q7-v2'})}).catch(function(){});
+    // #endregion
     if (!res || !res.success) {
-      alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi"));
+      alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
       return;
     }
     var targetSheet = res.targetSheet || (importType === 'stock' ? 'TỔNG HỢP TỒN KHO' : 'Data_Excel');
@@ -1805,7 +1868,12 @@ function importDanhMucTonKho() {
       "- Sheet đích: " + targetSheet + "\n" +
       "- Số dòng: " + (res.updatedRows || 0) + "\n" +
       "- Số cột: " + (res.updatedCols || 0);
+    if (importType === 'stock') {
+      msg += "\n- Sheet TON_Q7: " + (res.q7Rows || 0) + " mã";
+      if (res._debugTotalMs) msg += "\n(Server: " + Math.round(res._debugTotalMs / 1000) + "s)";
+    }
     if (res.msg) msg += "\n\n" + res.msg;
+    msg += "\n[" + APP_BUILD + "]";
     alert(msg);
     if (fileEl) fileEl.value = '';
     importPreviewState = null;
@@ -1814,13 +1882,21 @@ function importDanhMucTonKho() {
       clearCatalogLocalStorage();
       loadCatalogInBackground(true);
     } else {
+      // Nếu Q7 chưa tách được, thử rebuild riêng
+      if (!(res.q7Rows > 0)) {
+        apiGet('rebuildTonQ7', null, { directOnly: true, timeoutMs: 180000 }).catch(function() {});
+      }
+      shStockWarmState.ready = !!(res.q7Rows > 0);
       apiGet('getBootstrapData').then(function(bootstrap) {
         if (bootstrap && bootstrap.success) applyBootstrapData(bootstrap);
       }).catch(function() {});
     }
   }).catch(function(err) {
     hideLoad();
-    alert('Lỗi: ' + err.message);
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-A',runId:'import-q7-v2'})}).catch(function(){});
+    // #endregion
+    alert('Lỗi: ' + err.message + '\n[Build: ' + APP_BUILD + ']\nGợi ý: deploy lại code.gs (New version) rồi thử lại.');
   });
 }
 

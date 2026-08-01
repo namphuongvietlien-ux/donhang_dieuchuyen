@@ -35,10 +35,10 @@ function isPackingQ7Store_(storeName) {
   return formatShortStoreLabel(storeName) === "Q7";
 }
 
-function rebuildTonKhoQ7Sheet_(ss) {
+function writeTonQ7MapToSheet_(ss, map) {
   ss = ss || getSS();
   var t0 = Date.now();
-  var map = getStockMapForStoreFromFullSheet_(ss, PACKING_STOCK_STORE);
+  map = map || {};
   var keyCount = Object.keys(map).length;
   var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
   if (!sh) sh = ss.insertSheet(TON_Q7_SHEET_NAME);
@@ -49,8 +49,8 @@ function rebuildTonKhoQ7Sheet_(ss) {
     if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
     rows.push([k, Number(map[k]) || 0, ""]);
   }
-  // getRange(r1,c1,r2,c2) — hàng cuối = 1 + rows.length
-  if (rows.length) sh.getRange(2, 1, rows.length + 1, 3).setValues(rows);
+  // Sheet.getRange(row, column, numRows, numColumns)
+  if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
   sh.getRange(1, 3).setValue(new Date());
   try { SpreadsheetApp.flush(); } catch (e) {}
   try {
@@ -67,6 +67,12 @@ function rebuildTonKhoQ7Sheet_(ss) {
   };
 }
 
+function rebuildTonKhoQ7Sheet_(ss) {
+  ss = ss || getSS();
+  var map = getStockMapForStoreFromFullSheet_(ss, PACKING_STOCK_STORE);
+  return writeTonQ7MapToSheet_(ss, map);
+}
+
 function readTonKhoQ7Map_(ss) {
   ss = ss || getSS();
   var cache = getScriptCache_();
@@ -76,7 +82,8 @@ function readTonKhoQ7Map_(ss) {
   var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
   if (!sh || sh.getLastRow() < 2) return null;
   var lastRow = sh.getLastRow();
-  var data = sh.getRange(2, 1, lastRow, 2).getValues();
+  var numRows = lastRow - 1;
+  var data = sh.getRange(2, 1, numRows, 2).getValues();
   var map = {};
   for (var i = 0; i < data.length; i++) {
     var key = String(data[i][0] || "").trim();
@@ -88,14 +95,10 @@ function readTonKhoQ7Map_(ss) {
   return map;
 }
 
-/** Đọc full sheet tổng hợp — chỉ gọi lúc import / rebuild Q7 */
-function getStockMapForStoreFromFullSheet_(ss, storeName) {
+/** Parse matrix tồn kho (từ file import hoặc sheet) → map mã cho 1 kho */
+function buildStockMapForStoreFromData_(tkData, storeName) {
   var tonKhoMap = {};
-  if (!storeName) return tonKhoMap;
-  var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-  if (!tonKhoSheet) return tonKhoMap;
-
-  var tkData = tonKhoSheet.getDataRange().getValues();
+  if (!storeName || !tkData || !tkData.length) return tonKhoMap;
   var stockConfig = getStockSheetConfig(tkData);
   var header = tkData[stockConfig.headerIndex] || [];
   var currentMaHang = "";
@@ -143,6 +146,14 @@ function getStockMapForStoreFromFullSheet_(ss, storeName) {
     if (maVachTon) addStockValueByCode(tonKhoMap, "MV:", maVachTon, ton);
   }
   return tonKhoMap;
+}
+
+/** Đọc full sheet tổng hợp — chỉ khi rebuild thủ công */
+function getStockMapForStoreFromFullSheet_(ss, storeName) {
+  if (!storeName) return {};
+  var tonKhoSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+  if (!tonKhoSheet) return {};
+  return buildStockMapForStoreFromData_(tonKhoSheet.getDataRange().getValues(), storeName);
 }
 
 function invalidateCatalogCache_() {
@@ -252,9 +263,14 @@ function readHistoryForSelectedOrders_(historySheet, selectedSet, baseDateStr, m
 
   matchedRows.sort(function(a, b) { return a.order - b.order; });
   var data = [[]];
-  for (var m = 0; m < matchedRows.length; m++) data.push(matchedRows[m].row);
+  var orders = [];
+  for (var m = 0; m < matchedRows.length; m++) {
+    data.push(matchedRows[m].row);
+    orders.push(matchedRows[m].order);
+  }
   return {
     data: data,
+    orders: orders,
     startRow: matchedRows.length ? matchedRows[0].order : 2,
     scannedRows: scanned,
     matchedRows: matchedRows.length,
@@ -784,7 +800,7 @@ function doGet(e) {
           res = layDanhSachPhieuTheoFilter(e.parameter.khoNhan || '', e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');
           break;
         case 'getChiTietPhieu':
-          res = getChiTietPhieu(e.parameter.soPhieu || '', e.parameter.storeName || '');
+          res = getChiTietPhieu(e.parameter.soPhieu || '', e.parameter.storeName || '', e.parameter.includeStock);
           break;
         case 'getThongTinPhieu':
           res = getThongTinPhieu(e.parameter.soPhieu || '');
@@ -1772,15 +1788,19 @@ function nhapKhauCapNhatThongTin(payload) {
   var ss = getSS();
   if (fileData && importType) {
     if (importType === 'stock') {
+      var tImport0 = Date.now();
       var stockSheetDirect = getOrCreateStockSheet(ss);
-      var stockWriteInfo = writeImportedDataToSheet(stockSheetDirect, fileData);
+      var matrix = normalizeImportedMatrix(fileData);
+      var stockWriteInfo = writeImportedDataToSheet(stockSheetDirect, matrix);
       SpreadsheetApp.flush();
       invalidateStoresCache_();
-      var q7Info = { rows: 0 };
+      // Tách TON_Q7 từ matrix đã có sẵn — không đọc lại full sheet (tránh timeout)
+      var q7Info = { rows: 0, ms: 0 };
       try {
-        q7Info = rebuildTonKhoQ7Sheet_(ss);
+        var q7Map = buildStockMapForStoreFromData_(matrix, PACKING_STOCK_STORE);
+        q7Info = writeTonQ7MapToSheet_(ss, q7Map);
       } catch (q7Err) {
-        Logger.log("rebuildTonKhoQ7Sheet_ error: " + q7Err);
+        Logger.log("writeTonQ7 from import error: " + q7Err);
       }
       return {
         success: true,
@@ -1790,6 +1810,9 @@ function nhapKhauCapNhatThongTin(payload) {
         updatedCols: stockWriteInfo.cols,
         q7Sheet: TON_Q7_SHEET_NAME,
         q7Rows: q7Info.rows || 0,
+        _debugTotalMs: Date.now() - tImport0,
+        _debugQ7Ms: q7Info.ms || 0,
+        _debugRun: "import-q7-v2",
         msg: 'Đã cập nhật TỔNG HỢP TỒN KHO và tách sheet nhẹ ' + TON_Q7_SHEET_NAME + ' (' + (q7Info.rows || 0) + ' mã Q7) để tạo bảng soạn nhanh.'
       };
     }
@@ -2050,45 +2073,157 @@ function postProcessPackingOrder(payload) {
 }
 
 // --- API: QUẢN LÝ PHIẾU (CÓ PHÂN QUYỀN) ---
+function getNgayFilterBounds_(ngayFilter) {
+  var filter = String(ngayFilter || "").trim().toLowerCase();
+  if (!filter || filter === "all") return { filter: "all", startMs: null, endMs: null, maxScan: 6000 };
+  var today = getScriptTodayStart_();
+  if (!today) return { filter: filter, startMs: null, endMs: null, maxScan: 4000 };
+  var dayMs = 24 * 60 * 60 * 1000;
+  if (filter === "today" || /^\d{4}-\d{2}-\d{2}$/.test(filter)) {
+    var day = filter === "today" ? today : parseDateInputYYYYMMDD(filter);
+    if (!day) return { filter: filter, startMs: null, endMs: null, maxScan: 3000 };
+    return { filter: filter, startMs: day.getTime(), endMs: day.getTime() + dayMs - 1, maxScan: 2500, exactDate: filter === "today" ? formatSheetDateYYYYMMDD(today) : filter };
+  }
+  if (filter === "yesterday") {
+    var y = new Date(today);
+    y.setDate(today.getDate() - 1);
+    return { filter: filter, startMs: y.getTime(), endMs: y.getTime() + dayMs - 1, maxScan: 2500, exactDate: formatSheetDateYYYYMMDD(y) };
+  }
+  if (filter === "7days") {
+    var start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    return { filter: filter, startMs: start.getTime(), endMs: today.getTime() + dayMs - 1, maxScan: 4500 };
+  }
+  return { filter: filter, startMs: null, endMs: null, maxScan: 4000 };
+}
+
+function storeMatchesFast_(rowStore, targetStore) {
+  if (!targetStore) return true;
+  var left = String(rowStore || "").trim();
+  var right = String(targetStore || "").trim();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return isSameStoreName(left, right);
+}
+
 function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) {
+  var t0 = Date.now();
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
+
   var filterKhoNhan = normalizeStoreName(khoNhan || "");
   var filterUserStore = normalizeStoreName(userStore || "");
-  var data = readHistoryDataPack_(historySheet).data;
+  var bounds = getNgayFilterBounds_(ngayYYYYMMDD);
+  var lastRow = historySheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  var lastCol = Math.min(Math.max(historySheet.getLastColumn(), 13), 13);
+  var chunkSize = 500;
+  var maxScan = Math.min(bounds.maxScan || 4000, lastRow - 1);
   var map = {};
-  for (var i = 1; i < data.length; i++) {
-    var rowNgay = data[i][0]; 
-    var rowSoPhieu = data[i][1] ? data[i][1].toString().trim() : "";
-    var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
-    var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
-    var slThucTe = data[i][8];
-    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
-    var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
-    var thoiGian = rowNgay instanceof Date ? rowNgay.getTime() : "";
+  var scanned = 0;
+  var endRow = lastRow;
+  var olderChunkStreak = 0;
+  var tz = Session.getScriptTimeZone();
 
-    if (!rowSoPhieu) continue;
-    if (filterKhoNhan && filterKhoNhan !== "all" && !isSameStoreName(rowKhoNhan, filterKhoNhan)) continue;
-    
-    // BỘ LỌC BẢO MẬT PHÂN QUYỀN: Chi nhánh chỉ thấy đơn của mình
-    if (userRole !== "Admin") {
-      if (!isSameStoreName(rowKhoXuat, filterUserStore) && !isSameStoreName(rowKhoNhan, filterUserStore)) continue;
+  while (endRow >= 2 && scanned < maxScan) {
+    var startRow = Math.max(2, endRow - chunkSize + 1);
+    if (scanned + (endRow - startRow + 1) > maxScan) {
+      startRow = Math.max(2, endRow - (maxScan - scanned) + 1);
+    }
+    var numRows = endRow - startRow + 1;
+    var body = historySheet.getRange(startRow, 1, numRows, lastCol).getValues();
+    scanned += numRows;
+
+    var chunkHasInRange = false;
+    var chunkAllOlder = bounds.startMs != null;
+    for (var i = 0; i < body.length; i++) {
+      var row = body[i];
+      if (!row) continue;
+      var rowSoPhieu = row[1] ? String(row[1]).trim() : "";
+      if (!rowSoPhieu) continue;
+
+      var rowNgay = row[0];
+      var rowDateStr = "";
+      var rowMs = null;
+      if (rowNgay instanceof Date && !isNaN(rowNgay.getTime())) {
+        rowMs = rowNgay.getTime();
+        rowDateStr = Utilities.formatDate(rowNgay, tz, "yyyy-MM-dd");
+      } else {
+        rowDateStr = formatSheetDateYYYYMMDD(rowNgay);
+        if (rowDateStr) {
+          var parsed = parseDateInputYYYYMMDD(rowDateStr);
+          if (parsed) rowMs = parsed.getTime();
+        }
+      }
+
+      if (bounds.exactDate) {
+        if (rowDateStr !== bounds.exactDate) {
+          if (rowMs != null && rowMs < bounds.startMs) { /* older */ }
+          else chunkAllOlder = false;
+          continue;
+        }
+        chunkHasInRange = true;
+        chunkAllOlder = false;
+      } else if (bounds.startMs != null) {
+        if (rowMs == null || rowMs < bounds.startMs || rowMs > bounds.endMs) {
+          if (!(rowMs != null && rowMs < bounds.startMs)) chunkAllOlder = false;
+          continue;
+        }
+        chunkHasInRange = true;
+        chunkAllOlder = false;
+      } else {
+        chunkAllOlder = false;
+        if (!matchesNgayFilter(rowNgay, ngayYYYYMMDD)) continue;
+      }
+
+      var rowKhoXuat = row[2] ? String(row[2]).trim() : "";
+      var rowKhoNhan = row[3] ? String(row[3]).trim() : "";
+      if (filterKhoNhan && filterKhoNhan !== "all" && !storeMatchesFast_(rowKhoNhan, filterKhoNhan)) continue;
+      if (userRole !== "Admin") {
+        if (!storeMatchesFast_(rowKhoXuat, filterUserStore) && !storeMatchesFast_(rowKhoNhan, filterUserStore)) continue;
+      }
+
+      var slThucTe = row[8];
+      var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
+      var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
+      var thoiGian = rowMs != null ? rowMs : "";
+
+      if (!map[rowSoPhieu]) {
+        map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
+      } else {
+        if (displayStatus === "Đã hủy") map[rowSoPhieu].trangThai = "Đã hủy";
+        else if (displayStatus === "Đã xác nhận" && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xác nhận";
+        else if (displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã hủy" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
+        if (thoiGian && (!map[rowSoPhieu].thoiGian || thoiGian > map[rowSoPhieu].thoiGian)) map[rowSoPhieu].thoiGian = thoiGian;
+      }
     }
 
-    if (!matchesNgayFilter(rowNgay, ngayYYYYMMDD)) continue;
-    
-    if (!map[rowSoPhieu]) { 
-      map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
-    } else {
-      if (displayStatus === "Đã hủy") map[rowSoPhieu].trangThai = "Đã hủy";
-      else if (displayStatus === "Đã xác nhận" && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xác nhận";
-      else if (displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã hủy" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
+    if (bounds.startMs != null) {
+      if (chunkHasInRange) olderChunkStreak = 0;
+      else if (chunkAllOlder) {
+        olderChunkStreak++;
+        if (olderChunkStreak >= 2) break;
+      } else {
+        olderChunkStreak = 0;
+      }
     }
+
+    endRow = startRow - 1;
   }
-  var res = []; for(var key in map) res.push(map[key]); 
-  res.sort(function(a,b){ return b.thoiGian - a.thoiGian; }); 
-  return res; 
+
+  var res = [];
+  for (var key in map) res.push(map[key]);
+  res.sort(function(a, b) { return (b.thoiGian || 0) - (a.thoiGian || 0); });
+  return {
+    success: true,
+    data: res,
+    _debugTotalMs: Date.now() - t0,
+    _debugScanned: scanned,
+    _debugFilter: bounds.filter,
+    _debugRun: "ql-fast-v1"
+  };
 }
 
 function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
@@ -2209,25 +2344,56 @@ function isDateInTimeline(value, timeline, fromDate, toDate) {
   return date.getTime() >= rangeStart.getTime() && date.getTime() <= today.getTime();
 }
 
-function getChiTietPhieu(soPhieu, storeName) {
+function getChiTietPhieu(soPhieu, storeName, includeStock) {
+  var t0 = Date.now();
   var ss = getSS();
-  var catalogLookup = getCatalogLookup(ss);
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  var data = historySheet.getDataRange().getValues();
+  if (!historySheet || !soPhieu) return { success: true, data: [], _debugRun: "ql-fast-v1" };
+  var wantStock = !(includeStock === false || includeStock === 0 || includeStock === "0" || includeStock === "false");
+  var soPhieuTrim = String(soPhieu).trim();
+  var selectedSet = {};
+  selectedSet[soPhieuTrim] = true;
+  var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 4000);
+  var data = pack.data || [[]];
+  var sheetOrders = pack.orders || [];
+
+  // Không load full catalog ở đây (rất chậm) — dùng ĐVT đã lưu trên lịch sử
   var matchedRows = [];
-  for (var i = 1; i < data.length; i++) { 
-    if (data[i][1] && data[i][1].toString().toLowerCase() === soPhieu.toLowerCase()) {
-      var slGoc = Number(data[i][7]) || 0;
-      var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
-      var slThucTe = hasActualQty ? Number(data[i][8]) : "";
-      matchedRows.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], slGoc: slGoc, slThucTe: slThucTe, dvt: resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]), ghiChu: data[i][11]||"", trangThai: data[i][12] || "Mới", nguoiSoanHang: data[i][13] || "" });
+  for (var i = 1; i < data.length; i++) {
+    if (!data[i]) continue;
+    var slGoc = Number(data[i][7]) || 0;
+    var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
+    var slThucTe = hasActualQty ? Number(data[i][8]) : "";
+    matchedRows.push({
+      rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
+      maHang: data[i][4],
+      maVach: data[i][5],
+      tenHang: data[i][6],
+      slGoc: slGoc,
+      slThucTe: slThucTe,
+      dvt: data[i][9] || "",
+      ghiChu: data[i][11] || "",
+      trangThai: data[i][12] || "Mới",
+      nguoiSoanHang: data[i][13] || "",
+      stock: ""
+    });
+  }
+
+  if (wantStock && matchedRows.length && isPackingQ7Store_(storeName)) {
+    var tonKhoMap = getStockMapForStore(ss, storeName) || {};
+    for (var j = 0; j < matchedRows.length; j++) {
+      matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach);
     }
   }
-  var tonKhoMap = getStockMapForStore(ss, storeName);
-  for (var j = 0; j < matchedRows.length; j++) {
-    matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach);
-  }
-  return matchedRows;
+
+  return {
+    success: true,
+    data: matchedRows,
+    _debugTotalMs: Date.now() - t0,
+    _debugScanned: pack.scannedRows || 0,
+    _debugStock: wantStock,
+    _debugRun: "ql-fast-v1"
+  };
 }
 
 function getStockMapForStore(ss, storeName) {
