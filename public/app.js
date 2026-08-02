@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v42';
+var APP_BUILD = '2026-08-02-v43';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -446,7 +446,7 @@ var phieuData = []; var editRows = []; var currentLoadedRows = []; var currentPh
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
 var deepLinkTab = new URLSearchParams(location.search).get("tab");
-var INVENTORY_APP_URL = "https://my-inventory-app.vercel.app";
+var INVENTORY_APP_URL = "https://kiem-ke-app-mauve.vercel.app/";
 
 function getEl(id) { return document.getElementById(id); }
 function safeText(id, value) { var el = getEl(id); if (el) el.innerText = value; }
