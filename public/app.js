@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v45';
+var APP_BUILD = '2026-08-02-v46';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -1217,12 +1217,17 @@ function confirm_loadPhieu(selectedSoPhieu) {
         dbgConfirm_('B', 'confirm_loadPhieu:gas-error', 'GAS returned error field', { error: String(res.error).slice(0, 400), ms: Date.now() - t0 });
         // #endregion
       }
-      var confirmableOrders = rows.filter(function(r) { return r && r.trangThai === "Đã soạn"; });
+      // Chỉ đơn Đã soạn — loại Đã xác nhận / Đã hủy (không cho mở lại để lưu)
+      var confirmableOrders = rows.filter(function(r) {
+        return r && String(r.trangThai || '').trim() === 'Đã soạn';
+      });
       // #region agent log
       dbgConfirm_('D', 'confirm_loadPhieu:parsed', 'parsed confirmable', {
+        runId: 'confirm-lock-v1',
         totalRows: rows.length,
         confirmable: confirmableOrders.length,
-        sampleStatus: rows.slice(0, 5).map(function(r) { return r && r.trangThai; })
+        sampleStatus: rows.slice(0, 8).map(function(r) { return r && r.trangThai; }),
+        excludedConfirmed: rows.filter(function(r) { return r && r.trangThai === 'Đã xác nhận'; }).length
       });
       // #endregion
       var html = '<option value="">-- Chọn Phiếu (' + confirmableOrders.length + ') --</option>';
@@ -1236,6 +1241,10 @@ function confirm_loadPhieu(selectedSoPhieu) {
         if (found) {
           selectEl.value = selectedSoPhieu;
           confirm_onSelectPhieu();
+        } else {
+          // Đơn đã xác nhận / không còn trong danh sách chờ
+          document.getElementById('confirm-view').style.display = 'none';
+          currentConfirmPhieuObj = null;
         }
       }
     } catch (parseErr) {
@@ -1281,40 +1290,64 @@ function confirm_onSelectPhieu() {
   apiGet('getChiTietPhieu', { soPhieu: val, storeName: sessionUser.store, includeStock: '0' }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     hideLoad();
     var parsed = unwrapListResponse_(res);
-    var rows = parsed.rows;
+    var rows = parsed.rows || [];
+    var activeRows = rows.filter(function(r) {
+      return r && r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn";
+    });
+    var confirmedCount = activeRows.filter(function(r) {
+      return String(r.trangThai || '').trim() === 'Đã xác nhận nhận hàng';
+    }).length;
+    var pendingCount = activeRows.length - confirmedCount;
+    var fullyConfirmed = activeRows.length > 0 && pendingCount === 0;
+
+    // #region agent log
+    dbgConfirm_('LOCK', 'confirm_onSelectPhieu', 'confirm open lock check', {
+      runId: 'confirm-lock-v1',
+      soPhieu: val,
+      active: activeRows.length,
+      confirmedCount: confirmedCount,
+      pendingCount: pendingCount,
+      fullyConfirmed: fullyConfirmed,
+      build: APP_BUILD
+    });
+    // #endregion
+
+    if (fullyConfirmed) {
+      currentConfirmPhieuObj = null;
+      document.getElementById("confirm-view").style.display = "none";
+      var sel = document.getElementById("confirm-phieu");
+      if (sel) sel.value = "";
+      alert("Đơn " + val + " đã xác nhận nhận hàng — không thể xác nhận lại.\n(Giống khóa chỉnh sửa ở tab Quản lý.)");
+      confirm_loadPhieu();
+      return;
+    }
+
     currentConfirmPhieuObj = { soPhieu: val };
     var viewEl = document.getElementById("confirm-view");
     document.getElementById("confirm-lbl-sophieu").innerText = val;
     var serverMs = parsed.meta && parsed.meta._debugTotalMs;
-    document.getElementById("confirm-meta").innerText = "Đã tải " + rows.length + " dòng để xác nhận." + (serverMs ? (" (" + Math.round(serverMs/1000) + "s)") : "");
+    var metaText = "Đã tải " + activeRows.length + " dòng";
+    if (confirmedCount > 0) metaText += " · " + confirmedCount + " dòng đã xác nhận (chỉ lưu các dòng còn lại)";
+    if (serverMs) metaText += " (" + Math.round(serverMs / 1000) + "s)";
+    document.getElementById("confirm-meta").innerText = metaText;
     var tbody = document.getElementById("confirm-tbody");
     tbody.innerHTML = "";
-    var qtyDebugSample = [];
-    rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
-      // Ưu tiên slSoan (cột SL Giao/Soạn) — không fallback SL đặt khi đã có số soạn
+    activeRows.forEach(function(r, idx) {
       var packedQty = confirm_resolvePackedQty_(r);
-      var inputValue = packedQty;
-      if (qtyDebugSample.length < 5) {
-        qtyDebugSample.push({
-          maHang: r.maHang,
-          slGoc: r.slGoc,
-          slSoan: r.slSoan,
-          slThucTe: r.slThucTe,
-          packedQty: packedQty,
-          trangThai: r.trangThai
-        });
-      }
-      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td>' + (r.dvt || 'Cái') + '</td><td style="font-weight:700;color:#c2410c;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
+      var isConfirmedLine = String(r.trangThai || '').trim() === 'Đã xác nhận nhận hàng';
+      var inputValue = isConfirmedLine && r.slThucTe !== "" && r.slThucTe != null
+        ? Number(r.slThucTe)
+        : packedQty;
+      var disabledAttr = isConfirmedLine ? ' disabled' : '';
+      var rowNote = isConfirmedLine ? ' <small style="color:#64748b;">(đã xác nhận)</small>' : '';
+      tbody.insertAdjacentHTML('beforeend',
+        '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small>' + rowNote + '</td><td>' + (r.dvt || 'Cái') + '</td><td style="font-weight:700;color:#c2410c;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input' + (isConfirmedLine ? '' : ' same') + '" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + inputValue + '" data-confirmed="' + (isConfirmedLine ? '1' : '0') + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"' + disabledAttr + '></td></tr>');
     });
-    // #region agent log
-    dbgConfirm_('QTY', 'confirm_onSelectPhieu', 'confirm qty source post-fix', {
-      runId: 'confirm-qty-fix',
-      soPhieu: val,
-      rows: rows.length,
-      sample: qtyDebugSample,
-      build: APP_BUILD
-    });
-    // #endregion
+    var saveBtn = document.querySelector('#confirm-view .btn-success');
+    if (saveBtn) {
+      saveBtn.disabled = pendingCount === 0;
+      saveBtn.style.opacity = pendingCount === 0 ? '0.5' : '1';
+    }
     viewEl.style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
@@ -1330,12 +1363,13 @@ function confirm_xacNhanNhanHang() {
   if (!currentConfirmPhieuObj || !sessionUser.user) return alert("Vui lòng chọn phiếu và đăng nhập trước khi xác nhận.");
   var confirmations = [];
   document.querySelectorAll(".confirm-qty-input").forEach(function(inputEl) {
+    if (inputEl.getAttribute("data-confirmed") === "1" || inputEl.disabled) return;
     var row = parseInt(inputEl.getAttribute("data-row"));
     var qty = Number(inputEl.value);
     var previousQty = Number(inputEl.getAttribute("data-previous") || 0);
     if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty, previousQty: previousQty });
   });
-  if (!confirmations.length) return alert("Không có dữ liệu xác nhận.");
+  if (!confirmations.length) return alert("Không còn dòng nào cần xác nhận (đơn đã khóa).");
   var tSave0 = Date.now();
   showLoad("Đang lưu xác nhận...");
   // #region agent log

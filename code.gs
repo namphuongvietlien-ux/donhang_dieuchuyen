@@ -2935,12 +2935,17 @@ function ensureHistoryStatusColumn(historySheet) {
 function getDisplayOrderStatus(rowStatus, slThucTe, slSoan) {
   var status = String(rowStatus || "").trim();
   if (status === "Đã hủy đơn") return "Đã hủy";
+  // Ưu tiên trạng thái xác nhận — không bị cột 9 (SL nhận) kéo về "Đã soạn"
   if (status === "Đã xác nhận nhận hàng") return "Đã xác nhận";
   if (status === "Đã soạn hàng") return "Đã soạn";
   if (status === "Đã hủy dòng") return "Đã hủy dòng";
-  // Có SL soạn (cột 16) hoặc SL cột 9 → coi như đã soạn (kể cả khi status sheet còn "Mới")
+  // Suy ra "Đã soạn" CHỈ từ cột 16 (SL Giao/Soạn).
+  // Không dùng cột 9: sau xác nhận cột 9 = SL nhận, dùng sẽ làm đơn đã nhận vẫn hiện ở tab Xác nhận.
   if (slSoan !== "" && slSoan !== undefined && slSoan !== null) return "Đã soạn";
-  if (slThucTe !== "" && slThucTe !== undefined && slThucTe !== null) return "Đã soạn";
+  // Dữ liệu cũ: chưa có cột 16, SL soạn nằm cột 9 và status còn "Mới"
+  if ((!status || status === "Mới") && slThucTe !== "" && slThucTe !== undefined && slThucTe !== null) {
+    return "Đã soạn";
+  }
   return "Mới";
 }
 
