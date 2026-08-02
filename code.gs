@@ -1576,6 +1576,44 @@ function getOrCreateCatalogSheet(ss) {
   return sheet;
 }
 
+/** Ghi catalog từ entries gọn {mh,mv,th,d} — layout Data_Excel cố định */
+function writeCatalogEntriesToSheet_(ss, entries, reset) {
+  ss = ss || getSS();
+  var sh = getOrCreateCatalogSheet(ss);
+  var t0 = Date.now();
+  if (reset) {
+    var oldLastRow = sh.getLastRow();
+    var oldLastCol = Math.max(sh.getLastColumn(), 8);
+    if (oldLastRow > 0) sh.getRange(1, 1, oldLastRow, oldLastCol).clearContent();
+    sh.getRange(1, 1, 1, 8).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT"]]);
+    sh.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#d9ead3");
+  }
+  var rows = [];
+  var withDvt = 0;
+  for (var i = 0; i < (entries || []).length; i++) {
+    var e = entries[i];
+    if (!e) continue;
+    var mh = String(e.mh || "").trim();
+    var mv = String(e.mv || "").trim();
+    var th = String(e.th || "").trim();
+    var d = String(e.d || "").trim();
+    if (!mh && !mv) continue;
+    if (d) withDvt++;
+    rows.push([mh, "", mv, "", "", th, "", d]);
+  }
+  if (rows.length) {
+    var startRow = Math.max(sh.getLastRow() + 1, 2);
+    sh.getRange(startRow, 1, rows.length, 8).setValues(rows);
+  }
+  try { SpreadsheetApp.flush(); } catch (e) {}
+  return {
+    rows: rows.length,
+    withDvt: withDvt,
+    totalRows: Math.max(sh.getLastRow() - 1, 0),
+    ms: Date.now() - t0
+  };
+}
+
 function getOrCreateStockSheet(ss) {
   var sheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
   if (!sheet) {
@@ -1897,6 +1935,39 @@ function nhapKhauCapNhatThongTin(payload) {
       _debugQ7Ms: q7Fast.ms || 0,
       _debugRun: "import-q7-fast-v2",
       msg: "Đã cập nhật nhanh sheet " + TON_Q7_SHEET_NAME + " (" + (q7Fast.rows || 0) + " dòng, " + withDvt + " có ĐVT) — không ghi full TỔNG HỢP TỒN KHO."
+    };
+  }
+
+  // Import nhanh catalog: FE đã tách sẵn mã/tên/ĐVT → ghi Data_Excel (payload nhỏ, tránh timeout)
+  if (importType === 'catalogFast') {
+    var tCat = Date.now();
+    var catEntries = payload.catalogEntries || [];
+    if (!catEntries.length) {
+      throw new Error("Không có dòng catalog để ghi. Kiểm tra file có cột mã hàng / mã vạch / tên / ĐVT.");
+    }
+    var chunkIndexC = Number(payload.chunkIndex);
+    if (isNaN(chunkIndexC) || chunkIndexC < 0) chunkIndexC = 0;
+    var chunkTotalC = Number(payload.chunkTotal);
+    if (isNaN(chunkTotalC) || chunkTotalC < 1) chunkTotalC = 1;
+    var isFirstC = chunkIndexC === 0;
+    var isLastC = chunkIndexC >= chunkTotalC - 1;
+    var catInfo = writeCatalogEntriesToSheet_(ss, catEntries, isFirstC);
+    if (isLastC) invalidateCatalogCache_();
+    return {
+      success: true,
+      importType: importType,
+      targetSheet: 'Data_Excel',
+      updatedRows: catInfo.rows || 0,
+      updatedCols: 8,
+      chunkIndex: chunkIndexC,
+      chunkTotal: chunkTotalC,
+      done: isLastC,
+      withDvt: catInfo.withDvt || 0,
+      _debugTotalMs: Date.now() - tCat,
+      _debugRun: "import-catalog-fast-v1",
+      msg: isLastC
+        ? ("Đã cập nhật nhanh Data_Excel (" + (catInfo.totalRows || catInfo.rows || 0) + " dòng, " + (catInfo.withDvt || 0) + " có ĐVT).")
+        : ("Đã nhận chunk catalog " + (chunkIndexC + 1) + "/" + chunkTotalC + ".")
     };
   }
 
