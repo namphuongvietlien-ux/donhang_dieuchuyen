@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v23';
+var APP_BUILD = '2026-08-02-v24';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -123,6 +123,27 @@ function escapeHtml(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Cảnh báo tồn thấp — chỉ hiển thị, không chặn lên đơn / lưu soạn */
+function stockShortageInfo_(stock, needQty) {
+  if (stock === '' || stock === null || stock === undefined) return null;
+  var s = Number(stock);
+  var n = Number(needQty);
+  if (isNaN(s) || isNaN(n) || n <= 0) return null;
+  if (s >= n) return null;
+  return { stock: s, need: n, thieu: Math.round((n - s) * 1000) / 1000 };
+}
+
+function formatStockCellHtml_(stock, needQty) {
+  var short = stockShortageInfo_(stock, needQty);
+  if (stock === '' || stock === null || stock === undefined) {
+    return '<span style="color:#94a3b8;">-</span>';
+  }
+  if (!short) {
+    return '<b style="color:#166534;">' + stock + '</b>';
+  }
+  return '<b style="color:#b91c1c;">' + stock + '</b><br><small style="color:#b91c1c;font-weight:700;">⚠️ THIẾU ' + short.thieu + '</small>';
 }
 
 function rebuildCatalogArray() {
@@ -1126,14 +1147,19 @@ function ql_hienThiChiTiet(phieu, options) {
     document.getElementById("ql-lbl-khoxuat").innerText = currentPhieuObj.khoXuat + ' (' + (storeMap[currentPhieuObj.khoXuat] || '') + ')';
     document.getElementById("ql-lbl-khonhan").innerText = currentPhieuObj.khoNhan + ' (' + (storeMap[currentPhieuObj.khoNhan] || '') + ')';
 
+    var lowStockCount = 0;
     rows.forEach((r, i) => {
       var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
       var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
-      var rowStyle = isCancelled ? 'background:#fce8e6; color:#777; text-decoration:line-through;' : (r.ghiChu ? 'background:#fff8e1;' : '');
+      var shortInfo = !isCancelled ? stockShortageInfo_(r.stock, r.slGoc) : null;
+      if (shortInfo) lowStockCount++;
+      var rowStyle = isCancelled
+        ? 'background:#fce8e6; color:#777; text-decoration:line-through;'
+        : (shortInfo ? 'background:#fef2f2;' : (r.ghiChu ? 'background:#fff8e1;' : ''));
       var rowKey = String(r.tempKey || r.rowIndex);
       var dvtDisplay = r.dvt || "Cái";
       var variantHtml = ql_renderVariantSelector(r, rowKey, isReadOnlyRow);
-      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;">';
+      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-stock="'+(r.stock === '' || r.stock == null ? '' : r.stock)+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;" oninput="ql_onEditQtyInput(this)">';
       var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
       var requestedDisplay = (!isReadOnlyRow && !isPublicView)
         ? quantityInput
@@ -1142,17 +1168,41 @@ function ql_hienThiChiTiet(phieu, options) {
       var receivedDisplay = hasReceivedQty
         ? ('<b style="color:#166534;">' + Number(r.slThucTe) + '</b>')
         : '<span style="color:#94a3b8;">-</span>';
-      tb.insertAdjacentHTML('beforeend', '<tr style="'+rowStyle+'"><td>'+(i+1)+'</td><td>'+variantHtml+'<br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td id="ql-dvt-'+rowKey+'">'+dvtDisplay+'</td><td>'+r.stock+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
+      var stockHtml = formatStockCellHtml_(r.stock, r.slGoc);
+      tb.insertAdjacentHTML('beforeend', '<tr data-stock-row="1" style="'+rowStyle+'"><td>'+(i+1)+'</td><td>'+variantHtml+'<br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td id="ql-dvt-'+rowKey+'">'+dvtDisplay+'</td><td class="ql-stock-cell">'+stockHtml+'</td><td>'+requestedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_hienThiChiTiet',message:'low stock warn',data:{soPhieu:currentPhieuObj&&currentPhieuObj.soPhieu,rows:rows.length,lowStockCount:lowStockCount,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'WARN-A',runId:'stock-warn-v1'})}).catch(function(){});
+    // #endregion
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
-    if (!isPublicView && packerNames.length) document.getElementById("ql-order-meta").innerText = "Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1];
-    if (isConfirmedOrder && !isPublicView) {
-      document.getElementById("ql-order-meta").innerText += " | Chế độ chỉ xem sau khi xác nhận nhận hàng";
-    } else if (isPackedOrder && !isAdmin && !isPublicView && packerNames.length) {
-      document.getElementById("ql-order-meta").innerText += " | Chi nhánh không thể sửa sau khi đã soạn xong";
-    }
+    var metaBits = [];
+    if (!isPublicView && packerNames.length) metaBits.push("Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1]);
+    if (isConfirmedOrder && !isPublicView) metaBits.push("Chế độ chỉ xem sau khi xác nhận nhận hàng");
+    else if (isPackedOrder && !isAdmin && !isPublicView) metaBits.push("Chi nhánh không thể sửa sau khi đã soạn xong");
+    if (lowStockCount > 0) metaBits.push("⚠️ " + lowStockCount + " mã tồn thấp hơn SL đặt (chỉ cảnh báo, vẫn lưu/sửa được)");
+    document.getElementById("ql-order-meta").innerHTML = metaBits.length
+      ? metaBits.map(function(t) {
+          return t.indexOf('⚠️') === 0
+            ? '<span style="color:#b91c1c;font-weight:700;">' + escapeHtml(t) + '</span>'
+            : '<span>' + escapeHtml(t) + '</span>';
+        }).join(' | ')
+      : '';
     document.getElementById("ql-view-phieu").style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+function ql_onEditQtyInput(input) {
+  if (!input) return;
+  var tr = input.closest('tr');
+  if (!tr) return;
+  var stockRaw = input.getAttribute('data-stock');
+  var stockCell = tr.querySelector('.ql-stock-cell');
+  var need = Number(input.value) || 0;
+  if (stockCell) stockCell.innerHTML = formatStockCellHtml_(stockRaw === '' ? '' : stockRaw, need);
+  var short = stockShortageInfo_(stockRaw === '' ? '' : stockRaw, need);
+  if (tr.getAttribute('data-stock-row') === '1') {
+    tr.style.background = short ? '#fef2f2' : '';
+  }
 }
 
 function ql_getVariantOptions(rowMeta) {
@@ -1400,12 +1450,65 @@ function sh_chonDonMobile() {
   pendingImages = {}; isCompressing = 0;
   apiGet('getChiTietDonHangMobile', { soPhieu: sp }).then(function(items) {
     var html = "";
-    items.forEach((it, j) => {
-      var stockDisplay = (it.stock !== undefined && it.stock !== null) ? Number(it.stock) : 0;
-      html += '<div class="item-card"><b>'+it.tenHang+'</b><br><small><b>Mã vạch: '+it.maVach+'</b> | Mã hàng hóa: '+(it.maHang||'')+' | ĐVT: '+it.dvt+' | Tồn hiện tại: <b style="color:#1d4ed8;">'+stockDisplay+'</b></small><div class="action-row"><div>SL Yêu Cầu: <b>'+it.slGoc+'</b><br>Thực tế: <input type="number" class="sl-thuc-te" data-row="'+it.rowIndex+'" value="'+it.slThucTe+'"></div><div style="text-align:right;"><label class="btn-camera" for="c-'+j+'">📷 Ảnh</label><input type="file" id="c-'+j+'" accept="image/*" capture="environment" style="display:none;" data-row="'+it.rowIndex+'" data-j="'+j+'" onchange="nenAnh(this)"><img id="p-'+j+'" src="'+(it.anhXacNhan||'')+'" style="display:'+(it.anhXacNhan?'block':'none')+'; width:50px; height:50px; margin-top:5px;"><small id="st-'+j+'"></small></div></div></div>';
+    var lowStockCount = 0;
+    (items || []).forEach(function(it, j) {
+      var stockDisplay = (it.stock !== undefined && it.stock !== null && it.stock !== "") ? Number(it.stock) : "";
+      var packQty = (it.slThucTe !== undefined && it.slThucTe !== null && it.slThucTe !== "") ? Number(it.slThucTe) : Number(it.slGoc || 0);
+      var compareQty = Math.max(Number(it.slGoc) || 0, packQty || 0);
+      var short = stockShortageInfo_(stockDisplay, compareQty);
+      if (short) lowStockCount++;
+      var cardStyle = short ? 'border:1px solid #fecaca; background:#fef2f2;' : '';
+      var stockLabel = (stockDisplay === "" || isNaN(stockDisplay))
+        ? '<span style="color:#94a3b8;">-</span>'
+        : ('<b class="sh-stock-val" style="color:' + (short ? '#b91c1c' : '#1d4ed8') + ';">' + stockDisplay + '</b>');
+      var warnHtml = short
+        ? ('<div class="sh-stock-warn" style="margin-top:6px; font-size:12px; color:#b91c1c; font-weight:700;">⚠️ Tồn thấp hơn SL đặt/soạn — thiếu ' + short.thieu + ' (vẫn lưu được)</div>')
+        : '<div class="sh-stock-warn" style="display:none; margin-top:6px; font-size:12px; color:#b91c1c; font-weight:700;"></div>';
+      html += '<div class="item-card" style="' + cardStyle + '" data-stock="' + (stockDisplay === "" || isNaN(stockDisplay) ? '' : stockDisplay) + '" data-slgoc="' + (Number(it.slGoc) || 0) + '">' +
+        '<b>' + escapeHtml(it.tenHang) + '</b><br>' +
+        '<small><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b> | Mã hàng hóa: ' + escapeHtml(it.maHang || '') +
+        ' | ĐVT: ' + escapeHtml(it.dvt) + ' | Tồn hiện tại: ' + stockLabel + '</small>' +
+        warnHtml +
+        '<div class="action-row"><div>SL Yêu Cầu: <b>' + it.slGoc + '</b><br>Thực tế: ' +
+        '<input type="number" class="sl-thuc-te" data-row="' + it.rowIndex + '" value="' + it.slThucTe + '" oninput="sh_onPackQtyInput(this)">' +
+        '</div><div style="text-align:right;"><label class="btn-camera" for="c-' + j + '">📷 Ảnh</label>' +
+        '<input type="file" id="c-' + j + '" accept="image/*" capture="environment" style="display:none;" data-row="' + it.rowIndex + '" data-j="' + j + '" onchange="nenAnh(this)">' +
+        '<img id="p-' + j + '" src="' + (it.anhXacNhan || '') + '" style="display:' + (it.anhXacNhan ? 'block' : 'none') + '; width:50px; height:50px; margin-top:5px;">' +
+        '<small id="st-' + j + '"></small></div></div></div>';
     });
+    if (lowStockCount > 0) {
+      html = '<div style="margin:0 0 10px; padding:10px 12px; border-radius:10px; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; font-size:13px; font-weight:700;">⚠️ ' + lowStockCount + ' mã tồn thấp hơn SL đặt/soạn — chỉ cảnh báo, vẫn lưu được</div>' + html;
+    }
+    // #region agent log
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_chonDonMobile',message:'packing low stock warn',data:{soPhieu:sp,items:(items||[]).length,lowStockCount:lowStockCount,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'WARN-B',runId:'stock-warn-v1'})}).catch(function(){});
+    // #endregion
     document.getElementById("sh-list-container").innerHTML = html; document.getElementById("sh-footer").style.display = "block";
   }).catch(function(err){ alert('Lỗi: '+err.message); });
+}
+
+function sh_onPackQtyInput(input) {
+  if (!input) return;
+  var card = input.closest('.item-card');
+  if (!card) return;
+  var stockRaw = card.getAttribute('data-stock');
+  var slGoc = Number(card.getAttribute('data-slgoc')) || 0;
+  var packQty = Number(input.value) || 0;
+  var compareQty = Math.max(slGoc, packQty);
+  var short = stockShortageInfo_(stockRaw === '' ? '' : stockRaw, compareQty);
+  var stockEl = card.querySelector('.sh-stock-val');
+  var warnEl = card.querySelector('.sh-stock-warn');
+  if (stockEl) stockEl.style.color = short ? '#b91c1c' : '#1d4ed8';
+  if (warnEl) {
+    if (short) {
+      warnEl.style.display = 'block';
+      warnEl.innerText = '⚠️ Tồn thấp hơn SL đặt/soạn — thiếu ' + short.thieu + ' (vẫn lưu được)';
+    } else {
+      warnEl.style.display = 'none';
+      warnEl.innerText = '';
+    }
+  }
+  card.style.border = short ? '1px solid #fecaca' : '';
+  card.style.background = short ? '#fef2f2' : '';
 }
 
 function nenAnh(inputEl) {
@@ -1424,6 +1527,7 @@ function nenAnh(inputEl) {
 
 function sh_luuPhieu() {
   if(isCompressing > 0) return alert("Đợi ảnh nén xong!");
+  // Cảnh báo tồn thấp chỉ mang tính thông báo — không chặn lưu soạn
   showLoad("Đang lưu kết quả lên hệ thống...");
   var inputs = document.querySelectorAll(".sl-thuc-te"), updates = []; inputs.forEach(ip => updates.push({ row: parseInt(ip.getAttribute("data-row")), val: ip.value }));
   apiPost('luuSoSoanHangVaAnh', { updates: updates, images: pendingImages, actor: sessionUser ? sessionUser.user : '' }).then(function(res) {
