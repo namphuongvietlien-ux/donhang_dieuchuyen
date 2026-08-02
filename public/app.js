@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v41';
+var APP_BUILD = '2026-08-02-v42';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -2145,14 +2145,22 @@ function taoTaiKhoan() {
 var importPreviewState = null;
 
 function impNormalizeText(value) {
-  // Chỉ normalize để match alias — KHÔNG đổi logic ghi dữ liệu ở đây.
-  // (Đ/đ từng bị strip khỏi a-z → "Đơn vị tính" thành "onvitinh", mất cột ĐVT)
-  return String(value || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  // Đ/đ không tách trong NFKD — map sang D/d trước khi lọc a-z, nếu không
+  // "Đơn vị tính" → "onvitinh" và "ĐVT" → "vt" (mất cột ĐVT khi nhập khẩu).
+  return String(value || '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 function dbgBranch_(hypothesisId, location, message, data) {
   // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'branch-import-pre',hypothesisId:hypothesisId||'?',location:location||'app.js',message:message||'',data:data||{},timestamp:Date.now(),build:APP_BUILD})}).catch(function(){});
+  var payload = data || {};
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:payload.runId||'branch-import',hypothesisId:hypothesisId||'?',location:location||'app.js',message:message||'',data:payload,timestamp:Date.now(),build:APP_BUILD})}).catch(function(){});
   // #endregion
 }
 
@@ -2400,13 +2408,15 @@ function extractCatalogEntriesFromRows_(rows) {
     return { raw: String(h == null ? '' : h).slice(0, 40), norm: impNormalizeText(h).replace(/\s+/g, '') };
   });
   // #region agent log
-  dbgBranch_('A', 'extractCatalogEntriesFromRows_', 'catalog header dvt detect', {
+  dbgBranch_('A', 'extractCatalogEntriesFromRows_', 'catalog header dvt detect post-fix', {
+    runId: 'post-fix',
     headerIndex: headerIndex,
     dvtIdx: dvtIdx,
     withDvt: withDvt,
     entryCount: entries.length,
     headerNorm: headerNorm.slice(0, 16),
-    sampleEntry: entries[0] || null
+    sampleEntry: entries[0] || null,
+    dvtNormOk: headerNorm.some(function(h) { return h.norm.indexOf('donvitinh') !== -1 || h.norm === 'dvt' || h.norm.indexOf('dvt') === 0; })
   });
   // #endregion
   return {

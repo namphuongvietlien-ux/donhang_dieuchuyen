@@ -1527,7 +1527,15 @@ function doiMatKhau(payload) {
 
 function normalizeHeaderText(value) {
   if (value === null || value === undefined) return "";
-  return String(value).trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
+  // Đ/đ không tách trong NFKD — map D trước khi lọc a-z (tránh "Đơn vị tính" → "onvitinh")
+  return String(value)
+    .trim()
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 function findColumnIndexByAliases(row, aliases) {
