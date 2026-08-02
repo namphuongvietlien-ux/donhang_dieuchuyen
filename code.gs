@@ -1600,11 +1600,11 @@ function resolveCatalogProduct(lookup, maHang, maVach) {
 }
 
 function resolveDvtValue(lookup, maHang, maVach, currentDvt) {
-  var current = String(currentDvt || "").trim();
+  // Ép theo Data_Excel khi có ĐVT catalog — không giữ "Cái"/ĐVT sai đã lưu trên đơn
   var catalogItem = resolveCatalogProduct(lookup, maHang, maVach);
   var catalogDvt = catalogItem && catalogItem.dvt ? String(catalogItem.dvt).trim() : "";
-  if (catalogDvt && (!current || normalizeHeaderText(current) === "cai")) return catalogDvt;
-  return current || catalogDvt || "";
+  if (catalogDvt) return catalogDvt;
+  return String(currentDvt || "").trim();
 }
 
 function findHeaderRowIndex(data, maxScanRows) {
@@ -2666,7 +2666,9 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
   var data = pack.data || [[]];
   var sheetOrders = pack.orders || [];
 
-  // Không load full catalog ở đây (rất chậm) — dùng ĐVT đã lưu trên lịch sử
+  // ĐVT hiển thị/ép theo Data_Excel (catalog cache) — không tin mặc định "Cái" trên lịch sử
+  var catalogLookup = null;
+  try { catalogLookup = getCatalogLookup(ss); } catch (catErr) { catalogLookup = null; }
   var matchedRows = [];
   for (var i = 1; i < data.length; i++) {
     if (!data[i]) continue;
@@ -2688,6 +2690,11 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
     var slThucTe = "";
     if (isReceived && hasActualQty) slThucTe = Number(data[i][8]);
     else if (!isReceived && hasActualQty && !hasSlGiao) slThucTe = Number(data[i][8]); // tương thích cũ
+    var dvtRaw = data[i][9] || "";
+    var dvtResolved = dvtRaw;
+    if (catalogLookup) {
+      try { dvtResolved = resolveDvtValue(catalogLookup, data[i][4], data[i][5], dvtRaw) || dvtRaw; } catch (dvtErr) {}
+    }
     matchedRows.push({
       rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
       maHang: data[i][4],
@@ -2696,7 +2703,7 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
       slGoc: slGoc,
       slSoan: slSoan,
       slThucTe: slThucTe,
-      dvt: data[i][9] || "",
+      dvt: dvtResolved || "",
       ghiChu: data[i][11] || "",
       trangThai: rowStatus || "Mới",
       nguoiSoanHang: data[i][13] || "",
@@ -3112,6 +3119,8 @@ function luuChinhSuaPhieu(payload) {
       }
     }
     var newRows = [];
+    var catalogLookupForAdd = null;
+    try { catalogLookupForAdd = getCatalogLookup(ss); } catch (catAddErr) { catalogLookupForAdd = null; }
     if (payload.newItems && payload.newItems.length) {
       for (var n = 0; n < payload.newItems.length; n++) {
         var newItem = payload.newItems[n];
@@ -3120,7 +3129,8 @@ function luuChinhSuaPhieu(payload) {
         }
         var itemQty = Number(newItem.sl);
         if (!itemQty || itemQty < 1) continue;
-        newRows.push([new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, "", newItem.dvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"]);
+        var newItemDvt = resolveDvtValue(catalogLookupForAdd, newItem.maHang || "", newItem.maVach || "", newItem.dvt || "");
+        newRows.push([new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, "", newItemDvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"]);
         logOrderChange(ss, soPhieu, "Thêm mã vào đơn", payload.actor, newItem.maHang, newItem.maVach, "", itemQty, newItem.tenHang || "");
         changeCount += 1;
         shouldNotify = true;
@@ -3140,7 +3150,8 @@ function luuChinhSuaPhieu(payload) {
       var maVach = currentRow[5] ? String(currentRow[5]).trim() : "";
       var oldDvt = currentRow[9] ? String(currentRow[9]).trim() : "";
       var newMaVach = u.valMaVach !== undefined && u.valMaVach !== null && String(u.valMaVach).trim() !== "" ? String(u.valMaVach).trim() : maVach;
-      var newDvt = u.valDvt !== undefined && u.valDvt !== null && String(u.valDvt).trim() !== "" ? String(u.valDvt).trim() : oldDvt;
+      var newDvtRaw = u.valDvt !== undefined && u.valDvt !== null && String(u.valDvt).trim() !== "" ? String(u.valDvt).trim() : oldDvt;
+      var newDvt = resolveDvtValue(catalogLookupForAdd, maHang, newMaVach, newDvtRaw) || newDvtRaw;
       var newTenHang = u.valTenHang !== undefined && u.valTenHang !== null && String(u.valTenHang).trim() !== "" ? String(u.valTenHang).trim() : oldTenHang;
       if (!orderInfo) orderInfo = getThongTinPhieu(soPhieuValue);
       if (u.valSl !== "" && Number(u.valSl) === 0) {
@@ -3231,7 +3242,8 @@ function themChiTietPhieu(payload) {
   var item = payload.item;
   var quantity = Number(item.sl);
   if (!quantity || quantity < 1) throw new Error("Số lượng thêm phải lớn hơn 0.");
-  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", item.dvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"];
+  var dvtAdd = resolveDvtValue(getCatalogLookup(ss), item.maHang || "", item.maVach || "", item.dvt || "");
+  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", dvtAdd || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"];
   historySheet.appendRow(row);
   logOrderChange(ss, payload.soPhieu, "Thêm mã vào đơn", payload.actor, item.maHang, item.maVach, "", quantity, item.tenHang || "");
   return { success: true };
