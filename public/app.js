@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v25';
+var APP_BUILD = '2026-08-02-v26';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -937,10 +937,6 @@ function ql_loadPhieu(selectedSoPhieu) {
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var ngay = getNgayFilterParam('ql-ngay');
-  var t0 = Date.now();
-  // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list start',data:{ngay:ngay,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
-  // #endregion
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     var parsed = unwrapListResponse_(res);
     var rows = parsed.rows;
@@ -956,9 +952,6 @@ function ql_loadPhieu(selectedSoPhieu) {
     var serverMs = parsed.meta && parsed.meta._debugTotalMs;
     document.getElementById("ql-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 MỚI: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ XỬ LÝ: '+countDone+'</div> | <div class="stat-box" style="color:#8b5a2b;">🚫 HỦY: '+countCancel+'</div>' +
       (serverMs ? (' <span style="color:#64748b;font-size:12px;">(' + Math.round(serverMs/1000) + 's)</span>') : '');
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list done',data:{clientMs:Date.now()-t0,serverMs:serverMs,scanned:parsed.meta&&parsed.meta._debugScanned,count:rows.length,run:parsed.meta&&parsed.meta._debugRun,ngay:ngay},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
-    // #endregion
     if (selectedSoPhieu) {
       var matched = rows.find(function(item) { return item.soPhieu === selectedSoPhieu; });
       if (matched) {
@@ -967,9 +960,6 @@ function ql_loadPhieu(selectedSoPhieu) {
       }
     }
   }).catch(function(err){
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_loadPhieu',message:'ql list error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0},timestamp:Date.now(),hypothesisId:'QL-A',runId:'ql-fast-v1'})}).catch(function(){});
-    // #endregion
     selectEl.innerHTML = '<option value="">-- Lỗi tải --</option>';
     alert('Lỗi: '+err.message);
   });
@@ -990,10 +980,6 @@ function confirm_loadPhieu(selectedSoPhieu) {
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
   var ngay = getNgayFilterParam('confirm-ngay');
-  var t0 = Date.now();
-  // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_loadPhieu',message:'confirm list start',data:{ngay:ngay,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QL-B',runId:'ql-fast-v1'})}).catch(function(){});
-  // #endregion
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     var parsed = unwrapListResponse_(res);
     var confirmableOrders = parsed.rows.filter(function(r) { return r.trangThai === "Đã soạn"; });
@@ -1003,9 +989,6 @@ function confirm_loadPhieu(selectedSoPhieu) {
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
     });
     selectEl.innerHTML = html;
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_loadPhieu',message:'confirm list done',data:{clientMs:Date.now()-t0,serverMs:parsed.meta&&parsed.meta._debugTotalMs,scanned:parsed.meta&&parsed.meta._debugScanned,count:confirmableOrders.length,run:parsed.meta&&parsed.meta._debugRun,ngay:ngay},timestamp:Date.now(),hypothesisId:'QL-B',runId:'ql-fast-v1'})}).catch(function(){});
-    // #endregion
     if (selectedSoPhieu) {
       var found = confirmableOrders.some(function(item) { return item.soPhieu === selectedSoPhieu; });
       if (found) {
@@ -1023,7 +1006,6 @@ function confirm_onSelectPhieu() {
   var val = document.getElementById("confirm-phieu").value;
   if (!val) { document.getElementById("confirm-view").style.display = "none"; return; }
   showLoad("Đang tải dữ liệu nhận hàng...");
-  var t0 = Date.now();
   apiGet('getChiTietPhieu', { soPhieu: val, storeName: sessionUser.store, includeStock: '0' }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     hideLoad();
     var parsed = unwrapListResponse_(res);
@@ -1033,9 +1015,6 @@ function confirm_onSelectPhieu() {
     document.getElementById("confirm-lbl-sophieu").innerText = val;
     var serverMs = parsed.meta && parsed.meta._debugTotalMs;
     document.getElementById("confirm-meta").innerText = "Đã tải " + rows.length + " dòng để xác nhận." + (serverMs ? (" (" + Math.round(serverMs/1000) + "s)") : "");
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:confirm_onSelectPhieu',message:'confirm detail done',data:{clientMs:Date.now()-t0,serverMs:serverMs,rows:rows.length,run:parsed.meta&&parsed.meta._debugRun,stock:parsed.meta&&parsed.meta._debugStock},timestamp:Date.now(),hypothesisId:'QL-C',runId:'ql-fast-v1'})}).catch(function(){});
-    // #endregion
     var tbody = document.getElementById("confirm-tbody");
     tbody.innerHTML = "";
     rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
@@ -1114,14 +1093,10 @@ function ql_hienThiChiTiet(phieu, options) {
   var isPublicView = !!(options && options.publicView);
   var isAdmin = sessionUser.role === "Admin";
   showLoad("Tải chi tiết...");
-  var t0Detail = Date.now();
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat, includeStock: '1' }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     hideLoad();
     var parsed = unwrapListResponse_(res);
     var rows = parsed.rows;
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_hienThiChiTiet',message:'ql detail done',data:{clientMs:Date.now()-t0Detail,serverMs:parsed.meta&&parsed.meta._debugTotalMs,rows:rows.length,run:parsed.meta&&parsed.meta._debugRun,stock:parsed.meta&&parsed.meta._debugStock,khoXuat:currentPhieuObj&&currentPhieuObj.khoXuat},timestamp:Date.now(),hypothesisId:'QL-C',runId:'ql-fast-v1'})}).catch(function(){});
-    // #endregion
     editRows = rows; currentLoadedRows = rows || []; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     var isConfirmedOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
     var isPackedOrder = rows.some(function(r) { return r.trangThai === "Đã soạn hàng"; });
@@ -1178,9 +1153,6 @@ function ql_hienThiChiTiet(phieu, options) {
       var stockHtml = formatStockCellHtml_(r.stock, compareNeed);
       tb.insertAdjacentHTML('beforeend', '<tr data-stock-row="1" style="'+rowStyle+'"><td>'+(i+1)+'</td><td>'+variantHtml+'<br><small style="color:gray;">Mã hàng hóa: '+(r.maHang||'')+'</small></td><td>'+r.tenHang+(r.ghiChu?'<br><b style="color:red;font-size:11px;">⚠️ '+r.ghiChu+'</b>':'')+((isCancelled || r.trangThai === "Đã soạn hàng" || r.trangThai === "Đã xác nhận nhận hàng") ? '<br><b style="color:#d93025;font-size:11px;">'+r.trangThai+'</b>' : '')+'</td><td id="ql-dvt-'+rowKey+'">'+dvtDisplay+'</td><td class="ql-stock-cell">'+stockHtml+'</td><td>'+requestedDisplay+'</td><td class="ql-sl-soan">'+packedDisplay+'</td><td>'+receivedDisplay+'</td>'+cancelButton+'</tr>');
     });
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:ql_hienThiChiTiet',message:'ql qty columns',data:{soPhieu:currentPhieuObj&&currentPhieuObj.soPhieu,rows:rows.length,packedLineCount:packedLineCount,lowStockCount:lowStockCount,isPackedOrder:isPackedOrder,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QTY-A',runId:'sl-soan-v1'})}).catch(function(){});
-    // #endregion
     var packerNames = rows.map(function(r){ return r.nguoiSoanHang || ""; }).filter(Boolean);
     var metaBits = [];
     if (!isPublicView && packerNames.length) metaBits.push("Người soạn hàng gần nhất: " + packerNames[packerNames.length - 1]);
@@ -1450,9 +1422,6 @@ function layItemsForOutput() {
       items.push({ maHang: row.maHang, maVach: row.maVach, tenHang: row.tenHang, dvt: row.dvt, sl: sl });
     }
   });
-  // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:layItemsForOutput',message:'print qty source',data:{count:items.length,sample:items.slice(0,3),build:APP_BUILD},timestamp:Date.now(),hypothesisId:'QTY-B',runId:'sl-soan-v1'})}).catch(function(){});
-  // #endregion
   return items;
 }
 function ql_inWeb_FromEdit() { executePrintWeb(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, layItemsForOutput()); }
@@ -1517,9 +1486,6 @@ function sh_chonDonMobile() {
     if (lowStockCount > 0) {
       html = '<div style="margin:0 0 10px; padding:10px 12px; border-radius:10px; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; font-size:13px; font-weight:700;">⚠️ ' + lowStockCount + ' mã tồn thấp hơn SL đặt/soạn — chỉ cảnh báo, vẫn lưu được</div>' + html;
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_chonDonMobile',message:'packing low stock warn',data:{soPhieu:sp,items:(items||[]).length,lowStockCount:lowStockCount,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'WARN-B',runId:'stock-warn-v1'})}).catch(function(){});
-    // #endregion
     document.getElementById("sh-list-container").innerHTML = html; document.getElementById("sh-footer").style.display = "block";
   }).catch(function(err){ alert('Lỗi: '+err.message); });
 }
@@ -1617,9 +1583,6 @@ function sh_renderDanhSachDonSoan(candidates) {
   sh_capNhatTomTatChonDonSoan();
 }
 
-function dbgSoanLine_(label, data) {
-  try { console.warn('[donhang:' + label + ']', data); } catch (e) {}
-}
 
 function sh_taiDanhSachDonSoanChoBang() {
   var range = sh_getCreateDateRange_();
@@ -1631,11 +1594,6 @@ function sh_taiDanhSachDonSoanChoBang() {
   if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
 
   showLoad('Đang tải danh sách đơn soạn...');
-  // #region agent log
-  var _dbgListStart = Date.now();
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan start',data:{ngay:ngay,ngayTo:ngayTo},timestamp:Date.now(),hypothesisId:'F',runId:'date-range-v1'})}).catch(function(){});
-  // #endregion
-  dbgSoanLine_('listDonSoan.start', { ngay: ngay, ngayTo: ngayTo, build: APP_BUILD, via: 'proxy' });
   apiGet('getDanhSachDonSoanHang', {
     ngay: ngay,
     ngayTo: ngayTo,
@@ -1643,11 +1601,6 @@ function sh_taiDanhSachDonSoanChoBang() {
     userStore: sessionUser.store || ''
   }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {
     hideLoad();
-    // #region agent log
-    var _dbgListMs = Date.now() - _dbgListStart;
-    dbgSoanLine_('listDonSoan.done', { clientMs: _dbgListMs, serverMs: res && res._debugTotalMs, total: res && res.total, date: res && res.date, run: res && res._debugRun, build: APP_BUILD });
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taiDanhSachDonSoanChoBang',message:'listDonSoan done',data:{clientMs:_dbgListMs,serverMs:res&&res._debugTotalMs,total:res&&res.total,run:res&&res._debugRun},timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v2'})}).catch(function(){});
-    // #endregion
     if (!res || !res.success) {
       throw new Error((res && (res.error || res.msg)) || 'Không thể tải danh sách đơn.');
     }
@@ -1675,14 +1628,10 @@ function sh_ensureStockReady_() {
 
   shStockWarmState.promise = apiGet('getStockCacheStatus', null, { directOnly: true, timeoutMs: 30000 })
     .then(function(st) {
-      // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_ensureStockReady_',message:'getStockCacheStatus',data:{ready:!!(st&&st.ready),source:st&&st.source,stores:st&&st.stores,run:st&&st._debugRun},timestamp:Date.now(),hypothesisId:'A',runId:'q7-v1'})}).catch(function(){});
-      // #endregion
       if (st && st.ready) {
         shStockWarmState.ready = true;
         shStockWarmState.warming = false;
         shStockWarmState.promise = null;
-        dbgSoanLine_('warmStock.alreadyReady', { source: st.source, stores: st.stores });
         if (summaryEl) summaryEl.innerText = 'Tồn Q7 sẵn sàng (' + (st.source || 'TON_Q7') + ', ' + (st.stores || 0) + ' mã).';
         return true;
       }
@@ -1692,10 +1641,6 @@ function sh_ensureStockReady_() {
         shStockWarmState.promise = null;
         shStockWarmState.ready = !!(w && w.success && (w.ready !== false));
         shStockWarmState.lastMs = (w && w._debugTotalMs) || 0;
-        dbgSoanLine_('warmStock.done', { serverMs: w && w._debugTotalMs, run: w && w._debugRun, stores: w && w.stores, rows: w && w.rows, ready: shStockWarmState.ready, source: w && w.cacheSource, rebuilt: w && w.rebuilt, via: 'direct-get' });
-        // #region agent log
-        fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_ensureStockReady_',message:'warmStockIndex done',data:{ready:shStockWarmState.ready,source:w&&w.cacheSource,rows:w&&w.rows,rebuilt:w&&w.rebuilt,serverMs:w&&w._debugTotalMs,run:w&&w._debugRun},timestamp:Date.now(),hypothesisId:'C',runId:'q7-v1'})}).catch(function(){});
-        // #endregion
         if (summaryEl) {
           summaryEl.innerText = shStockWarmState.ready
             ? ('Tồn Q7 sẵn sàng (' + (w.cacheSource || 'TON_Q7') + ', ' + Math.round(shStockWarmState.lastMs / 1000) + 's).')
@@ -1708,7 +1653,6 @@ function sh_ensureStockReady_() {
       shStockWarmState.warming = false;
       shStockWarmState.promise = null;
       shStockWarmState.ready = false;
-      dbgSoanLine_('warmStock.error', { error: String(err && err.message || err), via: 'direct-get' });
       if (summaryEl) summaryEl.innerText = 'Lỗi tải tồn Q7: ' + String(err && err.message || err);
       return false;
     });
@@ -1768,13 +1712,11 @@ function sh_taoBangSoanTuDonDaChon() {
     return;
   }
 
-  var _dbgSoanStart = Date.now();
+  var clientStart = Date.now();
   showLoad(onlyNewItems ? "Bước 1/2: Kiểm tra tồn Q7 (chế độ mã thêm mới)..." : "Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
-  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, ngayTo: range.to, selectedCount: selectedOrders.length, onlyNewItems: onlyNewItems, newAfterTime: newAfterTime, newBeforeTime: newBeforeTime, build: APP_BUILD });
 
   sh_ensureStockReady_().then(function(stockOk) {
     showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (đọc TON_Q7)..." : "Bước 2/2: Đang tạo bảng (rebuild TON_Q7 nếu thiếu)...");
-    dbgSoanLine_('taoBangSoan.afterWarm', { stockOk: stockOk, warmMs: Date.now() - _dbgSoanStart });
     // forceStock=true nếu chưa có TON_Q7 — POST text/plain thẳng GAS để rebuild
     var payload = {
       ngay: ngay,
@@ -1794,17 +1736,7 @@ function sh_taoBangSoanTuDonDaChon() {
     return apiPost('taoBangSoanHangNgayMai', payload, postOpts);
   }).then(function(res) {
     hideLoad();
-    var _dbgClientMs = Date.now() - _dbgSoanStart;
-    var stockStep = null;
-    if (res && res._debugTimings) {
-      for (var si = 0; si < res._debugTimings.length; si++) {
-        if (res._debugTimings[si] && res._debugTimings[si].step === 'stockIndex') stockStep = res._debugTimings[si];
-      }
-    }
-    dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, stockSource: res && res.stockSource, stockStep: stockStep, build: APP_BUILD, steps: res && res._debugTimings });
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{success:!!(res&&res.success),stockReady:res&&res.stockReady,stockSource:res&&res.stockSource,q7Keys:stockStep&&stockStep.q7Keys,via:stockStep&&stockStep.via,serverMs:res&&res._debugTotalMs,clientMs:_dbgClientMs,run:res&&res._debugRun,missingItems:res&&res.missingItems,totalItems:res&&res.totalItems,onlyNewItems:res&&res.onlyNewItems,newAfterLabel:res&&res.newAfterLabel,newBeforeLabel:res&&res.newBeforeLabel,skippedByTime:res&&res._debugSkippedByTime,includedNewRows:res&&res._debugIncludedNewRows,dvtEmpty:res&&res._debugDvtEmpty,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'NEW-A',runId:'new-items-v1'})}).catch(function(){});
-    // #endregion
+    var clientMs = Date.now() - clientStart;
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại:\n" + ((res && (res.msg || res.error)) || "Không rõ lỗi") + "\n[Build FE: " + APP_BUILD + "]" + (res && res._debugRun ? (" [GAS: " + res._debugRun + "]") : ""));
       return;
@@ -1817,12 +1749,11 @@ function sh_taoBangSoanTuDonDaChon() {
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
       "- Tồn kho: " + (res.stockReady ? ("CÓ (" + (res.stockSource || "TON_Q7") + ")") : "KHÔNG — Admin import lại file tồn để tạo sheet TON_Q7");
     if (res._debugTotalMs) msg += "\n(Server tạo bảng: " + Math.round(res._debugTotalMs / 1000) + "s)";
-    msg += "\n(Tổng chờ: " + Math.round(_dbgClientMs / 1000) + "s)\n[q7-v1 / " + APP_BUILD + "]";
+    msg += "\n(Tổng chờ: " + Math.round(clientMs / 1000) + "s)\n[" + APP_BUILD + "]";
     alert(msg);
     if (res.url) window.open(res.url, '_blank', 'noopener,noreferrer');
   }).catch(function(err) {
     hideLoad();
-    dbgSoanLine_('taoBangSoan.error', { clientMs: Date.now() - _dbgSoanStart, error: String(err && err.message || err), build: APP_BUILD });
     alert('Lỗi: ' + (err && err.message || err));
   });
 }
@@ -2293,14 +2224,6 @@ function importDanhMucTonKho() {
       alert('Lỗi tách tồn Q7: ' + (ex && ex.message || ex));
       return;
     }
-    // #region agent log
-    var _dvtSamples = (extracted.entries || []).filter(function(e){ return e && e.d; }).slice(0, 5).map(function(e){ return {k:e.k,q:e.q,d:e.d}; });
-    var _withD = 0;
-    for (var _di = 0; _di < (extracted.entries || []).length; _di++) {
-      if (extracted.entries[_di] && (extracted.entries[_di].d || (String(extracted.entries[_di].k||'').indexOf('|DV:') !== -1))) _withD++;
-    }
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 extract done',data:{rowCount:rowCount,entryCount:extracted.entries.length,withDvtEntries:_withD,dvtIdx:extracted.meta&&extracted.meta.dvtIdx,headerSample:extracted.meta&&extracted.meta.headerSample,rowsWithDvt:extracted.meta&&extracted.meta.rowsWithDvt,sampleWithDvt:_dvtSamples,sampleFirst3:(extracted.entries||[]).slice(0,3),build:APP_BUILD},timestamp:Date.now(),hypothesisId:'DVT-A',runId:'dvt-v1'})}).catch(function(){});
-    // #endregion
     if (!extracted.entries.length) {
       hideLoad();
       alert("Không tách được tồn Kho Q7 từ file.\nKiểm tra file có cột/kho Q7, hoặc tick ghi full sheet.");
@@ -2314,9 +2237,6 @@ function importDanhMucTonKho() {
       actor: sessionUser.user
     }, { directOnly: true, timeoutMs: 120000 }).then(function(res) {
       hideLoad();
-      // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'q7 import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,serverMs:res&&res._debugTotalMs,q7Rows:res&&res.q7Rows,q7WithDvt:res&&res.q7WithDvt,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'DVT-B',runId:'dvt-v1'})}).catch(function(){});
-      // #endregion
       if (!res || !res.success) {
         alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
         return;
@@ -2351,9 +2271,6 @@ function importDanhMucTonKho() {
       alert('Lỗi tách catalog: ' + (catEx && catEx.message || catEx));
       return;
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'catalog extract done',data:{rowCount:rowCount,entryCount:catExtracted.entries.length,meta:catExtracted.meta,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'CAT-A',runId:'catalog-fast-v1'})}).catch(function(){});
-    // #endregion
     if (!catExtracted.entries.length) {
       hideLoad();
       alert("Không tách được dòng hàng từ file nhập khẩu thông tin.\nKiểm tra có cột mã hàng / mã vạch / tên hàng.");
@@ -2370,9 +2287,6 @@ function importDanhMucTonKho() {
       var part = catChunks[idx] || [];
       var approxBytes = JSON.stringify(part).length;
       showLoad("Đang ghi catalog " + (idx + 1) + "/" + catChunks.length + " (" + catExtracted.entries.length + " dòng)...");
-      // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'catalog chunk start',data:{idx:idx,chunks:catChunks.length,partLen:part.length,approxBytes:approxBytes,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'CAT-A',runId:'catalog-fast-v1'})}).catch(function(){});
-      // #endregion
       return apiPost('nhapKhauCapNhatThongTin', {
         importType: 'catalogFast',
         fileName: file.name,
@@ -2393,9 +2307,6 @@ function importDanhMucTonKho() {
     sendCatChunk(0).then(function(res) {
       hideLoad();
       res = res || catLastRes;
-      // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'catalog import done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,chunks:catChunks.length,catWritten:catWritten,withDvt:res&&res.withDvt,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'CAT-A',runId:'catalog-fast-v1'})}).catch(function(){});
-      // #endregion
       if (!res || !res.success) {
         alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
         return;
@@ -2416,9 +2327,6 @@ function importDanhMucTonKho() {
       loadCatalogInBackground(true);
     }).catch(function(err) {
       hideLoad();
-      // #region agent log
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'catalog import error',data:{error:String(err&&err.message||err),clientMs:Date.now()-t0,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'CAT-A',runId:'catalog-fast-v1'})}).catch(function(){});
-      // #endregion
       var tip = /hết thời gian|timeout|abort/i.test(String(err && err.message || ''))
         ? 'File quá lớn hoặc GAS chậm — thử lại; nếu vẫn lỗi thì Deploy code.gs (New version).'
         : 'Nếu báo không nhận action catalogFast: Deploy lại code.gs (New version).';
@@ -2441,9 +2349,6 @@ function importDanhMucTonKho() {
 
   var totalWritten = 0;
   var lastRes = null;
-  // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import start chunks',data:{importType:importType,wantFullStock:wantFullStock,rowCount:rowCount,chunks:chunks.length,bodyChunk:BODY_CHUNK,fileName:file.name,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
-  // #endregion
 
   function sendChunk(idx) {
     var bodyPart = chunks[idx] || [];
@@ -2473,9 +2378,6 @@ function importDanhMucTonKho() {
   sendChunk(0).then(function(res) {
     hideLoad();
     res = res || lastRes;
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:importDanhMucTonKho',message:'import all done',data:{success:!!(res&&res.success),clientMs:Date.now()-t0,chunks:chunks.length,totalWritten:totalWritten,q7Rows:res&&res.q7Rows,run:res&&res._debugRun,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'IMP-B',runId:'import-chunk-v3'})}).catch(function(){});
-    // #endregion
     if (!res || !res.success) {
       alert("❌ Nhập khẩu thất bại: " + ((res && (res.error || res.msg)) || "Không rõ lỗi") + "\n[Build: " + APP_BUILD + "]");
       return;
