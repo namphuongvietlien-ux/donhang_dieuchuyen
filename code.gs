@@ -4926,11 +4926,15 @@ function luuXuatBanHang(payload) {
 
   var rows = [];
   var coLoi = false;
-  var debugDvt = [];
   for (var i = 0; i < items.length; i++) {
     var item = items[i] || {};
-    var catalogHit = resolveCatalogProduct(catalogLookup, item.maHang, item.maVach);
-    var dvtResolved = resolveDvtValue(catalogLookup, item.maHang, item.maVach, item.dvt);
+    // Cùng nguồn Data_Excel như luuPhieuTuWebApp / tab Tạo đơn
+    var catalogItem = resolveCatalogProduct(catalogLookup, item.maHang, item.maVach);
+    var maHangOut = (catalogItem && catalogItem.maHang) ? catalogItem.maHang : (item.maHang || "");
+    var maVachOut = (catalogItem && catalogItem.maVach) ? catalogItem.maVach : (item.maVach || "");
+    var tenHangOut = (catalogItem && catalogItem.tenHang) ? catalogItem.tenHang : (item.tenHang || "");
+    var dvtIn = item.dvt || (catalogItem && catalogItem.dvt) || "";
+    var dvtResolved = resolveDvtValue(catalogLookup, maHangOut, maVachOut, dvtIn);
     var slNum = Number(item.sl);
     var note = "";
     var bad = false;
@@ -4939,30 +4943,19 @@ function luuXuatBanHang(payload) {
       bad = true;
       note += (note ? " | " : "") + "Lỗi ĐVT";
     }
-    if (String(item.maHang || "") === "LỖI MÃ") {
+    if (String(item.maHang || "") === "LỖI MÃ" || String(maHangOut || "") === "LỖI MÃ") {
       bad = true;
       note += (note ? " | " : "") + "Mã không tồn tại";
     }
     if (bad) coLoi = true;
-    if (debugDvt.length < 12) {
-      debugDvt.push({
-        maHang: item.maHang || "",
-        maVach: item.maVach || "",
-        inDvt: item.dvt || "",
-        catalogHit: !!catalogHit,
-        catalogDvt: catalogHit && catalogHit.dvt ? String(catalogHit.dvt) : "",
-        resolved: dvtResolved || "",
-        note: note
-      });
-    }
     rows.push([
       now,
       soHoaDon,
       maPhieu,
       chiNhanh,
-      item.maHang || "",
-      item.maVach || "",
-      item.tenHang || "",
+      maHangOut,
+      maVachOut,
+      tenHangOut,
       dvtResolved || "",
       slNum,
       actor,
@@ -4990,9 +4983,7 @@ function luuXuatBanHang(payload) {
     chiNhanh: chiNhanh,
     itemCount: items.length,
     coLoi: coLoi,
-    message: "✅ Đã lưu xuất bán " + maPhieu + " · HĐ " + soHoaDon + " (" + items.length + " món)",
-    _debugDvt: debugDvt,
-    _debugRun: "xb-dvt-v1"
+    message: "✅ Đã lưu xuất bán " + maPhieu + " · HĐ " + soHoaDon + " (" + items.length + " món)"
   };
 }
 

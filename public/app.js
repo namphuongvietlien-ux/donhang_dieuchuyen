@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v37';
+var APP_BUILD = '2026-08-02-v39';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -2861,18 +2861,31 @@ function xb_chonSanPhamFromSuggest(itemStr) {
   if (box) box.style.display = "none";
 }
 
+/** Tra cứu catalog Data_Excel đã load (danhMucGoc) — cùng nguồn tab Tạo đơn / Quản lý */
+function lookupCatalogProductClient_(maHang, maVach) {
+  var mv = String(maVach || "").trim().toUpperCase();
+  var mh = String(maHang || "").trim().toUpperCase();
+  if (mv && danhMucGoc[mv]) return danhMucGoc[mv];
+  if (mh && danhMucGoc[mh]) return danhMucGoc[mh];
+  return null;
+}
+
 function xb_chonSanPham(it) {
   if (!xbInvoiceLocked) return alert("Xác nhận số hóa đơn liên kết trước.");
-  var existingIndex = xbItems.findIndex(function(x) { return x.maVach === it.maVach && x.maHang !== "LỖI MÃ"; });
+  var cat = lookupCatalogProductClient_(it && it.maHang, it && it.maVach) || it || {};
+  var maHang = cat.maHang || it.maHang || "";
+  var maVach = cat.maVach || it.maVach || "";
+  var tenHang = cat.tenHang || it.tenHang || "";
+  // ĐVT từ Data_Excel (catalog), fallback giống tab Quản lý
+  var dvt = String(cat.dvt || it.dvt || "").trim() || "Cái";
+  var existingIndex = xbItems.findIndex(function(x) { return x.maVach === maVach && x.maHang !== "LỖI MÃ"; });
   if (existingIndex !== -1) {
     xbItems[existingIndex].sl = Number(xbItems[existingIndex].sl) + 1;
     xbItems[existingIndex].highlight = true;
+    if (!String(xbItems[existingIndex].dvt || "").trim()) xbItems[existingIndex].dvt = dvt;
   } else {
-    xbItems.unshift({ maHang: it.maHang, maVach: it.maVach, tenHang: it.tenHang, dvt: it.dvt, sl: "1", highlight: true });
+    xbItems.unshift({ maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt, sl: "1", highlight: true });
   }
-  // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'xb-dvt-pre',hypothesisId:'A',location:'app.js:xb_chonSanPham',message:'add item dvt from catalog',data:{maHang:it&&it.maHang,maVach:it&&it.maVach,rawDvt:it&&it.dvt,rawDvtType:typeof (it&&it.dvt),rawDvtEmpty:!(it&&String(it.dvt||'').trim()),catalogReady:!!(catalogLoadState&&catalogLoadState.ready)},timestamp:Date.now()})}).catch(function(){});
-  // #endregion
   xb_renderTable();
 }
 
@@ -2896,7 +2909,7 @@ function xb_renderTable() {
     tbody.insertAdjacentHTML("beforeend",
       '<tr class="' + trClass + '"><td>' + (xbItems.length - i) + '</td>' +
       '<td><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b><br><small style="color:gray;">Mã hàng hóa: ' + escapeHtml(it.maHang) + '</small></td>' +
-      '<td style="font-weight:500;">' + escapeHtml(it.tenHang) + '</td><td>' + escapeHtml(it.dvt) + '</td>' +
+      '<td style="font-weight:500;">' + escapeHtml(it.tenHang) + '</td><td>' + escapeHtml(it.dvt || 'Cái') + '</td>' +
       '<td><div class="qty-control"><button class="qty-btn" onclick="xb_thayDoiSoLuong(' + i + ', -1)">-</button>' +
       '<input type="number" class="qty-input" value="' + it.sl + '" onchange="xbItems[' + i + '].sl=this.value; xb_renderTable();">' +
       '<button class="qty-btn" onclick="xb_thayDoiSoLuong(' + i + ', 1)">+</button></div></td>' +
@@ -2921,37 +2934,44 @@ function xb_submit() {
   if (!chiNhanh) return alert("Thiếu chi nhánh xuất bán.");
   if (!confirm("Lưu xuất bán cho HĐ " + xbInvoiceLocked + " (" + xbItems.length + " dòng)?")) return;
 
-  var dvtSnapshot = xbItems.slice(0, 8).map(function(it) {
-    return { maHang: it.maHang, maVach: it.maVach, dvt: it.dvt, dvtEmpty: !String(it.dvt || '').trim(), sl: it.sl };
+  // Đồng bộ lại ĐVT từ catalog Data_Excel trước khi lưu (giống resolve phía server)
+  var itemsToSave = xbItems.map(function(it) {
+    var cat = lookupCatalogProductClient_(it.maHang, it.maVach);
+    return {
+      maHang: (cat && cat.maHang) || it.maHang,
+      maVach: (cat && cat.maVach) || it.maVach,
+      tenHang: (cat && cat.tenHang) || it.tenHang,
+      dvt: String((cat && cat.dvt) || it.dvt || "").trim() || "Cái",
+      sl: it.sl
+    };
   });
-  var emptyDvtCount = xbItems.filter(function(it) { return !String(it.dvt || '').trim(); }).length;
-  // #region agent log
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'xb-dvt-pre',hypothesisId:'A',location:'app.js:xb_submit:before',message:'payload dvt before save',data:{itemCount:xbItems.length,emptyDvtCount:emptyDvtCount,sample:dvtSnapshot,soHoaDon:xbInvoiceLocked,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
-  // #endregion
 
   showLoad("Đang lưu xuất bán...");
   apiPost("luuXuatBanHang", {
     soHoaDon: xbInvoiceLocked,
     chiNhanh: chiNhanh,
-    items: xbItems,
+    items: itemsToSave,
     actor: sessionUser.user
   }).then(function(res) {
     hideLoad();
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'xb-dvt-pre',hypothesisId:'B',location:'app.js:xb_submit:response',message:'save response dvt debug',data:{success:!!(res&&res.success),coLoi:!!(res&&res.coLoi),maPhieu:res&&res.maPhieu,error:res&&(res.error||res.msg)||'',debugDvt:res&&res._debugDvt,message:res&&res.message},timestamp:Date.now()})}).catch(function(){});
-    // #endregion
     if (!res || res.success === false) throw new Error((res && (res.error || res.msg)) || "Không lưu được.");
     alert((res.message || "✅ Đã lưu.") + (res.coLoi ? "\n⚠️ Có dòng lỗi — kiểm tra sheet Xuất Bán Hàng." : ""));
+    // Mỗi lần lưu xong phải nhập lại số HĐ liên kết (không giữ khóa HĐ)
     xbItems = [];
+    xbInvoiceLocked = "";
     xb_renderTable();
-    xb_loadRecent();
+    xb_setItemsEnabled_(false);
+    var hdEl = document.getElementById("xb-so-hoa-don");
+    if (hdEl) {
+      hdEl.disabled = false;
+      hdEl.value = "";
+      hdEl.focus();
+    }
     var scan = document.getElementById("xb-input-scan");
-    if (scan) scan.focus();
+    if (scan) scan.placeholder = "Nhập số HĐ trước, rồi mới thêm mã...";
+    xb_loadRecent();
   }).catch(function(err) {
     hideLoad();
-    // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'xb-dvt-pre',hypothesisId:'E',location:'app.js:xb_submit:catch',message:'save threw',data:{err:String(err&&err.message||err)},timestamp:Date.now()})}).catch(function(){});
-    // #endregion
     alert("Lỗi: " + err.message + "\nDeploy lại code.gs nếu chưa có API luuXuatBanHang.");
   });
 }
