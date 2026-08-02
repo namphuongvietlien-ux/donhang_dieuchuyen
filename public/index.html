@@ -39,9 +39,9 @@
     .dashboard-hero { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 22px; background: linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%); border: 1px solid rgba(37, 99, 235, 0.14); border-radius: 22px; }
     .dashboard-hero::after { content: ''; position: absolute; inset: auto -20px -20px auto; width: 140px; height: 140px; background: radial-gradient(circle, rgba(37,99,235,0.16), transparent 70%); pointer-events: none; }
     .hero-copy h3 { margin: 0 0 6px; font-size: 18px; color: var(--primary-dark); }
-    .hero-copy p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .hero-copy p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
     .hero-chip { display: inline-block; margin-bottom: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(37, 99, 235, 0.1); color: var(--primary); font-size: 12px; font-weight: 700; }
-    .hero-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+    .hero-stats { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .mini-stat { min-width: 120px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04); }
     .mini-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
     .mini-stat strong { font-size: 14px; color: var(--text); }
@@ -49,13 +49,16 @@
     .section-title h3, .section-title h4 { margin: 0; color: var(--primary-dark); }
     .section-subtitle { font-size: 13px; color: var(--muted); }
     .soft-divider { height: 1px; background: linear-gradient(90deg, rgba(37,99,235,0.2), transparent); margin: 12px 0 14px; }
-    .hero-copy h3 { margin: 0 0 6px; font-size: 18px; color: var(--primary-dark); }
-    .hero-copy p { margin: 0; color: var(--muted); font-size: 14px; }
-    .hero-chip { display: inline-block; margin-bottom: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(37, 99, 235, 0.1); color: var(--primary); font-size: 12px; font-weight: 700; }
-    .hero-stats { display: flex; gap: 10px; flex-wrap: wrap; }
-    .mini-stat { min-width: 120px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; }
-    .mini-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
-    .mini-stat strong { font-size: 14px; color: var(--text); }
+    .guide-list { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .guide-list li { margin-bottom: 4px; }
+    .guide-list b { color: var(--text); }
+    .tab-guide { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; font-size: 13px; line-height: 1.5; }
+    .tab-guide b { color: #0f172a; }
+    .timeline-banner { margin-bottom: 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid #fde68a; background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); color: #92400e; font-size: 13px; line-height: 1.55; }
+    .timeline-banner.main { border-color: #bbf7d0; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); color: #166534; }
+    .timeline-banner.supp { border-color: #fdba74; background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); color: #9a3412; }
+    .timeline-banner strong { display: block; margin-bottom: 4px; font-size: 14px; }
+    .timeline-banner small { display: block; margin-top: 6px; opacity: 0.9; }
     .form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
     .form-group { flex: 1; min-width: 160px; }
     label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--muted); }
@@ -167,7 +170,7 @@
         <div class="icon">⚡</div>
         <div>HỆ THỐNG VẬN HÀNH KHO</div>
       </div>
-      <p class="login-copy">Đăng nhập để theo dõi đơn hàng, kiểm soát điều chuyển và tối ưu quy trình xuất nhập nhanh chóng.</p>
+      <p class="login-copy">Đăng nhập bằng tài khoản chi nhánh để tạo đơn, theo dõi và xác nhận nhận hàng.</p>
       <div class="form-group" style="margin-bottom:15px;"><label>Tài khoản</label><input type="text" id="lg-user" placeholder="Nhập tài khoản"></div>
       <div class="form-group" style="margin-bottom:20px;"><label>Mật khẩu</label><input type="password" id="lg-pass" placeholder="Nhập mật khẩu"></div>
       <button class="btn-submit" onclick="doLogin()">VÀO HỆ THỐNG</button>
@@ -179,6 +182,7 @@
     <div class="modal-box">
       <h3 style="color:#34a853; margin-top:0;">🎉 ĐÃ LƯU ĐƠN THÀNH CÔNG</h3>
       <p style="font-size:16px;">Số phiếu: <b id="modal-sophieu" style="color:var(--primary);"></b></p>
+      <p id="modal-timeline-tip" style="font-size:13px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px; text-align:left; line-height:1.45; margin:12px 0 0;"></p>
       <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
         <button class="btn-submit" onclick="actionPrintNew()">🖨️ IN ĐƠN (WEB)</button>
         <button class="btn-submit btn-success" onclick="actionExportNew()">📥 XUẤT RA FILE EXCEL</button>
@@ -193,7 +197,7 @@
         <div class="header-icon">⚡</div>
         <div>
           <h2>Quản Lý Kho & Đơn Hàng</h2>
-          <div class="header-subtitle">Tối ưu vận hành, kiểm soát lô hàng và theo dõi trạng thái theo thời gian thực</div>
+          <div class="header-subtitle">Tạo đơn · Xác nhận nhận hàng · Theo dõi theo khung giờ tổng hợp</div>
         </div>
       </div>
       <div id="user-info-badge" onclick="toggleUserMenu(event)">
@@ -220,9 +224,14 @@
   <div class="container" id="main-container">
     <div class="card dashboard-hero">
       <div class="hero-copy">
-        <div class="hero-chip">⚡ Hệ thống vận hành kho</div>
-        <h3 id="hero-title">Quản lý đơn hàng và điều chuyển hiệu quả</h3>
-        <p>Giao diện được tối ưu cho thao tác nhanh, theo dõi đơn hàng rõ ràng và trải nghiệm mượt mà trên cả máy tính lẫn điện thoại.</p>
+        <div class="hero-chip">📘 Hướng dẫn nhanh</div>
+        <h3 id="hero-title">Cách dùng theo từng tab</h3>
+        <ul class="guide-list" id="hero-guide-list">
+          <li><b>Tạo Đơn:</b> chọn kho → quét/thêm mã → Lưu đơn.</li>
+          <li><b>Quản Lý:</b> xem đơn; sửa/thêm mã (nếu được phép) trước khi soạn.</li>
+          <li><b>Xác Nhận:</b> khi hàng về, chọn phiếu đã soạn → nhập SL nhận → Lưu.</li>
+          <li><b>Tổng Quan:</b> xem số đơn theo ngày gần đây.</li>
+        </ul>
       </div>
       <div class="hero-stats">
         <div class="mini-stat"><span class="mini-label">Vai trò</span><strong id="hero-role">Guest</strong></div>
@@ -230,6 +239,7 @@
         <button type="button" class="btn-submit" onclick="openInventoryApp()" style="padding:10px 14px; width:auto; box-shadow:none; border-radius:12px; min-width:160px;">📦 Mở app kiểm kê</button>
       </div>
     </div>
+    <div id="packing-timeline-banner" class="timeline-banner" aria-live="polite"></div>
 
     <div id="password-card" class="card">
       <h3 style="margin-top:0; color:var(--primary);">🔐 Đổi mật khẩu</h3>
@@ -242,6 +252,9 @@
     </div>
     
     <div id="tab-dashboard" class="tab-content">
+      <div class="tab-guide">
+        <b>Tab Tổng Quan:</b> xem nhanh số đơn mới / đã xử lý / hủy theo timeline. Bấm đơn gần đây để mở chi tiết (nếu có liên kết).
+      </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📊 Tổng quan hoạt động</h3>
         <p style="margin-top:-4px; color:gray;">Theo dõi nhanh số lượng đơn, trạng thái và đơn mới gần đây.</p>
@@ -277,6 +290,11 @@
 
     <!-- TAB 1: TẠO ĐƠN HÀNG / ĐIỀU CHUYỂN -->
     <div id="tab-tao-phieu" class="tab-content active">
+      <div class="tab-guide">
+        <b>Tab Tạo Đơn (chi nhánh):</b> chọn loại đơn & kho nhận → tìm/quét mã → chỉnh SL → bấm <b>Lưu đơn</b>.
+        Hệ thống sẽ cảnh báo đơn thuộc khung <b>chính</b> (trước 8h) hay <b>bổ sung</b> (8h–10h) trước khi lưu.
+      </div>
+      <div id="create-timeline-banner" class="timeline-banner" style="margin-top:0;"></div>
       <div class="card">
         <div class="form-group" style="margin-bottom:15px;">
           <label>Loại Đơn:</label>
@@ -322,6 +340,10 @@
 
     <!-- TAB 2: QUẢN LÝ PHIẾU -->
     <div id="tab-quan-ly" class="tab-content">
+      <div class="tab-guide">
+        <b>Tab Quản Lý:</b> lọc ngày/kho → chọn phiếu để xem, in, xuất Excel.
+        Khi <b>sửa SL</b> hoặc <b>thêm mã</b>, dòng mới theo giờ lưu hiện tại sẽ vào khung chính / bổ sung tương ứng (xem cảnh báo bên dưới khi mở đơn).
+      </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Tra cứu & Quản lý</h3>
         <div class="form-row">
@@ -339,6 +361,7 @@
         <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
         <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
         <p id="ql-order-meta" style="font-size:13px; color:#137333; margin-top:-6px;"></p>
+        <div id="ql-edit-timeline-banner" class="timeline-banner" style="display:none;"></div>
         <div id="ql-admin-actions" class="form-row" style="display:none; align-items:end;">
           <div class="form-group" style="position:relative;">
             <label>Thêm mã hàng hóa hoặc mã vạch</label>
@@ -366,6 +389,10 @@
 
     <!-- TAB 3: XÁC NHẬN NHẬN HÀNG -->
     <div id="tab-xac-nhan" class="tab-content">
+      <div class="tab-guide">
+        <b>Tab Xác Nhận (chi nhánh):</b> chọn ngày → chọn phiếu trạng thái <b>Đã soạn</b> → kiểm tra SL soạn / sửa SL nhận nếu lệch → bấm <b>Lưu xác nhận</b>.
+        Chỉ xác nhận đơn của chi nhánh mình.
+      </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📥 Xác nhận nhận hàng</h3>
         <div class="form-row">
@@ -396,6 +423,10 @@
 
     <!-- TAB 4: SOẠN HÀNG MOBILE -->
     <div id="tab-soan-hang" class="tab-content">
+      <div class="tab-guide">
+        <b>Tab Soạn Hàng (kho xuất / Admin):</b> chọn <b>Ngày tổng hợp / giao</b> → tạo bảng.
+        Đơn chính = hôm trước 10:00 → 08:00 · Bổ sung = 08:00–10:00 (tick “Bảng bổ sung”). Sau 10:00 tính ngày hôm sau.
+      </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
         <div class="form-row">
@@ -403,9 +434,12 @@
           <div class="form-group"><label>Số phiếu cần soạn:</label><select id="sh-phieu" onchange="sh_chonDonMobile()"><option value="">-- Đang tải --</option></select></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Tạo bảng từ ngày:</label><input type="date" id="sh-create-from" onchange="sh_onCreateDateRangeChange()"></div>
-          <div class="form-group"><label>đến ngày:</label><input type="date" id="sh-create-to" onchange="sh_onCreateDateRangeChange()"></div>
+          <div class="form-group" style="display:none;"><label>Từ (tự động):</label><input type="date" id="sh-create-from"></div>
+          <div class="form-group"><label>Ngày tổng hợp / giao:</label><input type="date" id="sh-create-to" onchange="sh_onCreateDateRangeChange()"></div>
           <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_moBangChonDonSoan()">🧾 TẠO BẢNG SOẠN HÀNG</button></div>
+        </div>
+        <div style="font-size:12px; color:#64748b; margin:-6px 0 10px;">
+          Đơn chính: hôm trước <b>10:00</b> → ngày giao <b>08:00</b> · Bổ sung / đơn mới: <b>08:00–10:00</b> · Sau <b>10:00</b> tính ngày hôm sau.
         </div>
         <div class="stats-bar" id="sh-stats"></div>
         <div id="sh-order-picker" style="display:none; margin-top:12px; border:1px solid #dbeafe; border-radius:12px; padding:12px; background:#f8fbff;">
@@ -424,24 +458,24 @@
             <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; color:#1e3a8a; cursor:pointer;">
               <input type="checkbox" id="sh-only-new-items" onchange="sh_toggleOnlyNewItemsUi()" style="margin-top:2px;">
               <span>
-                <b>Tổng hợp mã hàng thêm mới</b>
+                <b>Bảng bổ sung (8h–10h)</b>
                 <span style="display:block; font-size:12px; color:#64748b; font-weight:400; margin-top:2px;">
-                  Lần chốt 2 (vd. 10h): chỉ gom dòng <b>Thêm mới vào đơn</b> (mã bổ sung sau lần chốt 1). Không lấy lại cả đơn / mã đặt từ đầu.
+                  Gom dòng <b>Thêm mới vào đơn</b> và cả <b>đơn tạo mới</b> trong khung 08:00–10:00 của ngày tổng hợp. Không lấy lại đơn chính (trước 8h).
                 </span>
               </span>
             </label>
             <div id="sh-only-new-items-opts" style="display:none; margin-top:10px;">
               <div class="form-row" style="margin:0; gap:12px;">
                 <div class="form-group" style="margin:0; max-width:160px;">
-                  <label style="font-size:12px;">Sau giờ (chốt lần 1)</label>
+                  <label style="font-size:12px;">Từ giờ (chốt lần 1)</label>
                   <input type="time" id="sh-new-after-time" value="08:00">
                 </div>
                 <div class="form-group" style="margin:0; max-width:160px;">
-                  <label style="font-size:12px;">Đến giờ (tuỳ chọn)</label>
+                  <label style="font-size:12px;">Đến giờ (chốt lần 2)</label>
                   <input type="time" id="sh-new-before-time" value="10:00">
                 </div>
               </div>
-              <div style="font-size:11px; color:#64748b; margin-top:6px;">Áp dụng theo ngày ở “Tạo bảng từ ngày”. Xóa “Đến giờ” nếu muốn lấy tới hiện tại.</div>
+              <div style="font-size:11px; color:#64748b; margin-top:6px;">Mặc định 08:00–10:00 theo ngày tổng hợp / giao ở trên.</div>
             </div>
           </div>
           <div style="max-height:260px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
@@ -547,6 +581,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v28"></script>
+  <script src="app.js?v=20260802v30"></script>
 </body>
 </html>

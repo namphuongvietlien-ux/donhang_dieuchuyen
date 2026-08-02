@@ -100,9 +100,130 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v28';
+var APP_BUILD = '2026-08-02-v30';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
+var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
+
+function pad2_(n) { return String(n).padStart ? String(n).padStart(2, '0') : ((n < 10 ? '0' : '') + n); }
+function formatDateVN_(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  return pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear();
+}
+function formatDateTimeVN_(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  return formatDateVN_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes());
+}
+function startOfLocalDay_(d) {
+  var x = new Date(d.getTime());
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+function addDaysLocal_(d, days) {
+  var x = new Date(d.getTime());
+  x.setDate(x.getDate() + days);
+  return x;
+}
+function atLocalTime_(dayDate, hh, mm) {
+  var x = startOfLocalDay_(dayDate);
+  x.setHours(hh, mm || 0, 0, 0);
+  return x;
+}
+
+/**
+ * Timeline tổng hợp theo giờ lưu đơn:
+ * - Trước 10:00 thuộc ngày giao D = hôm nay; từ 10:00 trở đi thuộc D = ngày mai
+ * - Chính: (D-1) 10:00 → D 08:00 | Bổ sung: D 08:00 → D 10:00
+ */
+function getPackingTimelineInfo(now) {
+  now = now instanceof Date ? now : new Date();
+  var today = startOfLocalDay_(now);
+  var minutes = now.getHours() * 60 + now.getMinutes();
+  // Sau 10:00 → tính ngày tổng hợp hôm sau
+  var packingDay = minutes > 10 * 60 ? addDaysLocal_(today, 1) : today;
+  var prevDay = addDaysLocal_(packingDay, -1);
+  var mainStart = atLocalTime_(prevDay, 10, 0);
+  var mainEnd = atLocalTime_(packingDay, 8, 0);
+  var suppEnd = atLocalTime_(packingDay, 10, 0);
+  var isMain = now.getTime() < mainEnd.getTime();
+  var isSupp = !isMain && now.getTime() <= suppEnd.getTime();
+  var bucket = isMain ? 'main' : 'supp';
+  var packingLabel = formatDateVN_(packingDay);
+  var title = isMain
+    ? ('Đơn lưu lúc này thuộc ĐỢT CHÍNH — ngày giao/tổng hợp ' + packingLabel)
+    : ('Đơn lưu lúc này thuộc ĐỢT BỔ SUNG — ngày giao/tổng hợp ' + packingLabel);
+  var shipMsg = isMain
+    ? ('Sẽ được tổng hợp soạn trong đợt chính (trước 8h). Chi nhánh nhận hàng sau khi kho xuất soạn xong trong ngày ' + packingLabel + '.')
+    : ('Sẽ đi cùng bảng bổ sung 8h–10h ngày ' + packingLabel + ' (mã thêm mới / đơn tạo mới). Chi nhánh nhận sau khi soạn bổ sung.');
+  var windowMsg = 'Khung chính: ' + formatDateTimeVN_(mainStart) + ' → ' + formatDateTimeVN_(mainEnd) +
+    ' · Bổ sung: ' + formatDateTimeVN_(mainEnd) + ' → ' + formatDateTimeVN_(suppEnd) +
+    ' · Sau 10h tính ngày hôm sau.';
+  var confirmText = title + '\n\n' + shipMsg + '\n\n' + windowMsg + '\n\nBạn có muốn tiếp tục lưu?';
+  return {
+    now: now,
+    packingDay: packingDay,
+    packingLabel: packingLabel,
+    bucket: bucket,
+    isMain: isMain,
+    isSupp: isSupp,
+    title: title,
+    shipMsg: shipMsg,
+    windowMsg: windowMsg,
+    confirmText: confirmText,
+    shortHtml: '<strong>' + title + '</strong>' + shipMsg + '<small>' + windowMsg + '</small>'
+  };
+}
+
+function paintTimelineBanner_(el, info) {
+  if (!el || !info) return;
+  el.className = 'timeline-banner ' + (info.bucket === 'main' ? 'main' : 'supp');
+  el.innerHTML = info.shortHtml;
+  el.style.display = 'block';
+}
+
+function refreshPackingTimelineBanners() {
+  var info = getPackingTimelineInfo(new Date());
+  paintTimelineBanner_(document.getElementById('packing-timeline-banner'), info);
+  paintTimelineBanner_(document.getElementById('create-timeline-banner'), info);
+  var qlBanner = document.getElementById('ql-edit-timeline-banner');
+  var qlView = document.getElementById('ql-view-phieu');
+  if (qlBanner && qlView && qlView.style.display !== 'none') {
+    var editInfo = getPackingTimelineInfo(new Date());
+    editInfo.title = (editInfo.isMain ? 'Thêm/sửa mã lúc này vào ĐỢT CHÍNH' : 'Thêm/sửa mã lúc này vào ĐỢT BỔ SUNG') +
+      ' — ngày giao/tổng hợp ' + editInfo.packingLabel;
+    editInfo.shipMsg = editInfo.isMain
+      ? 'Dòng mới/sửa sẽ được gom vào bảng tổng hợp chính (trước 8h).'
+      : 'Dòng mới (Thêm mới vào đơn) sẽ vào bảng bổ sung 8h–10h.';
+    editInfo.shortHtml = '<strong>' + editInfo.title + '</strong>' + editInfo.shipMsg + '<small>' + editInfo.windowMsg + '</small>';
+    paintTimelineBanner_(qlBanner, editInfo);
+  }
+  return info;
+}
+
+function confirmPackingTimelineAction_(actionLabel) {
+  var info = getPackingTimelineInfo(new Date());
+  var text = (actionLabel ? (actionLabel + '\n\n') : '') + info.confirmText;
+  return window.confirm(text);
+}
+
+function updateHeroGuideForRole() {
+  var list = document.getElementById('hero-guide-list');
+  if (!list) return;
+  var role = sessionUser && sessionUser.role ? String(sessionUser.role).trim() : '';
+  if (role === 'Admin') {
+    list.innerHTML =
+      '<li><b>Tạo Đơn / Quản Lý:</b> tạo, sửa, hủy đơn; theo dõi toàn hệ thống.</li>' +
+      '<li><b>Soạn Hàng:</b> chọn ngày tổng hợp → xuất bảng chính hoặc bảng bổ sung 8h–10h.</li>' +
+      '<li><b>Xác Nhận:</b> hỗ trợ xem; chi nhánh tự xác nhận nhận hàng.</li>' +
+      '<li><b>Tài Khoản:</b> tạo user chi nhánh, gán kho.</li>';
+  } else {
+    list.innerHTML =
+      '<li><b>Tạo Đơn:</b> chọn kho → quét/thêm mã → Lưu đơn (xem cảnh báo khung giờ phía trên).</li>' +
+      '<li><b>Quản Lý:</b> xem đơn của chi nhánh; in / Excel khi cần.</li>' +
+      '<li><b>Xác Nhận:</b> chọn phiếu <b>Đã soạn</b> → nhập SL nhận → Lưu.</li>' +
+      '<li><b>Tổng Quan:</b> theo dõi nhanh đơn gần đây của chi nhánh.</li>';
+  }
+}
 
 // #region agent log
 function dbgConfirm_(hypothesisId, location, message, data) {
@@ -431,6 +552,10 @@ function initSystemData() {
 function updateDashboardHero() {
   safeText('hero-role', sessionUser.role || 'Guest');
   safeText('hero-store', sessionUser.store && sessionUser.store !== 'Tất cả' ? (storeMap[sessionUser.store] || sessionUser.store) : 'Tất cả');
+  updateHeroGuideForRole();
+  refreshPackingTimelineBanners();
+  if (packingTimelineTimer) clearInterval(packingTimelineTimer);
+  packingTimelineTimer = setInterval(refreshPackingTimelineBanners, 60000);
 }
 
 function toggleUserMenu(event) {
@@ -494,6 +619,7 @@ function activateTab(tabId) {
 function switchTab(tabId) {
   hidePasswordSection();
   activateTab(tabId);
+  refreshPackingTimelineBanners();
   if(tabId === 'tab-quan-ly') ql_loadPhieu();
   if(tabId === 'tab-xac-nhan') confirm_loadPhieu();
   if(tabId === 'tab-soan-hang') sh_taiDanhSachDon();
@@ -804,6 +930,8 @@ function quickAddSuggestedItem(item) {
 function submitPhieuMoi() {
   if(arrItems.length === 0) return alert("Chưa có hàng!");
   if (!catalogLoadState.ready) return alert("Danh mục hàng đang tải. Vui lòng đợi vài giây rồi thử lại.");
+  refreshPackingTimelineBanners();
+  if (!confirmPackingTimelineAction_('Xác nhận tạo đơn mới')) return;
   showLoad("Đang tạo đơn...");
   var lPhieu = document.querySelector('input[name="loaiPhieu"]:checked').value;
   var khoXuat = document.getElementById("select-kho-xuat").value;
@@ -815,7 +943,14 @@ function submitPhieuMoi() {
     if(res.coLoi) { alert("⚠️ Có mã lỗi. Sửa trong tab Quản lý!"); arrItems = []; renderTable(); }
     else {
        currentPhieuObj = { soPhieu: res.soPhieu, khoXuat: khoXuat, khoNhan: khoNhan };
-       document.getElementById("modal-sophieu").innerText = res.soPhieu; document.getElementById("modal-action").style.display = "flex";
+       document.getElementById("modal-sophieu").innerText = res.soPhieu;
+       var modalTip = document.getElementById('modal-timeline-tip');
+       if (modalTip) {
+         var savedTip = getPackingTimelineInfo(new Date());
+         modalTip.innerHTML = '<b>' + savedTip.title + '</b><br>' + savedTip.shipMsg +
+           '<br><small style="opacity:0.9;">' + savedTip.windowMsg + '</small>';
+       }
+       document.getElementById("modal-action").style.display = "flex";
        arrItems = []; renderTable();
        if (document.getElementById("input-scan")) document.getElementById("input-scan").focus();
        if (res.soPhieu && !res.coLoi) {
@@ -872,41 +1007,30 @@ function getNgayFilterParam(inputId) {
 function sh_ensureCreateDateDefaults_() {
   var fromEl = document.getElementById('sh-create-from');
   var toEl = document.getElementById('sh-create-to');
-  if (!fromEl || !toEl) return;
+  if (!toEl) return;
   var today = new Date();
-  var yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (!fromEl.value) fromEl.value = formatDateInputValue(yesterday);
   if (!toEl.value) toEl.value = formatDateInputValue(today);
+  // from = ngày trước packing day (tự động, dùng cho API cũ)
+  if (fromEl) {
+    var packing = new Date((toEl.value || formatDateInputValue(today)) + 'T00:00:00');
+    var prev = new Date(packing);
+    prev.setDate(packing.getDate() - 1);
+    fromEl.value = formatDateInputValue(prev);
+  }
 }
 
 function sh_getCreateDateRange_() {
   sh_ensureCreateDateDefaults_();
   var fromEl = document.getElementById('sh-create-from');
   var toEl = document.getElementById('sh-create-to');
-  var from = fromEl && fromEl.value ? fromEl.value : '';
-  var to = toEl && toEl.value ? toEl.value : from;
-  if (!from && to) from = to;
-  if (from && !to) to = from;
-  if (from && to && from > to) {
-    var tmp = from; from = to; to = tmp;
-    if (fromEl) fromEl.value = from;
-    if (toEl) toEl.value = to;
-  }
-  if (from && to) {
-    var d0 = new Date(from + 'T00:00:00');
-    var d1 = new Date(to + 'T00:00:00');
-    var diffDays = Math.round((d1 - d0) / 86400000);
-    if (diffDays > 1) {
-      // Chỉ cho phép 2 ngày liên tiếp
-      var capped = new Date(d0);
-      capped.setDate(d0.getDate() + 1);
-      to = formatDateInputValue(capped);
-      if (toEl) toEl.value = to;
-      alert('Chỉ được chọn tối đa 2 ngày liên tiếp. Đã chỉnh "đến ngày" thành ' + to + '.');
-    }
-  }
-  return { from: from, to: to };
+  var packingDay = toEl && toEl.value ? toEl.value : formatDateInputValue(new Date());
+  if (toEl) toEl.value = packingDay;
+  var packing = new Date(packingDay + 'T00:00:00');
+  var prev = new Date(packing);
+  prev.setDate(packing.getDate() - 1);
+  var from = formatDateInputValue(prev);
+  if (fromEl) fromEl.value = from;
+  return { from: from, to: packingDay, packingDay: packingDay };
 }
 
 function sh_onCreateDateRangeChange() {
@@ -987,7 +1111,12 @@ function ql_loadPhieu(selectedSoPhieu) {
 
 function ql_onSelectPhieu() {
   var val = document.getElementById("ql-phieu").value;
-  if(!val) { document.getElementById("ql-view-phieu").style.display = "none"; return; }
+  if(!val) {
+    document.getElementById("ql-view-phieu").style.display = "none";
+    var ban = document.getElementById('ql-edit-timeline-banner');
+    if (ban) ban.style.display = 'none';
+    return;
+  }
   ql_hienThiChiTiet(phieuData.find(x => x.soPhieu === val));
 }
 
@@ -1250,6 +1379,7 @@ function ql_hienThiChiTiet(phieu, options) {
         }).join(' | ')
       : '';
     document.getElementById("ql-view-phieu").style.display = "block";
+    refreshPackingTimelineBanners();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
@@ -1401,11 +1531,18 @@ function ql_luuSua() {
     }
   });
   if (!updates.length && !newItems.length) return alert("Không có thay đổi nào cần lưu.");
+  refreshPackingTimelineBanners();
+  var tip = getPackingTimelineInfo(new Date());
+  var editConfirm = 'Xác nhận lưu sửa đơn' +
+    (newItems.length ? (' (có ' + newItems.length + ' mã thêm mới)') : '') +
+    '?\n\n' + tip.title + '\n' + tip.shipMsg + '\n\n' + tip.windowMsg;
+  if (!window.confirm(editConfirm)) return;
   showLoad("Đang lưu chỉnh sửa...");
   apiPost('luuChinhSuaPhieu', { soPhieu: currentPhieuObj ? currentPhieuObj.soPhieu : "", updates: updates, newItems: newItems, actor: sessionUser.user }).then(function(res) {
     hideLoad();
     if (!res.success) throw new Error(res.error || "Không thể lưu thay đổi.");
-    alert("✅ Đã lưu chỉnh sửa thành công! Thông báo cập nhật đơn sẽ được gửi sau khi lưu.");
+    var afterTip = getPackingTimelineInfo(new Date());
+    alert("✅ Đã lưu chỉnh sửa thành công!\n\n" + afterTip.title + "\n" + afterTip.shipMsg);
     resetManagementViewAfterSave();
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
@@ -1423,6 +1560,12 @@ function ql_themMaHang(itemOverride) {
     alert("⚠️ Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
     return;
   }
+  refreshPackingTimelineBanners();
+  var addTip = getPackingTimelineInfo(new Date());
+  if (!window.confirm(
+    'Thêm mã vào đơn?\n\n' + addTip.title + '\n' + addTip.shipMsg +
+    '\n\nMã thêm mới sẽ ghi chú "Thêm mới vào đơn" và đi theo khung giờ hiện tại.'
+  )) return;
   qlSelectedSuggestedItem = null;
   if (inputEl) inputEl.value = "";
   document.getElementById("ql-add-qty").value = "1";
@@ -1640,28 +1783,37 @@ function sh_capNhatTomTatChonDonSoan() {
   }
 }
 
-function sh_renderDanhSachDonSoan(candidates) {
+function sh_renderDanhSachDonSoan(candidates, meta) {
   var bodyEl = document.getElementById('sh-order-picker-body');
   if (!bodyEl) return;
   var range = sh_getCreateDateRange_();
-  var ngayLabel = range.from === range.to ? range.from : (range.from + ' → ' + range.to);
+  var packingDay = (meta && meta.packingDay) || range.packingDay || range.to || '';
+  var windowHint = '';
+  if (meta && (meta.mainWindow || meta.suppWindow)) {
+    windowHint = 'Chính: ' + (meta.mainWindow || '') + ' · Bổ sung: ' + (meta.suppWindow || '');
+  }
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn mới hợp lệ trong <b>' + escapeHtml(ngayLabel) + '</b>.<br><small style="color:#64748b;">Thử đổi khoảng "Tạo bảng từ ngày / đến ngày".</small></td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho ngày tổng hợp <b>' + escapeHtml(packingDay) + '</b>.<br><small style="color:#64748b;">Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + escapeHtml(windowHint) + '</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
   var html = '';
   candidates.forEach(function(order, idx) {
+    var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + order.packingBucket + ']</small>') : '';
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
       '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + order.soPhieu + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><b>' + order.soPhieu + '</b></td>' +
+      '<td><b>' + order.soPhieu + '</b>' + bucket + '</td>' +
       '<td>' + (order.khoXuat || '-') + '</td>' +
       '<td>' + (order.khoNhan || '-') + '</td>' +
       '<td>' + (order.thoiGianDat || '-') + '</td>' +
       '</tr>';
   });
   bodyEl.innerHTML = html;
+  var summaryEl = document.getElementById('sh-order-picker-summary');
+  if (summaryEl && windowHint) {
+    summaryEl.innerText = 'Ngày ' + packingDay + ' · ' + windowHint + ' · Chọn đơn rồi xuất bảng chính hoặc tick bổ sung 8h–10h.';
+  }
   sh_capNhatTomTatChonDonSoan();
 }
 
@@ -1687,7 +1839,11 @@ function sh_taiDanhSachDonSoanChoBang() {
       throw new Error((res && (res.error || res.msg)) || 'Không thể tải danh sách đơn.');
     }
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
-    sh_renderDanhSachDonSoan(shOrderCandidates);
+    sh_renderDanhSachDonSoan(shOrderCandidates, {
+      packingDay: res.packingDay || ngayTo,
+      mainWindow: res.mainWindow || '',
+      suppWindow: res.suppWindow || ''
+    });
     sh_warmStockInBackground_();
   }).catch(function(err) {
     hideLoad();
@@ -1788,21 +1944,22 @@ function sh_taoBangSoanTuDonDaChon() {
   var afterTimeEl = document.getElementById('sh-new-after-time');
   var beforeTimeEl = document.getElementById('sh-new-before-time');
   var newAfterTime = afterTimeEl && afterTimeEl.value ? afterTimeEl.value : '08:00';
-  var newBeforeTime = beforeTimeEl && beforeTimeEl.value ? beforeTimeEl.value : '';
+  var newBeforeTime = beforeTimeEl && beforeTimeEl.value ? beforeTimeEl.value : '10:00';
   if (onlyNewItems && !newAfterTime) {
-    alert('Vui lòng chọn "Sau giờ (chốt lần 1)" khi tick tổng hợp mã thêm mới.');
+    alert('Vui lòng chọn giờ chốt lần 1 (mặc định 08:00).');
     return;
   }
 
   var clientStart = Date.now();
-  showLoad(onlyNewItems ? "Bước 1/2: Kiểm tra tồn Q7 (chế độ mã thêm mới)..." : "Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
+  showLoad(onlyNewItems ? "Bước 1/2: Kiểm tra tồn Q7 (bảng bổ sung 8h–10h)..." : "Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
 
   sh_ensureStockReady_().then(function(stockOk) {
     showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (đọc TON_Q7)..." : "Bước 2/2: Đang tạo bảng (rebuild TON_Q7 nếu thiếu)...");
     // forceStock=true nếu chưa có TON_Q7 — POST text/plain thẳng GAS để rebuild
+    var packingDay = range.packingDay || range.to || ngay;
     var payload = {
-      ngay: ngay,
-      ngayTo: range.to || ngay,
+      ngay: range.from || ngay,
+      ngayTo: packingDay,
       actor: sessionUser.user,
       userRole: sessionUser.role || '',
       userStore: sessionUser.store || '',
@@ -1810,7 +1967,7 @@ function sh_taoBangSoanTuDonDaChon() {
       forceStock: !stockOk,
       onlyNewItems: onlyNewItems,
       newAfterTime: newAfterTime,
-      newBeforeTime: newBeforeTime
+      newBeforeTime: newBeforeTime || '10:00'
     };
     var postOpts = stockOk
       ? { allowDirectFallback: true, timeoutMs: 55000 }
@@ -1825,9 +1982,10 @@ function sh_taoBangSoanTuDonDaChon() {
     }
     if (res.stockReady) shStockWarmState.ready = true;
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
+      "- Ngày tổng hợp: " + (res.packingDay || range.packingDay || range.to || "") + "\n" +
       "- Chế độ: " + (res.onlyNewItems
-        ? ("Chỉ mã bổ sung / Thêm mới vào đơn (" + (res.newAfterLabel || "") + (res.newBeforeLabel ? (" → " + res.newBeforeLabel) : "") + ")")
-        : "Tổng hợp đầy đủ") + "\n" +
+        ? ("Bổ sung 8h–10h (" + (res.newAfterLabel || "") + " → " + (res.newBeforeLabel || "") + ")")
+        : ("Tổng hợp chính (" + (res.mainWindowLabel || "hôm trước 10h → 8h") + ")")) + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
@@ -1836,6 +1994,9 @@ function sh_taoBangSoanTuDonDaChon() {
       msg += "\n- Dòng bổ sung lấy: " + (res._debugIncludedNewRows != null ? res._debugIncludedNewRows : "?");
       msg += "\n- Bỏ qua (không phải bổ sung): " + (res._debugSkippedNotSupplement != null ? res._debugSkippedNotSupplement : "?");
       if (res._debugSkippedByTime) msg += "\n- Bỏ qua (ngoài khung giờ): " + res._debugSkippedByTime;
+    } else if (res._debugIncludedMainRows != null) {
+      msg += "\n- Dòng chính lấy: " + res._debugIncludedMainRows;
+      if (res._debugSkippedByTime) msg += "\n- Bỏ qua (ngoài khung chính / sau 8h): " + res._debugSkippedByTime;
     }
     if (res._debugTotalMs) msg += "\n(Server tạo bảng: " + Math.round(res._debugTotalMs / 1000) + "s)";
     msg += "\n(Tổng chờ: " + Math.round(clientMs / 1000) + "s)\n[" + APP_BUILD + (res._debugRun ? (" / " + res._debugRun) : "") + "]";
