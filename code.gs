@@ -713,6 +713,9 @@ function doPost(e) {
           case 'postProcessPackingOrder':
             result = postProcessPackingOrder(payload.payload || {});
             break;
+          case 'postProcessReceiveOrder':
+            result = postProcessReceiveOrder(payload.payload || {});
+            break;
           default:
             result = { error: 'Unknown action: ' + action };
         }
@@ -3281,6 +3284,7 @@ function huyPhieu(payload) {
 }
 
 function xacNhanNhanHang(payload) {
+  var t0 = Date.now();
   requireAuthenticatedAction(payload);
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
@@ -3297,19 +3301,22 @@ function xacNhanNhanHang(payload) {
   var confirmations = payload.confirmations || [];
   if (!confirmations.length) throw new Error("Không có dữ liệu xác nhận.");
 
+  // --- Validate + cache dòng (1 lần đọc / dòng) ---
   var invalidRows = [];
+  var rowCache = {};
+  var soPhieuTarget = String(payload.soPhieu || "").trim();
   for (var c = 0; c < confirmations.length; c++) {
     var confCheck = confirmations[c];
     var rowCheck = Number(confCheck.row);
     if (!rowCheck || rowCheck < 2) continue;
-    // Đọc đủ tới cột 16 (SL Giao/Soạn) — không chỉ cột 9
     var checkValues = historySheet.getRange(rowCheck, 1, 1, 16).getValues()[0];
+    rowCache[rowCheck] = checkValues;
     var rowSoPhieu = checkValues[1] ? String(checkValues[1]).trim() : "";
     var rowStatus = checkValues[12] ? String(checkValues[12]).trim() : "Mới";
     var hasCol9 = checkValues[8] !== "" && checkValues[8] !== null && checkValues[8] !== undefined;
     var hasCol16 = checkValues[15] !== "" && checkValues[15] !== null && checkValues[15] !== undefined;
     var hasPackedQty = hasCol9 || hasCol16;
-    if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, payload.soPhieu || "")) {
+    if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieuTarget)) {
       invalidRows.push(rowCheck + " (sai số phiếu)");
       continue;
     }
@@ -3321,7 +3328,6 @@ function xacNhanNhanHang(payload) {
       invalidRows.push(rowCheck + " (đã xác nhận)");
       continue;
     }
-    // Đã soạn nếu: status Đã soạn hàng, hoặc đã có SL ở cột 9/16
     if (!hasPackedQty && rowStatus !== "Đã soạn hàng") {
       invalidRows.push(rowCheck + " (chưa soạn)");
     }
@@ -3330,50 +3336,101 @@ function xacNhanNhanHang(payload) {
     throw new Error("Không thể xác nhận đơn chưa soạn xong. Dòng lỗi: " + invalidRows.join(", "));
   }
 
+  // --- Ghi trạng thái nhanh: giữ logic cột 9 nhận / 13–15 trạng thái; cột 16 (SL soạn) không đụng ---
   var confirmedTotal = 0;
   var changedCount = 0;
   var changedQtyTotal = 0;
+  var receiveRows = [];
+  var auditRows = [];
+  var now = new Date();
+  var actor = payload.actor || "";
+  var khoXuatHint = "";
+  var khoNhanHint = "";
+
   for (var i = 0; i < confirmations.length; i++) {
     var conf = confirmations[i];
     var row = Number(conf.row);
     var qty = Number(conf.receivedQty);
     if (!row || row < 2 || isNaN(qty) || qty < 0) continue;
-    var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
+    var values = rowCache[row] || historySheet.getRange(row, 1, 1, 16).getValues()[0];
     historySheet.getRange(row, 9).setValue(qty);
-    historySheet.getRange(row, 13).setValue("Đã xác nhận nhận hàng");
-    historySheet.getRange(row, 14).setValue(payload.actor || "");
-    historySheet.getRange(row, 15).setValue("Xác nhận nhận hàng");
-    var requestedQty = Number(values[7]) || 0;
+    historySheet.getRange(row, 13, 1, 3).setValues([["Đã xác nhận nhận hàng", actor, "Xác nhận nhận hàng"]]);
+    if (!khoXuatHint && values[2]) khoXuatHint = String(values[2]).trim();
+    if (!khoNhanHint && values[3]) khoNhanHint = String(values[3]).trim();
     var previousQty = Number(conf.previousQty) || 0;
-    var actualChanged = qty !== previousQty;
-    if (actualChanged) {
+    if (qty !== previousQty) {
       changedCount += 1;
       changedQtyTotal += Math.abs(qty - previousQty);
     }
-    receiveSheet.appendRow([new Date(), payload.soPhieu, expectedStore, payload.actor, values[4] || "", values[5] || "", values[6] || "", qty, values[7] || 0, "Đã xác nhận nhận hàng"]);
-    logOrderChange(ss, payload.soPhieu, "Xác nhận nhận hàng", payload.actor, values[4], values[5], values[7], qty, "Xác nhận bởi chi nhánh");
+    receiveRows.push([now, soPhieuTarget, expectedStore, actor, values[4] || "", values[5] || "", values[6] || "", qty, values[7] || 0, "Đã xác nhận nhận hàng"]);
+    auditRows.push([now, soPhieuTarget, "Xác nhận nhận hàng", actor, values[4] || "", values[5] || "", values[7] || "", qty, "Xác nhận bởi chi nhánh"]);
     confirmedTotal += qty;
   }
 
-  // Trừ tồn kho ngay khi xác nhận nhận hàng để đơn kế tiếp nhìn thấy tồn thực tế.
-  applyStockDeductionAfterReceive(historySheet, confirmations, payload.soPhieu);
-
-  var orderInfo = getThongTinPhieu(payload.soPhieu);
-  if (orderInfo) {
-    SpreadsheetApp.flush();
-    var receivePdfUrl = taoPdfDonHangVaLayLink(payload.soPhieu);
-    sendTelegramReceiveConfirmation(payload.soPhieu, orderInfo.khoNhan || expectedStore, payload.actor, confirmations.length, confirmedTotal, changedCount, changedQtyTotal, receivePdfUrl);
+  if (receiveRows.length) {
+    var rStart = Math.max(receiveSheet.getLastRow() + 1, 2);
+    receiveSheet.getRange(rStart, 1, receiveRows.length, 10).setValues(receiveRows);
   }
-  return { success: true, count: confirmations.length };
+  if (auditRows.length) {
+    var auditSheet = getAuditSheet(ss);
+    var aStart = Math.max(auditSheet.getLastRow() + 1, 2);
+    auditSheet.getRange(aStart, 1, auditRows.length, 9).setValues(auditRows);
+  }
+
+  // Trừ tồn ngay (logic giữ nguyên) — tối ưu ghi tồn 1 lần flush
+  applyStockDeductionAfterReceive(historySheet, confirmations, soPhieuTarget, rowCache);
+  SpreadsheetApp.flush();
+
+  // PDF + Telegram chuyển sang postProcess (tránh timeout/502 HTML)
+  return {
+    success: true,
+    count: confirmations.length,
+    _debugTotalMs: Date.now() - t0,
+    _debugRun: "confirm-fast-v1",
+    notify: {
+      soPhieu: soPhieuTarget,
+      khoXuat: khoXuatHint,
+      khoNhan: khoNhanHint || expectedStore,
+      actor: actor,
+      count: confirmations.length,
+      confirmedTotal: confirmedTotal,
+      changedCount: changedCount,
+      changedQtyTotal: changedQtyTotal
+    }
+  };
 }
 
-function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu) {
+/** PDF + Telegram sau khi đã lưu xác nhận (không chặn bước lưu) */
+function postProcessReceiveOrder(payload) {
+  var soPhieu = String(payload && payload.soPhieu ? payload.soPhieu : "").trim();
+  if (!soPhieu) return { success: false, error: "Thiếu số phiếu." };
+  try {
+    var khoNhan = normalizeStoreName(payload.khoNhan || "");
+    var actor = String(payload.actor || "");
+    var count = Number(payload.count) || 0;
+    var confirmedTotal = Number(payload.confirmedTotal) || 0;
+    var changedCount = Number(payload.changedCount) || 0;
+    var changedQtyTotal = Number(payload.changedQtyTotal) || 0;
+    if (!khoNhan) {
+      var info = getThongTinPhieu(soPhieu);
+      if (info && info.khoNhan) khoNhan = info.khoNhan;
+    }
+    var receivePdfUrl = taoPdfDonHangVaLayLink(soPhieu);
+    sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirmedTotal, changedCount, changedQtyTotal, receivePdfUrl);
+    return { success: true, _debugRun: "confirm-post-v1" };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu, rowCache) {
   var ss = getSS();
   var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
   if (!stockSheet) return;
 
   var stockData = stockSheet.getDataRange().getValues();
   var stockConfig = getStockSheetConfig(stockData);
+  var stockWrites = []; // {sheetRow, value}
 
   for (var i = 0; i < confirmations.length; i++) {
     var conf = confirmations[i];
@@ -3381,9 +3438,9 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu) {
     var qty = Number(conf.receivedQty);
     if (!row || row < 2 || isNaN(qty) || qty <= 0) continue;
 
-    var orderRow = historySheet.getRange(row, 1, 1, 9).getValues()[0];
+    var orderRow = (rowCache && rowCache[row]) ? rowCache[row] : historySheet.getRange(row, 1, 1, 9).getValues()[0];
     var rowSoPhieu = orderRow[1] ? String(orderRow[1]).trim() : "";
-    if (!rowSoPhieu || rowSoPhieu.toLowerCase() !== String(soPhieu || "").trim().toLowerCase()) continue;
+    if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieu || "")) continue;
 
     var khoXuat = orderRow[2] ? String(orderRow[2]).trim() : "";
     var maHang = orderRow[4] ? normalizeProductCode(orderRow[4]) : "";
@@ -3420,9 +3477,12 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu) {
       var oldStock = parseQuantityValue(rowStock[stockConfig.tonKhoIdx]);
       var newStock = oldStock - qty;
       stockData[k][stockConfig.tonKhoIdx] = newStock;
-      stockSheet.getRange(k + 1, stockConfig.tonKhoIdx + 1).setValue(newStock);
+      stockWrites.push({ sheetRow: k + 1, value: newStock });
       break;
     }
+  }
+  for (var w = 0; w < stockWrites.length; w++) {
+    stockSheet.getRange(stockWrites[w].sheetRow, stockConfig.tonKhoIdx + 1).setValue(stockWrites[w].value);
   }
 }
 

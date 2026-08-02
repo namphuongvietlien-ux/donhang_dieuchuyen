@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v44';
+var APP_BUILD = '2026-08-02-v45';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -1336,13 +1336,51 @@ function confirm_xacNhanNhanHang() {
     if (!isNaN(row) && !isNaN(qty) && qty >= 0) confirmations.push({ row: row, receivedQty: qty, previousQty: previousQty });
   });
   if (!confirmations.length) return alert("Không có dữ liệu xác nhận.");
+  var tSave0 = Date.now();
   showLoad("Đang lưu xác nhận...");
-  apiPost('xacNhanNhanHang', { soPhieu: currentConfirmPhieuObj.soPhieu, actor: sessionUser.user, store: sessionUser.store, confirmations: confirmations }).then(function(res) {
+  // #region agent log
+  dbgConfirm_('PERF', 'confirm_xacNhanNhanHang:start', 'confirm save start', {
+    runId: 'confirm-fast',
+    soPhieu: currentConfirmPhieuObj.soPhieu,
+    lines: confirmations.length,
+    build: APP_BUILD
+  });
+  // #endregion
+  // POST thẳng GAS, không qua proxy (tránh 502 HTML khi request nặng)
+  apiPost('xacNhanNhanHang', {
+    soPhieu: currentConfirmPhieuObj.soPhieu,
+    actor: sessionUser.user,
+    store: sessionUser.store,
+    confirmations: confirmations
+  }, { directOnly: true, timeoutMs: 180000 }).then(function(res) {
     hideLoad();
-    if (!res.success) throw new Error(res.error || "Không thể lưu xác nhận.");
-    alert("✅ Đã lưu xác nhận nhận hàng.");
+    // #region agent log
+    dbgConfirm_('PERF', 'confirm_xacNhanNhanHang:ok', 'confirm save ok', {
+      runId: 'confirm-fast',
+      clientMs: Date.now() - tSave0,
+      serverMs: res && res._debugTotalMs,
+      debugRun: res && res._debugRun,
+      count: res && res.count,
+      hasNotify: !!(res && res.notify)
+    });
+    // #endregion
+    if (!res || res.success === false) throw new Error((res && (res.error || res.msg)) || "Không thể lưu xác nhận.");
+    alert("✅ Đã lưu xác nhận nhận hàng." + (res._debugTotalMs ? ("\n(Lưu: " + Math.round(res._debugTotalMs / 1000) + "s)") : ""));
     resetConfirmViewAfterSave();
-  }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+    if (res.notify) {
+      apiPost('postProcessReceiveOrder', res.notify, { allowDirectFallback: false, timeoutMs: 120000 }).catch(function() {});
+    }
+  }).catch(function(err){
+    hideLoad();
+    // #region agent log
+    dbgConfirm_('PERF', 'confirm_xacNhanNhanHang:err', 'confirm save failed', {
+      runId: 'confirm-fast',
+      clientMs: Date.now() - tSave0,
+      err: String(err && err.message || err).slice(0, 400)
+    });
+    // #endregion
+    alert('Lỗi: ' + err.message + '\nThử lại sau khi deploy code.gs (confirm-fast).');
+  });
 }
 
 function openDeepLinkedOrder() {
