@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v39';
+var APP_BUILD = '2026-08-02-v41';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -210,18 +210,19 @@ function updateHeroGuideForRole() {
   var list = document.getElementById('hero-guide-list');
   if (!list) return;
   var role = sessionUser && sessionUser.role ? String(sessionUser.role).trim() : '';
+  // Hero chỉ map chức năng — bước thao tác nằm trong .tab-guide của từng tab
   if (role === 'Admin') {
     list.innerHTML =
-      '<li><b>Tạo Đơn / Quản Lý:</b> tạo, sửa, hủy đơn; theo dõi toàn hệ thống.</li>' +
-      '<li><b>Bán kèm DV:</b> nhập HĐ liên kết → thêm mã bán kèm → lưu sheet Xuất Bán Hàng.</li>' +
-      '<li><b>Soạn Hàng:</b> chọn ngày tổng hợp → xuất bảng chính hoặc bảng bổ sung 8h–10h.</li>' +
-      '<li><b>Tài Khoản:</b> tạo user chi nhánh, gán kho.</li>';
+      '<li><b>Tạo Đơn / Quản Lý</b> — tạo &amp; điều hành đơn toàn hệ thống.</li>' +
+      '<li><b>Bán kèm DV</b> — xuất bán kèm hóa đơn phần mềm khác.</li>' +
+      '<li><b>Soạn Hàng</b> — tổng hợp &amp; soạn tại kho xuất.</li>' +
+      '<li><b>Tài Khoản</b> — tạo user, gán kho chi nhánh.</li>';
   } else {
     list.innerHTML =
-      '<li><b>Tạo Đơn:</b> chọn kho → quét/thêm mã → Lưu đơn (xem cảnh báo khung giờ phía trên).</li>' +
-      '<li><b>Bán kèm DV:</b> nhập số HĐ liên kết → quét/thêm mã → Lưu xuất bán.</li>' +
-      '<li><b>Xác Nhận:</b> chọn phiếu <b>Đã soạn</b> → nhập SL nhận → Lưu.</li>' +
-      '<li><b>Quản Lý / Tổng Quan:</b> theo dõi đơn chi nhánh.</li>';
+      '<li><b>Tạo Đơn</b> — đặt hàng / điều chuyển nội bộ.</li>' +
+      '<li><b>Bán kèm DV</b> — xuất bán kèm hóa đơn phần mềm khác.</li>' +
+      '<li><b>Xác Nhận</b> — xác nhận nhận hàng chi nhánh.</li>' +
+      '<li><b>Quản Lý / Tổng Quan</b> — tra cứu &amp; theo dõi đơn.</li>';
   }
 }
 
@@ -1103,9 +1104,31 @@ function ql_loadPhieu(selectedSoPhieu) {
   if (!selectEl) return;
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var ngay = getNgayFilterParam('ql-ngay');
-  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: document.getElementById("ql-kho-nhan").value, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+  var khoNhan = document.getElementById("ql-kho-nhan") ? document.getElementById("ql-kho-nhan").value : '';
+  var tQl0 = Date.now();
+  // #region agent log
+  dbgBranch_('B', 'ql_loadPhieu:start', 'branch manage list request', {
+    role: sessionUser.role || '',
+    store: sessionUser.store || '',
+    khoNhan: khoNhan,
+    ngay: ngay || ''
+  });
+  // #endregion
+  apiGet('layDanhSachPhieuTheoFilter', { khoNhan: khoNhan, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     var parsed = unwrapListResponse_(res);
     var rows = parsed.rows;
+    // #region agent log
+    dbgBranch_('B', 'ql_loadPhieu:ok', 'branch manage list response', {
+      ms: Date.now() - tQl0,
+      rowCount: rows.length,
+      debugMs: parsed.meta && parsed.meta._debugTotalMs,
+      debugScanned: parsed.meta && parsed.meta._debugScanned,
+      debugStoreCalls: parsed.meta && parsed.meta._debugStoreCalls,
+      debugRun: parsed.meta && parsed.meta._debugRun,
+      debugUserStore: parsed.meta && parsed.meta._debugUserStore,
+      sample: rows[0] ? { soPhieu: rows[0].soPhieu, kx: rows[0].khoXuat, kn: rows[0].khoNhan, st: rows[0].trangThai } : null
+    });
+    // #endregion
     phieuData = rows;
     var countMoi = 0; var countDone = 0; var countCancel = 0;
     var html = '<option value="">-- Chọn Đơn ('+rows.length+') --</option>';
@@ -1126,6 +1149,12 @@ function ql_loadPhieu(selectedSoPhieu) {
       }
     }
   }).catch(function(err){
+    // #region agent log
+    dbgBranch_('B', 'ql_loadPhieu:err', 'branch manage list failed', {
+      ms: Date.now() - tQl0,
+      err: String(err && err.message || err)
+    });
+    // #endregion
     selectEl.innerHTML = '<option value="">-- Lỗi tải --</option>';
     alert('Lỗi: '+err.message);
   });
@@ -1682,9 +1711,26 @@ function sh_taiDanhSachDon() {
   document.getElementById("sh-list-container").innerHTML = '<div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div>';
   document.getElementById("sh-footer").style.display = "none";
   document.getElementById("sh-phieu").innerHTML = '<option value="">⏳ Đang tải...</option>';
+  var tSh0 = Date.now();
+  // #region agent log
+  dbgBranch_('C', 'sh_taiDanhSachDon:start', 'packing list request', {
+    role: sessionUser.role || '',
+    store: sessionUser.store || '',
+    ngay: shNgayEl ? shNgayEl.value : '',
+    viewMode: 'packing'
+  });
+  // #endregion
   apiGet('getDonHangTheoNgay', { ngay: shNgayEl ? shNgayEl.value : '', userRole: sessionUser.role, userStore: sessionUser.store, viewMode: 'packing' }, { allowDirectFallback: true }).then(function(res) {
     var parsed = unwrapListResponse_(res);
     var rows = parsed.rows;
+    // #region agent log
+    dbgBranch_('C', 'sh_taiDanhSachDon:ok', 'packing list response', {
+      ms: Date.now() - tSh0,
+      rowCount: rows.length,
+      isArray: Array.isArray(res),
+      sample: rows[0] ? { soPhieu: rows[0].soPhieu, kx: rows[0].khoXuat, kn: rows[0].khoNhan, st: rows[0].trangThai } : null
+    });
+    // #endregion
     var countMoi = 0; var countDone = 0;
     var html = '<option value="">-- Chọn đơn ('+rows.length+') --</option>';
     rows.forEach(function(r) {
@@ -1694,7 +1740,15 @@ function sh_taiDanhSachDon() {
     });
     document.getElementById("sh-phieu").innerHTML = html;
     document.getElementById("sh-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 CẦN SOẠN: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ SOẠN: '+countDone+'</div>';
-  }).catch(function(err){ alert('Lỗi: '+err.message); });
+  }).catch(function(err){
+    // #region agent log
+    dbgBranch_('C', 'sh_taiDanhSachDon:err', 'packing list failed', {
+      ms: Date.now() - tSh0,
+      err: String(err && err.message || err)
+    });
+    // #endregion
+    alert('Lỗi: '+err.message);
+  });
 }
 
 var pendingImages = {}; var isCompressing = 0;
@@ -2091,7 +2145,15 @@ function taoTaiKhoan() {
 var importPreviewState = null;
 
 function impNormalizeText(value) {
+  // Chỉ normalize để match alias — KHÔNG đổi logic ghi dữ liệu ở đây.
+  // (Đ/đ từng bị strip khỏi a-z → "Đơn vị tính" thành "onvitinh", mất cột ĐVT)
   return String(value || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function dbgBranch_(hypothesisId, location, message, data) {
+  // #region agent log
+  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'branch-import-pre',hypothesisId:hypothesisId||'?',location:location||'app.js',message:message||'',data:data||{},timestamp:Date.now(),build:APP_BUILD})}).catch(function(){});
+  // #endregion
 }
 
 function readImportFileMatrix(file) {
@@ -2334,6 +2396,19 @@ function extractCatalogEntriesFromRows_(rows) {
     if (d) withDvt++;
     entries.push({ mh: mh, mv: mv, th: th, d: d });
   }
+  var headerNorm = (header || []).map(function(h) {
+    return { raw: String(h == null ? '' : h).slice(0, 40), norm: impNormalizeText(h).replace(/\s+/g, '') };
+  });
+  // #region agent log
+  dbgBranch_('A', 'extractCatalogEntriesFromRows_', 'catalog header dvt detect', {
+    headerIndex: headerIndex,
+    dvtIdx: dvtIdx,
+    withDvt: withDvt,
+    entryCount: entries.length,
+    headerNorm: headerNorm.slice(0, 16),
+    sampleEntry: entries[0] || null
+  });
+  // #endregion
   return {
     entries: entries,
     meta: {

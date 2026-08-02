@@ -197,7 +197,7 @@
         <div class="header-icon">⚡</div>
         <div>
           <h2>Quản Lý Kho & Đơn Hàng</h2>
-          <div class="header-subtitle">Tạo đơn · Xác nhận nhận hàng · Theo dõi theo khung giờ tổng hợp</div>
+          <div class="header-subtitle">Điều chuyển · Xuất bán kèm DV · Soạn &amp; xác nhận</div>
         </div>
       </div>
       <div id="user-info-badge" onclick="toggleUserMenu(event)">
@@ -225,14 +225,15 @@
   <div class="container" id="main-container">
     <div class="card dashboard-hero">
       <div class="hero-copy">
-        <div class="hero-chip">📘 Hướng dẫn nhanh</div>
-        <h3 id="hero-title">Cách dùng theo từng tab</h3>
+        <div class="hero-chip">📘 Chức năng từng tab</div>
+        <h3 id="hero-title">Chọn tab phù hợp công việc</h3>
         <ul class="guide-list" id="hero-guide-list">
-          <li><b>Tạo Đơn:</b> chọn kho → quét/thêm mã → Lưu đơn.</li>
-          <li><b>Bán kèm DV:</b> nhập số HĐ liên kết → thêm mã bán kèm → Lưu.</li>
-          <li><b>Quản Lý:</b> xem đơn; sửa/thêm mã (nếu được phép) trước khi soạn.</li>
-          <li><b>Xác Nhận:</b> khi hàng về, chọn phiếu đã soạn → nhập SL nhận → Lưu.</li>
+          <li><b>Tạo Đơn</b> — đặt hàng / điều chuyển nội bộ.</li>
+          <li><b>Bán kèm DV</b> — xuất bán kèm hóa đơn phần mềm khác.</li>
+          <li><b>Quản Lý</b> — tra cứu, sửa, in đơn.</li>
+          <li><b>Xác Nhận / Soạn Hàng</b> — nhận hàng chi nhánh / soạn tại kho.</li>
         </ul>
+        <p style="margin:8px 0 0; font-size:12px; color:#64748b;">Chi tiết thao tác nằm trong hướng dẫn của từng tab (không lặp lại ở đây).</p>
       </div>
       <div class="hero-stats">
         <div class="mini-stat"><span class="mini-label">Vai trò</span><strong id="hero-role">Guest</strong></div>
@@ -254,7 +255,7 @@
     
     <div id="tab-dashboard" class="tab-content">
       <div class="tab-guide">
-        <b>Tab Tổng Quan:</b> xem nhanh số đơn mới / đã xử lý / hủy theo timeline. Bấm đơn gần đây để mở chi tiết (nếu có liên kết).
+        <b>Cách dùng:</b> chọn timeline → xem số liệu tổng hợp và danh sách đơn gần đây của phạm vi tài khoản.
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📊 Tổng quan hoạt động</h3>
@@ -292,8 +293,8 @@
     <!-- TAB 1: TẠO ĐƠN HÀNG / ĐIỀU CHUYỂN -->
     <div id="tab-tao-phieu" class="tab-content active">
       <div class="tab-guide">
-        <b>Tab Tạo Đơn (chi nhánh):</b> chọn loại đơn & kho nhận → tìm/quét mã → chỉnh SL → bấm <b>Lưu đơn</b>.
-        Hệ thống sẽ cảnh báo đơn thuộc khung <b>chính</b> (trước 8h) hay <b>bổ sung</b> (8h–10h) trước khi lưu.
+        <b>Cách dùng:</b> chọn loại đơn & kho → quét/thêm mã → chỉnh SL → <b>Lưu đơn</b>.
+        Trước khi lưu sẽ cảnh báo khung tổng hợp <b>chính</b> (trước 8h) hoặc <b>bổ sung</b> (8h–10h).
       </div>
       <div id="create-timeline-banner" class="timeline-banner" style="margin-top:0;"></div>
       <div class="card">
@@ -342,8 +343,11 @@
     <!-- TAB: BÁN KÈM DỊCH VỤ / XUẤT BÁN HÀNG -->
     <div id="tab-ban-kem" class="tab-content">
       <div class="tab-guide">
-        <b>Tab Bán kèm dịch vụ:</b> nhập <b>số hóa đơn liên kết</b> (từ phần mềm khác) → xác nhận → tìm/quét mã bán kèm → chỉnh SL → <b>Lưu xuất bán</b>.
-        Dữ liệu lưu sheet riêng <b>Xuất Bán Hàng</b>, không vào lịch sử điều chuyển.
+        <b>Cách dùng xuất bán:</b>
+        (1) Nhập <b>số hóa đơn liên kết</b> từ phần mềm bán hàng → <b>Xác nhận HĐ</b>.
+        (2) Quét/thêm mã bán kèm, chỉnh SL.
+        (3) <b>Lưu xuất bán</b> — mỗi lần lưu xong phải nhập lại số HĐ mới (không giữ HĐ cũ).
+        Dữ liệu vào sheet <b>Xuất Bán Hàng</b>, tách biệt đơn điều chuyển.
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">🧾 Hóa đơn liên kết</h3>
@@ -402,8 +406,8 @@
     <!-- TAB 2: QUẢN LÝ PHIẾU -->
     <div id="tab-quan-ly" class="tab-content">
       <div class="tab-guide">
-        <b>Tab Quản Lý:</b> lọc ngày/kho → chọn phiếu để xem, in, xuất Excel.
-        Khi <b>sửa SL</b> hoặc <b>thêm mã</b>, dòng mới theo giờ lưu hiện tại sẽ vào khung chính / bổ sung tương ứng (xem cảnh báo bên dưới khi mở đơn).
+        <b>Cách dùng:</b> lọc ngày/kho → chọn phiếu → xem / in / Excel.
+        <b>Sửa SL</b> hoặc <b>thêm mã</b> (khi được phép): dòng mới theo giờ lưu hiện tại (khung chính / bổ sung).
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Tra cứu & Quản lý</h3>
@@ -451,8 +455,7 @@
     <!-- TAB 3: XÁC NHẬN NHẬN HÀNG -->
     <div id="tab-xac-nhan" class="tab-content">
       <div class="tab-guide">
-        <b>Tab Xác Nhận (chi nhánh):</b> chọn ngày → chọn phiếu trạng thái <b>Đã soạn</b> → kiểm tra SL soạn / sửa SL nhận nếu lệch → bấm <b>Lưu xác nhận</b>.
-        Chỉ xác nhận đơn của chi nhánh mình.
+        <b>Cách dùng:</b> chọn ngày → chọn phiếu <b>Đã soạn</b> → đối chiếu SL soạn / sửa SL nhận nếu lệch → <b>Lưu xác nhận</b>.
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📥 Xác nhận nhận hàng</h3>
@@ -485,9 +488,8 @@
     <!-- TAB 4: SOẠN HÀNG MOBILE -->
     <div id="tab-soan-hang" class="tab-content">
       <div class="tab-guide">
-        <b>Tab Soạn Hàng (kho xuất / Admin):</b> chọn <b>Ngày tổng hợp / giao</b> → tạo bảng.
-        <b>Tổng hợp (không tick):</b> gom cả đợt chính + bổ sung (hôm trước 10:00 → 10:00 ngày giao), đơn chưa soạn.
-        <b>Tick bổ sung:</b> chỉ khung 08:00–10:00. Sau 10:00 thuộc ngày hôm sau.
+        <b>Cách dùng:</b> chọn ngày tổng hợp / giao → chọn phiếu → nhập SL soạn → lưu.
+        <b>Tạo bảng:</b> không tick = cả khung chính+bổ sung; tick bổ sung = chỉ 08:00–10:00. Sau 10:00 thuộc ngày hôm sau.
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
@@ -643,6 +645,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v39"></script>
+  <script src="app.js?v=20260802v41"></script>
 </body>
 </html>
