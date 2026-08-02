@@ -100,8 +100,10 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v50';
+var APP_BUILD = '2026-08-02-v50b';
 var shCreateDateUserTouched_ = false;
+// Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
+var DEBUG_INGEST_ENABLED = false;
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -228,22 +230,29 @@ function updateHeroGuideForRole() {
 }
 
 // #region agent log
-function dbgConfirm_(hypothesisId, location, message, data) {
+function dbgSend_(hypothesisId, location, message, data) {
   try {
+    var payload = {
+      sessionId: '4a6e3c',
+      hypothesisId: hypothesisId || '?',
+      location: location || 'app.js',
+      message: message || '',
+      data: Object.assign({ build: APP_BUILD }, data || {}),
+      timestamp: Date.now()
+    };
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[donhang:debug]', hypothesisId || '?', location || '', message || '', payload.data);
+    }
+    if (!DEBUG_INGEST_ENABLED) return;
     fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '4a6e3c' },
-      body: JSON.stringify({
-        sessionId: '4a6e3c',
-        runId: 'confirm-lock-v2',
-        hypothesisId: hypothesisId || 'A',
-        location: location || 'app.js',
-        message: message || '',
-        data: Object.assign({ build: APP_BUILD }, data || {}),
-        timestamp: Date.now()
-      })
+      body: JSON.stringify(payload)
     }).catch(function() {});
   } catch (e) {}
+}
+function dbgConfirm_(hypothesisId, location, message, data) {
+  dbgSend_(hypothesisId, location, message, data);
 }
 function dbgStatusBag_(status) {
   var s = String(status || '');
@@ -1006,9 +1015,9 @@ function submitPhieuMoi() {
     };
   });
   // #region agent log
-  try {
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'dvt-force-v1',hypothesisId:'DVT',location:'submitPhieuMoi',message:'items dvt before save',data:{build:APP_BUILD,sample:itemsToSave.slice(0,5).map(function(x){return {ma:x.maHang||x.maVach,dvt:x.dvt};})},timestamp:Date.now()})}).catch(function(){});
-  } catch (eLog) {}
+  dbgSend_('DVT', 'submitPhieuMoi', 'items dvt before save', {
+    sample: itemsToSave.slice(0, 5).map(function(x) { return { ma: x.maHang || x.maVach, dvt: x.dvt }; })
+  });
   // #endregion
 
   apiPost('luuPhieuTuWebApp', { loaiPhieu: lPhieu, khoXuat: khoXuat, khoNhan: khoNhan, items: itemsToSave }).then(function(res) {
@@ -2207,9 +2216,14 @@ function sh_taiDanhSachDonSoanChoBang() {
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
     var suggested = range.suggestedPackingDay || sh_getSuggestedPackingDayStr_();
     // #region agent log
-    try {
-      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'packing-day-v50',hypothesisId:'PD1',location:'sh_taiDanhSachDonSoanChoBang:ok',message:'packing picker list',data:{build:APP_BUILD,selectedPackingDay:res.packingDay||ngayTo,suggestedPackingDay:suggested,userTouched:!!shCreateDateUserTouched_,total:shOrderCandidates.length,hasDH435102:shOrderCandidates.some(function(o){return o&&String(o.soPhieu||'').indexOf('435102')!==-1;}),sample:shOrderCandidates.slice(0,8).map(function(o){return o&&o.soPhieu;})},timestamp:Date.now()})}).catch(function(){});
-    } catch (eLog) {}
+    dbgSend_('PD1', 'sh_taiDanhSachDonSoanChoBang:ok', 'packing picker list', {
+      selectedPackingDay: res.packingDay || ngayTo,
+      suggestedPackingDay: suggested,
+      userTouched: !!shCreateDateUserTouched_,
+      total: shOrderCandidates.length,
+      hasDH435102: shOrderCandidates.some(function(o) { return o && String(o.soPhieu || '').indexOf('435102') !== -1; }),
+      sample: shOrderCandidates.slice(0, 8).map(function(o) { return o && o.soPhieu; })
+    });
     // #endregion
     sh_renderDanhSachDonSoan(shOrderCandidates, {
       packingDay: res.packingDay || ngayTo,
@@ -2434,8 +2448,7 @@ function impNormalizeText(value) {
 
 function dbgBranch_(hypothesisId, location, message, data) {
   // #region agent log
-  var payload = data || {};
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:payload.runId||'branch-import',hypothesisId:hypothesisId||'?',location:location||'app.js',message:message||'',data:payload,timestamp:Date.now(),build:APP_BUILD})}).catch(function(){});
+  dbgSend_(hypothesisId, location, message, data);
   // #endregion
 }
 
