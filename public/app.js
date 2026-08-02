@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v47';
+var APP_BUILD = '2026-08-02-v48';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -2028,20 +2028,24 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
     windowHint = 'Chính: ' + (meta.mainWindow || '') + ' · Bổ sung: ' + (meta.suppWindow || '');
   }
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho ngày tổng hợp <b>' + escapeHtml(packingDay) + '</b>.<br><small style="color:#64748b;">Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + escapeHtml(windowHint) + '</small></td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho ngày tổng hợp <b>' + escapeHtml(packingDay) + '</b>.<br><small style="color:#64748b;">Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + escapeHtml(windowHint) + '</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
   var html = '';
   candidates.forEach(function(order, idx) {
-    var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + order.packingBucket + ']</small>') : '';
+    var soPhieuSafe = String(order.soPhieu || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + escapeHtml(order.packingBucket) + ']</small>') : '';
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
-      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + order.soPhieu + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><b>' + order.soPhieu + '</b>' + bucket + '</td>' +
+      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
+      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoXuat) + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoNhan) + '</td>' +
-      '<td>' + (order.thoiGianDat || '-') + '</td>' +
+      '<td>' + escapeHtml(order.thoiGianDat || '-') + '</td>' +
+      '<td style="text-align:center;">' +
+        '<button type="button" class="btn-submit" style="width:auto; padding:6px 10px; border-radius:8px; box-shadow:none; background:#0f766e; font-size:12px;" onclick="sh_inDonTuBangSoan(\'' + soPhieuSafe + '\')">🖨️ In</button>' +
+      '</td>' +
       '</tr>';
   });
   bodyEl.innerHTML = html;
@@ -2052,6 +2056,50 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   sh_capNhatTomTatChonDonSoan();
 }
 
+/** In từng đơn từ bảng chọn đơn soạn hàng (cùng mẫu in tab Quản lý) */
+function sh_inDonTuBangSoan(soPhieu) {
+  var code = String(soPhieu || '').trim();
+  if (!code) return alert('Thiếu số phiếu.');
+  var fromList = (shOrderCandidates || []).find(function(o) {
+    return o && String(o.soPhieu || '').trim() === code;
+  });
+  showLoad('Đang tải đơn ' + code + ' để in...');
+  apiGet('getChiTietPhieu', {
+    soPhieu: code,
+    storeName: (fromList && fromList.khoXuat) || (sessionUser && sessionUser.store) || '',
+    includeStock: '0'
+  }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+    hideLoad();
+    var parsed = unwrapListResponse_(res);
+    var rows = parsed.rows || [];
+    var items = [];
+    rows.forEach(function(row) {
+      if (!row) return;
+      if (row.trangThai === 'Đã hủy dòng' || row.trangThai === 'Đã hủy đơn') return;
+      var sl = ql_resolvePrintQty_(row);
+      if (Number(sl) > 0) {
+        items.push({
+          maHang: row.maHang,
+          maVach: row.maVach,
+          tenHang: row.tenHang,
+          dvt: row.dvt || 'Cái',
+          sl: sl
+        });
+      }
+    });
+    if (!items.length) {
+      alert('Đơn ' + code + ' không có dòng hợp lệ để in.');
+      return;
+    }
+    var khoXuat = (fromList && fromList.khoXuat) || '';
+    var khoNhan = (fromList && fromList.khoNhan) || '';
+    executePrintWeb(code, khoXuat, khoNhan, items);
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi tải đơn để in: ' + (err && err.message || err));
+  });
+}
+
 
 function sh_taiDanhSachDonSoanChoBang() {
   var range = sh_getCreateDateRange_();
@@ -2060,7 +2108,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl) pickerEl.style.display = 'block';
   var bodyEl = document.getElementById('sh-order-picker-body');
-  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
+  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
 
   showLoad('Đang tải danh sách đơn soạn...');
   apiGet('getDanhSachDonSoanHang', {
@@ -2083,7 +2131,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   }).catch(function(err) {
     hideLoad();
     shOrderCandidates = [];
-    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + escapeHtml(err.message) + '</td></tr>';
+    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + escapeHtml(err.message) + '</td></tr>';
     sh_capNhatTomTatChonDonSoan();
   });
 }
