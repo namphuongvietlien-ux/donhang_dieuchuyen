@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v32';
+var APP_BUILD = '2026-08-02-v33';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -1999,8 +1999,8 @@ function sh_taoBangSoanTuDonDaChon() {
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
       "- Ngày tổng hợp: " + (res.packingDay || range.packingDay || range.to || "") + "\n" +
       "- Chế độ: " + (res.onlyNewItems
-        ? ("Bổ sung 8h–10h (" + (res.newAfterLabel || "") + " → " + (res.newBeforeLabel || "") + ")")
-        : ("Tổng hợp chính (" + (res.mainWindowLabel || "hôm trước 10h → 8h") + ")")) + "\n" +
+        ? ("Chỉ bổ sung 8h–10h (" + (res.newAfterLabel || "") + " → " + (res.newBeforeLabel || "") + ")")
+        : ("Tổng hợp chính+bổ sung (" + (res.mainWindowLabel || "hôm trước 10h → 8h") + " → " + (res.newBeforeLabel || "10h") + ")")) + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +

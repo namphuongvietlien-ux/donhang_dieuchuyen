@@ -4408,26 +4408,22 @@ function taoBangSoanHangNgayMai(payload) {
     }
 
     if (onlyNewItems) {
-      // Bổ sung: (1) dòng "Thêm mới vào đơn" trong 8h–10h
-      // hoặc (2) cả dòng của đơn MỚI tạo trong 8h–10h
+      // Tick "Bảng bổ sung": lấy TẤT CẢ dòng trong khung 8h–10h (đơn mới + mã thêm + đơn chưa soạn trong khung).
+      // Không bỏ qua chỉ vì thiếu ghi chú "Thêm mới vào đơn".
       if (!isInPackingSuppWindow_(createdMs, win)) {
         skippedByTime++;
         continue;
       }
-      var isSupplementLine = noteText.indexOf("Thêm mới vào đơn") !== -1;
-      var isNewOrderInSupp = isInPackingSuppWindow_(orderMinCreated[soPhieu], win);
-      if (!isSupplementLine && !isNewOrderInSupp) {
-        skippedNotSupplement++;
-        continue;
-      }
       includedNewRows++;
     } else {
-      // Tổng hợp chính: chỉ dòng trong (D-1) 10:00 → D 08:00
-      if (!isInPackingMainWindow_(createdMs, win)) {
+      // Tổng hợp đầy đủ: cả đợt chính + bổ sung trong ngày D
+      // (D-1) 10:00 → D 10:00 — đơn chưa soạn đều vào bảng, không cắt ở 8h.
+      if (!isInPackingDayWindow_(createdMs, win)) {
         skippedByTime++;
         continue;
       }
-      includedMainRows++;
+      if (isInPackingMainWindow_(createdMs, win)) includedMainRows++;
+      else includedNewRows++;
     }
 
     // Tách theo mã + ĐVT (cùng mã có thể có Thùng / Túi ...)
@@ -4488,13 +4484,12 @@ function taoBangSoanHangNgayMai(payload) {
     return {
       success: false,
       msg: onlyNewItems
-        ? ("Không có mã bổ sung / đơn mới trong khoảng " +
+        ? ("Không có dòng hàng trong khung bổ sung " +
           (newAfterLabel || "?") + " → " + (newBeforeLabel || "?") +
-          ".\n(Gồm dòng \"Thêm mới vào đơn\" hoặc đơn tạo mới trong khung 8h–10h.)\nĐã bỏ qua " +
-          skippedNotSupplement + " dòng không thuộc bổ sung" +
-          (skippedByTime ? (", " + skippedByTime + " dòng ngoài khung giờ") : "") + ".")
-        : ("Không gom được mã hàng trong cửa sổ tổng hợp chính " + (mainWindowLabel || "(D-1) 10:00 → D 08:00") +
-          ".\nĐã bỏ qua " + skippedByTime + " dòng ngoài khung (sau 8h thuộc bảng bổ sung)."),
+          ".\nĐã bỏ qua " + skippedByTime + " dòng ngoài khung 8h–10h.")
+        : ("Không gom được mã hàng trong cửa sổ tổng hợp " +
+          (mainWindowLabel || "(D-1) 10:00") + " → " + (newBeforeLabel || "D 10:00") +
+          " (gồm cả đợt chính + bổ sung).\nĐã bỏ qua " + skippedByTime + " dòng ngoài khung / sau 10h."),
       onlyNewItems: onlyNewItems,
       newAfterLabel: newAfterLabel,
       newBeforeLabel: newBeforeLabel,
@@ -4541,9 +4536,10 @@ function taoBangSoanHangNgayMai(payload) {
   var reportSheet = recreateTempSheetFast_(ss, sheetName);
   var packingDayTitle = Utilities.formatDate(packingDay, Session.getScriptTimeZone(), "dd/MM/yyyy");
   var title = onlyNewItems
-    ? ("BẢNG BỔ SUNG (mã thêm mới + đơn mới 8h–10h) — ngày " + packingDayTitle +
+    ? ("BẢNG BỔ SUNG (toàn bộ đơn/dòng 8h–10h chưa soạn) — ngày " + packingDayTitle +
       " | " + newAfterLabel + " → " + newBeforeLabel)
-    : ("BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + packingDayTitle + " | " + mainWindowLabel);
+    : ("BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + packingDayTitle +
+      " | Chính+Bổ sung: " + mainWindowLabel + " → " + newBeforeLabel);
   // Hàng 5 = số đơn theo cột kho; hàng 6 = header tên cột (Q4_178 / Q4_275 / Q8…)
   var headerRow = 6;
   var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
@@ -4622,7 +4618,7 @@ function taoBangSoanHangNgayMai(payload) {
     (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: TON_Q7") : " | Tồn: chưa có sheet TON_Q7 — Admin import lại file tồn") +
     (onlyNewItems
       ? (" | Bổ sung: " + includedNewRows + " dòng | " + newAfterLabel + " → " + newBeforeLabel)
-      : (" | Chính: " + includedMainRows + " dòng | " + mainWindowLabel));
+      : (" | Chính: " + includedMainRows + " + Bổ sung: " + includedNewRows + " dòng | " + mainWindowLabel + " → " + newBeforeLabel));
   var sheetBlock = [
     padRow_([title], colCount),
     padRow_([
@@ -4630,7 +4626,7 @@ function taoBangSoanHangNgayMai(payload) {
       " | Chính: " + mainWindowLabel +
       " | Bổ sung: " + newAfterLabel + " → " + newBeforeLabel +
       " | Sau 10h → ngày hôm sau" +
-      " | Gom theo mã" + (onlyNewItems ? " bổ sung" : " chính") + " | Stock từ " + TON_Q7_SHEET_NAME
+      " | Gom theo mã" + (onlyNewItems ? " (chỉ 8h–10h)" : " (chính + bổ sung)") + " | Stock từ " + TON_Q7_SHEET_NAME
     ], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
