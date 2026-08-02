@@ -100,7 +100,8 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v49';
+var APP_BUILD = '2026-08-02-v50';
+var shCreateDateUserTouched_ = false;
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -1076,15 +1077,23 @@ function getNgayFilterParam(inputId) {
   return inputEl && inputEl.value ? inputEl.value : '';
 }
 
+function sh_getSuggestedPackingDayStr_() {
+  var info = getPackingTimelineInfo(new Date());
+  return formatDateInputValue(info.packingDay);
+}
+
 function sh_ensureCreateDateDefaults_() {
   var fromEl = document.getElementById('sh-create-from');
   var toEl = document.getElementById('sh-create-to');
   if (!toEl) return;
-  var today = new Date();
-  if (!toEl.value) toEl.value = formatDateInputValue(today);
+  // Mặc định = ngày tổng hợp theo khung giờ (sau 10:00 → ngày mai), KHÔNG phải ngày lịch
+  var packingDefault = sh_getSuggestedPackingDayStr_();
+  if (!toEl.value || !shCreateDateUserTouched_) {
+    toEl.value = packingDefault;
+  }
   // from = ngày trước packing day (tự động, dùng cho API cũ)
   if (fromEl) {
-    var packing = new Date((toEl.value || formatDateInputValue(today)) + 'T00:00:00');
+    var packing = new Date((toEl.value || packingDefault) + 'T00:00:00');
     var prev = new Date(packing);
     prev.setDate(packing.getDate() - 1);
     fromEl.value = formatDateInputValue(prev);
@@ -1095,17 +1104,23 @@ function sh_getCreateDateRange_() {
   sh_ensureCreateDateDefaults_();
   var fromEl = document.getElementById('sh-create-from');
   var toEl = document.getElementById('sh-create-to');
-  var packingDay = toEl && toEl.value ? toEl.value : formatDateInputValue(new Date());
+  var packingDay = toEl && toEl.value ? toEl.value : sh_getSuggestedPackingDayStr_();
   if (toEl) toEl.value = packingDay;
   var packing = new Date(packingDay + 'T00:00:00');
   var prev = new Date(packing);
   prev.setDate(packing.getDate() - 1);
   var from = formatDateInputValue(prev);
   if (fromEl) fromEl.value = from;
-  return { from: from, to: packingDay, packingDay: packingDay };
+  return {
+    from: from,
+    to: packingDay,
+    packingDay: packingDay,
+    suggestedPackingDay: sh_getSuggestedPackingDayStr_()
+  };
 }
 
 function sh_onCreateDateRangeChange() {
+  shCreateDateUserTouched_ = true;
   sh_getCreateDateRange_();
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl && pickerEl.style.display !== 'none') sh_taiDanhSachDonSoanChoBang();
@@ -2080,12 +2095,17 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   if (!bodyEl) return;
   var range = sh_getCreateDateRange_();
   var packingDay = (meta && meta.packingDay) || range.packingDay || range.to || '';
+  var suggested = (meta && meta.suggestedPackingDay) || range.suggestedPackingDay || sh_getSuggestedPackingDayStr_();
   var windowHint = '';
   if (meta && (meta.mainWindow || meta.suppWindow)) {
     windowHint = 'Chính: ' + (meta.mainWindow || '') + ' · Bổ sung: ' + (meta.suppWindow || '');
   }
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho ngày tổng hợp <b>' + escapeHtml(packingDay) + '</b>.<br><small style="color:#64748b;">Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + escapeHtml(windowHint) + '</small></td></tr>';
+    var emptyHint = 'Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + windowHint;
+    if (suggested && packingDay !== suggested) {
+      emptyHint += ' · Gợi ý: đơn sau 10h nằm ở ngày tổng hợp ' + suggested + '.';
+    }
+    bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho ngày tổng hợp <b>' + escapeHtml(packingDay) + '</b>.<br><small style="color:#64748b;">' + escapeHtml(emptyHint) + '</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
@@ -2107,8 +2127,14 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   });
   bodyEl.innerHTML = html;
   var summaryEl = document.getElementById('sh-order-picker-summary');
-  if (summaryEl && windowHint) {
-    summaryEl.innerText = 'Ngày ' + packingDay + ' · ' + windowHint + ' · Chọn đơn rồi xuất bảng chính hoặc tick bổ sung 8h–10h.';
+  if (summaryEl) {
+    var summary = 'Ngày tổng hợp ' + packingDay;
+    if (windowHint) summary += ' · ' + windowHint;
+    summary += ' · Sau 10:00 đơn thuộc ngày hôm sau.';
+    if (suggested && packingDay !== suggested) {
+      summary += ' · Đang lệch ngày gợi ý theo giờ (' + suggested + ').';
+    }
+    summaryEl.innerText = summary;
   }
   sh_capNhatTomTatChonDonSoan();
 }
@@ -2179,8 +2205,15 @@ function sh_taiDanhSachDonSoanChoBang() {
       throw new Error((res && (res.error || res.msg)) || 'Không thể tải danh sách đơn.');
     }
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
+    var suggested = range.suggestedPackingDay || sh_getSuggestedPackingDayStr_();
+    // #region agent log
+    try {
+      fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:'packing-day-v50',hypothesisId:'PD1',location:'sh_taiDanhSachDonSoanChoBang:ok',message:'packing picker list',data:{build:APP_BUILD,selectedPackingDay:res.packingDay||ngayTo,suggestedPackingDay:suggested,userTouched:!!shCreateDateUserTouched_,total:shOrderCandidates.length,hasDH435102:shOrderCandidates.some(function(o){return o&&String(o.soPhieu||'').indexOf('435102')!==-1;}),sample:shOrderCandidates.slice(0,8).map(function(o){return o&&o.soPhieu;})},timestamp:Date.now()})}).catch(function(){});
+    } catch (eLog) {}
+    // #endregion
     sh_renderDanhSachDonSoan(shOrderCandidates, {
       packingDay: res.packingDay || ngayTo,
+      suggestedPackingDay: suggested,
       mainWindow: res.mainWindow || '',
       suppWindow: res.suppWindow || ''
     });
@@ -2248,6 +2281,11 @@ function sh_moBangChonDonSoan() {
   if (!sessionUser || !sessionUser.user) {
     alert('Vui lòng đăng nhập trước khi tạo bảng soạn.');
     return;
+  }
+  // Mỗi lần mở: nếu user chưa tự chọn ngày thì sync theo khung giờ hiện tại
+  if (!shCreateDateUserTouched_) {
+    var toEl = document.getElementById('sh-create-to');
+    if (toEl) toEl.value = sh_getSuggestedPackingDayStr_();
   }
   sh_taiDanhSachDonSoanChoBang();
 }
