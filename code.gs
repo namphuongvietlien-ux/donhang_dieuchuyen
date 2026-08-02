@@ -2575,17 +2575,33 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
     if (!data[i]) continue;
     var slGoc = Number(data[i][7]) || 0;
     var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
-    var slThucTe = hasActualQty ? Number(data[i][8]) : "";
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
+    var isReceived = rowStatus === "Đã xác nhận nhận hàng";
+    // Cột 16 (index 15): SL Giao (Soạn) — giữ số đã soạn sau khi chi nhánh xác nhận nhận
+    var rawSlGiao = data[i][15];
+    var hasSlGiao = rawSlGiao !== "" && rawSlGiao !== null && rawSlGiao !== undefined;
+    var slSoan = "";
+    if (hasSlGiao) {
+      slSoan = Number(rawSlGiao) || 0;
+    } else if (hasActualQty && !isReceived) {
+      // Dữ liệu cũ: cột 9 đang là số soạn
+      slSoan = Number(data[i][8]) || 0;
+    }
+    // slThucTe: số thực nhận (sau xác nhận); trước đó để trống để UI không nhầm với SL soạn
+    var slThucTe = "";
+    if (isReceived && hasActualQty) slThucTe = Number(data[i][8]);
+    else if (!isReceived && hasActualQty && !hasSlGiao) slThucTe = Number(data[i][8]); // tương thích cũ
     matchedRows.push({
       rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
       maHang: data[i][4],
       maVach: data[i][5],
       tenHang: data[i][6],
       slGoc: slGoc,
+      slSoan: slSoan,
       slThucTe: slThucTe,
       dvt: data[i][9] || "",
       ghiChu: data[i][11] || "",
-      trangThai: data[i][12] || "Mới",
+      trangThai: rowStatus || "Mới",
       nguoiSoanHang: data[i][13] || "",
       stock: ""
     });
@@ -3370,7 +3386,15 @@ function taoFileExcelVaLayLink(payload) {
 
       var slDat = Number(row[7]) || 0;
       var hasActualQty = row[8] !== "" && row[8] !== null && row[8] !== undefined;
-      var slFinal = hasActualQty ? Number(row[8]) : slDat;
+      var isReceived = rowStatus === "Đã xác nhận nhận hàng";
+      var rawSlGiao = row[15];
+      var hasSlGiao = rawSlGiao !== "" && rawSlGiao !== null && rawSlGiao !== undefined;
+      // Ưu tiên SL Soạn (cột 16); rồi số thực tế khi đang ở bước soạn; cuối cùng SL đặt
+      var slFinal;
+      if (hasSlGiao) slFinal = Number(rawSlGiao) || 0;
+      else if (hasActualQty && !isReceived) slFinal = Number(row[8]) || 0;
+      else if (hasActualQty && isReceived) slFinal = Number(row[8]) || 0; // nhận rồi mà chưa có cột 16 → dùng cột 9
+      else slFinal = slDat;
       if (!slFinal || slFinal <= 0) continue;
 
       finalItems.push({
@@ -3404,7 +3428,7 @@ function taoFileExcelVaLayLink(payload) {
   targetSheet.getRange("A8").setValue("Kho xuất:").setFontWeight("bold"); targetSheet.getRange("B8").setValue(khoXuat);
   targetSheet.getRange("A9").setValue("Kho nhận:").setFontWeight("bold"); targetSheet.getRange("B9").setValue(khoNhan);
   
-  var headers = ["STT", "Mã hàng hóa", "Mã vạch", "Tên hàng hóa", "ĐVT", "Số lượng"];
+  var headers = ["STT", "Mã hàng hóa", "Mã vạch", "Tên hàng hóa", "ĐVT", "Số lượng (Soạn)"];
   targetSheet.getRange("A12:F12").setValues([headers]).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#f8f9fa");
   
   var dataArr = []; var stt = 1;
