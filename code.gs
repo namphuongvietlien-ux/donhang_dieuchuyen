@@ -4597,7 +4597,7 @@ function taoBangSoanHangNgayMai(payload) {
     var rowP1 = data[p1];
     if (!rowP1) continue;
     var soP1 = rowP1[1] ? String(rowP1[1]).trim() : "";
-    if (!soP1 || !selectedSet[soP1]) continue;
+    if (!soP1 || !orderInMatchSet_(soP1, selectedSet)) continue;
     var stP1 = rowP1[12] ? String(rowP1[12]).trim() : "";
     if (stP1 === "Đã hủy đơn" || stP1 === "Đã hủy dòng") continue;
     var msP1 = toMillisSafe_(rowP1[0]);
@@ -4611,7 +4611,7 @@ function taoBangSoanHangNgayMai(payload) {
     var row = data[i];
     if (!row) continue;
     var soPhieu = row[1] ? String(row[1]).trim() : "";
-    if (!soPhieu || !selectedSet[soPhieu]) continue;
+    if (!soPhieu || !orderInMatchSet_(soPhieu, selectedSet)) continue;
 
     var khoXuat = row[2] ? String(row[2]).trim() : "";
     var khoNhan = row[3] ? String(row[3]).trim() : "";
@@ -4621,7 +4621,7 @@ function taoBangSoanHangNgayMai(payload) {
     var soLuong = Number(row[7]) || 0;
     var dvtRaw = String(row[9] || "").trim();
     var dvt = dvtRaw;
-    if ((!dvt || normalizeHeaderText(dvt) === "cai") && catalogLookup) {
+    if (catalogLookup) {
       dvt = resolveDvtValue(catalogLookup, maHang, maVach, dvtRaw) || dvtRaw;
     }
     var noteText = row[11] != null ? String(row[11]).trim() : "";
