@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v22';
+var APP_BUILD = '2026-08-02-v23';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -1588,6 +1588,14 @@ function sh_moBangChonDonSoan() {
   sh_taiDanhSachDonSoanChoBang();
 }
 
+function sh_toggleOnlyNewItemsUi() {
+  var cb = document.getElementById('sh-only-new-items');
+  var opts = document.getElementById('sh-only-new-items-opts');
+  if (!opts) return;
+  var on = !!(cb && cb.checked);
+  opts.style.display = on ? 'block' : 'none';
+}
+
 function sh_taoBangSoanTuDonDaChon() {
   if (!sessionUser || !sessionUser.user) {
     alert("Vui lòng đăng nhập trước khi tạo bảng soạn.");
@@ -1607,9 +1615,20 @@ function sh_taoBangSoanTuDonDaChon() {
     return;
   }
 
+  var onlyNewEl = document.getElementById('sh-only-new-items');
+  var onlyNewItems = !!(onlyNewEl && onlyNewEl.checked);
+  var afterTimeEl = document.getElementById('sh-new-after-time');
+  var beforeTimeEl = document.getElementById('sh-new-before-time');
+  var newAfterTime = afterTimeEl && afterTimeEl.value ? afterTimeEl.value : '08:00';
+  var newBeforeTime = beforeTimeEl && beforeTimeEl.value ? beforeTimeEl.value : '';
+  if (onlyNewItems && !newAfterTime) {
+    alert('Vui lòng chọn "Sau giờ (chốt lần 1)" khi tick tổng hợp mã thêm mới.');
+    return;
+  }
+
   var _dbgSoanStart = Date.now();
-  showLoad("Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
-  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, ngayTo: range.to, selectedCount: selectedOrders.length, build: APP_BUILD });
+  showLoad(onlyNewItems ? "Bước 1/2: Kiểm tra tồn Q7 (chế độ mã thêm mới)..." : "Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
+  dbgSoanLine_('taoBangSoan.start', { ngay: ngay, ngayTo: range.to, selectedCount: selectedOrders.length, onlyNewItems: onlyNewItems, newAfterTime: newAfterTime, newBeforeTime: newBeforeTime, build: APP_BUILD });
 
   sh_ensureStockReady_().then(function(stockOk) {
     showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (đọc TON_Q7)..." : "Bước 2/2: Đang tạo bảng (rebuild TON_Q7 nếu thiếu)...");
@@ -1622,7 +1641,10 @@ function sh_taoBangSoanTuDonDaChon() {
       userRole: sessionUser.role || '',
       userStore: sessionUser.store || '',
       selectedOrders: selectedOrders,
-      forceStock: !stockOk
+      forceStock: !stockOk,
+      onlyNewItems: onlyNewItems,
+      newAfterTime: newAfterTime,
+      newBeforeTime: newBeforeTime
     };
     var postOpts = stockOk
       ? { allowDirectFallback: true, timeoutMs: 55000 }
@@ -1639,7 +1661,7 @@ function sh_taoBangSoanTuDonDaChon() {
     }
     dbgSoanLine_('taoBangSoan.done', { clientMs: _dbgClientMs, serverMs: res && res._debugTotalMs, run: res && res._debugRun, success: !!(res && res.success), stockReady: res && res.stockReady, stockSource: res && res.stockSource, stockStep: stockStep, build: APP_BUILD, steps: res && res._debugTimings });
     // #region agent log
-    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{success:!!(res&&res.success),stockReady:res&&res.stockReady,stockSource:res&&res.stockSource,q7Keys:stockStep&&stockStep.q7Keys,via:stockStep&&stockStep.via,serverMs:res&&res._debugTotalMs,clientMs:_dbgClientMs,run:res&&res._debugRun,missingItems:res&&res.missingItems,totalItems:res&&res.totalItems,dvtFromOrder:res&&res._debugDvtFromOrder,dvtCatalog:res&&res._debugDvtCatalog,dvtInferred:res&&res._debugDvtInferred,dvtEmpty:res&&res._debugDvtEmpty,dvtBackfill:res&&res._debugDvtBackfill,dvtSample:res&&res._debugDvtSample,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'DVT-C',runId:'dvt-catalog-v1'})}).catch(function(){});
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',location:'app.js:sh_taoBangSoanTuDonDaChon',message:'taoBangSoan done',data:{success:!!(res&&res.success),stockReady:res&&res.stockReady,stockSource:res&&res.stockSource,q7Keys:stockStep&&stockStep.q7Keys,via:stockStep&&stockStep.via,serverMs:res&&res._debugTotalMs,clientMs:_dbgClientMs,run:res&&res._debugRun,missingItems:res&&res.missingItems,totalItems:res&&res.totalItems,onlyNewItems:res&&res.onlyNewItems,newAfterLabel:res&&res.newAfterLabel,newBeforeLabel:res&&res.newBeforeLabel,skippedByTime:res&&res._debugSkippedByTime,includedNewRows:res&&res._debugIncludedNewRows,dvtEmpty:res&&res._debugDvtEmpty,build:APP_BUILD},timestamp:Date.now(),hypothesisId:'NEW-A',runId:'new-items-v1'})}).catch(function(){});
     // #endregion
     if (!res || !res.success) {
       alert("❌ Tạo bảng thất bại:\n" + ((res && (res.msg || res.error)) || "Không rõ lỗi") + "\n[Build FE: " + APP_BUILD + "]" + (res && res._debugRun ? (" [GAS: " + res._debugRun + "]") : ""));
@@ -1647,6 +1669,7 @@ function sh_taoBangSoanTuDonDaChon() {
     }
     if (res.stockReady) shStockWarmState.ready = true;
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
+      "- Chế độ: " + (res.onlyNewItems ? ("Mã thêm mới (" + (res.newAfterLabel || "") + (res.newBeforeLabel ? (" → " + res.newBeforeLabel) : "") + ")") : "Tổng hợp đầy đủ") + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +

@@ -420,6 +420,30 @@
               <button type="button" class="btn-submit btn-success" style="width:auto; padding:8px 14px; border-radius:10px; box-shadow:none;" onclick="sh_taoBangSoanTuDonDaChon()">Xuất bảng theo đơn đã chọn</button>
             </div>
           </div>
+          <div style="margin:0 0 10px; padding:10px 12px; border:1px dashed #93c5fd; border-radius:10px; background:#eff6ff;">
+            <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; color:#1e3a8a; cursor:pointer;">
+              <input type="checkbox" id="sh-only-new-items" onchange="sh_toggleOnlyNewItemsUi()" style="margin-top:2px;">
+              <span>
+                <b>Tổng hợp mã hàng thêm mới</b>
+                <span style="display:block; font-size:12px; color:#64748b; font-weight:400; margin-top:2px;">
+                  Dùng cho lần chốt 2 (vd. 10h): chỉ gom mã/dòng được thêm sau giờ chốt lần 1 (vd. 8h), không lấy lại toàn bộ đơn.
+                </span>
+              </span>
+            </label>
+            <div id="sh-only-new-items-opts" style="display:none; margin-top:10px;">
+              <div class="form-row" style="margin:0; gap:12px;">
+                <div class="form-group" style="margin:0; max-width:160px;">
+                  <label style="font-size:12px;">Sau giờ (chốt lần 1)</label>
+                  <input type="time" id="sh-new-after-time" value="08:00">
+                </div>
+                <div class="form-group" style="margin:0; max-width:160px;">
+                  <label style="font-size:12px;">Đến giờ (tuỳ chọn)</label>
+                  <input type="time" id="sh-new-before-time" value="10:00">
+                </div>
+              </div>
+              <div style="font-size:11px; color:#64748b; margin-top:6px;">Áp dụng theo ngày ở “Tạo bảng từ ngày”. Xóa “Đến giờ” nếu muốn lấy tới hiện tại.</div>
+            </div>
+          </div>
           <div style="max-height:260px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
             <table style="min-width:700px; margin:0;">
               <thead>
@@ -523,6 +547,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v22"></script>
+  <script src="app.js?v=20260802v23"></script>
 </body>
 </html>

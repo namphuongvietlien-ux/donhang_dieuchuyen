@@ -3617,6 +3617,27 @@ function parseDateInputYYYYMMDD(value) {
   return date;
 }
 
+/** Ghép ngày + "HH:mm" → Date (timezone script) */
+function combineDateAndTime_(dateObj, timeHHmm) {
+  if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj.getTime())) return null;
+  var raw = String(timeHHmm || "").trim();
+  var m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  var hh = Number(m[1]);
+  var mm = Number(m[2]);
+  if (isNaN(hh) || isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  var out = new Date(dateObj.getTime());
+  out.setHours(hh, mm, 0, 0);
+  return out;
+}
+
+function toMillisSafe_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
+  if (value === null || value === undefined || value === "") return NaN;
+  var d = new Date(value);
+  return isNaN(d.getTime()) ? NaN : d.getTime();
+}
+
 function getScriptTodayStart_() {
   var todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
   return parseDateInputYYYYMMDD(todayStr);
@@ -4099,7 +4120,16 @@ function taoBangSoanHangNgayMai(payload) {
     }
     _dbgSteps.push(entry);
   }
-  _dbgMark("start", { selectedCount: payload && payload.selectedOrders ? payload.selectedOrders.length : 0, algo: "ton-q7" });
+  var onlyNewItems = !!(payload && payload.onlyNewItems);
+  var newAfterTime = payload && payload.newAfterTime ? String(payload.newAfterTime).trim() : "08:00";
+  var newBeforeTime = payload && payload.newBeforeTime ? String(payload.newBeforeTime).trim() : "";
+  _dbgMark("start", {
+    selectedCount: payload && payload.selectedOrders ? payload.selectedOrders.length : 0,
+    algo: "ton-q7",
+    onlyNewItems: onlyNewItems,
+    newAfterTime: newAfterTime,
+    newBeforeTime: newBeforeTime
+  });
   // #endregion
 
   var ss = getSS();
@@ -4109,9 +4139,30 @@ function taoBangSoanHangNgayMai(payload) {
   var inputDate = parseDateInputYYYYMMDD(payload && payload.ngay ? payload.ngay : "");
   var baseDate = inputDate || getScriptTodayStart_() || new Date();
   baseDate.setHours(0, 0, 0, 0);
+  var endDateInput = parseDateInputYYYYMMDD(payload && payload.ngayTo ? payload.ngayTo : "");
+  var endDate = endDateInput || baseDate;
   var tomorrow = new Date(baseDate);
   tomorrow.setDate(tomorrow.getDate() + 1);
   var baseDateStr = Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+  // Cửa sổ mã thêm mới: sau giờ chốt lần 1 → đến giờ chốt lần 2
+  var newAfterCutoff = onlyNewItems ? combineDateAndTime_(baseDate, newAfterTime || "08:00") : null;
+  var newBeforeCutoff = (onlyNewItems && newBeforeTime) ? combineDateAndTime_(endDate, newBeforeTime) : null;
+  if (onlyNewItems && !newAfterCutoff) {
+    return {
+      success: false,
+      msg: "Giờ chốt lần 1 không hợp lệ. Ví dụ: 08:00",
+      _debugTimings: _dbgSteps,
+      _debugTotalMs: Date.now() - _dbgT0,
+      _debugRun: "new-items-v1"
+    };
+  }
+  var newAfterLabel = newAfterCutoff
+    ? Utilities.formatDate(newAfterCutoff, Session.getScriptTimeZone(), "dd/MM HH:mm")
+    : "";
+  var newBeforeLabel = newBeforeCutoff
+    ? Utilities.formatDate(newBeforeCutoff, Session.getScriptTimeZone(), "dd/MM HH:mm")
+    : "";
 
   var userRole = payload && payload.userRole ? payload.userRole : "";
   var userStore = payload && payload.userStore ? payload.userStore : "";
@@ -4177,6 +4228,8 @@ function taoBangSoanHangNgayMai(payload) {
   });
   // #endregion
   var historyDvtBackfill = []; // { sheetRow, dvt }
+  var skippedByTime = 0;
+  var includedNewRows = 0;
 
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
@@ -4195,11 +4248,28 @@ function taoBangSoanHangNgayMai(payload) {
     if ((!dvt || normalizeHeaderText(dvt) === "cai") && catalogLookup) {
       dvt = resolveDvtValue(catalogLookup, maHang, maVach, dvtRaw) || dvtRaw;
     }
+    var noteText = row[11] != null ? String(row[11]).trim() : "";
     var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
 
     if (!khoNhan) continue;
     if (status === "Đã hủy đơn" || status === "Đã hủy dòng") continue;
     if (soLuong <= 0) continue;
+
+    // Chế độ bổ sung: chỉ lấy dòng có Thời gian tạo trong cửa sổ sau lần chốt 1
+    // (mã thêm vào đơn cũ có timestamp mới; đơn mới sau 8h cũng được lấy)
+    if (onlyNewItems && newAfterCutoff) {
+      var createdMs = toMillisSafe_(row[0]);
+      var afterMs = newAfterCutoff.getTime();
+      var beforeMs = newBeforeCutoff ? newBeforeCutoff.getTime() : null;
+      var isAddedNote = noteText.indexOf("Thêm mới vào đơn") !== -1;
+      var inWindow = !isNaN(createdMs) && createdMs >= afterMs && (beforeMs === null || createdMs <= beforeMs);
+      // Nếu ghi chú "Thêm mới" nhưng thiếu timestamp hợp lệ → vẫn lấy khi đang lọc mã mới
+      if (!inWindow && !(isAddedNote && isNaN(createdMs))) {
+        skippedByTime++;
+        continue;
+      }
+      includedNewRows++;
+    }
 
     // Tách theo mã + ĐVT (cùng mã có thể có Thùng / Túi ...)
     var codeKey = (maHang ? maHang.toUpperCase() : "") || (maVach ? maVach.toUpperCase() : "");
@@ -4239,16 +4309,30 @@ function taoBangSoanHangNgayMai(payload) {
 
   var keys = Object.keys(itemMap);
   // #region agent log
-  _dbgMark("aggregateItems", { itemCount: keys.length, storeCount: storeList.length, orderCount: Object.keys(orderSeen).length });
+  _dbgMark("aggregateItems", {
+    itemCount: keys.length,
+    storeCount: storeList.length,
+    orderCount: Object.keys(orderSeen).length,
+    onlyNewItems: onlyNewItems,
+    skippedByTime: skippedByTime,
+    includedNewRows: includedNewRows,
+    newAfterLabel: newAfterLabel,
+    newBeforeLabel: newBeforeLabel
+  });
   // #endregion
   if (!keys.length) {
     return {
       success: false,
-      msg: "Không gom được mã hàng từ các đơn đã chọn.",
+      msg: onlyNewItems
+        ? ("Không có mã thêm mới trong khoảng " + newAfterLabel + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại") + ". Kiểm tra giờ chốt hoặc các đơn đã chọn.")
+        : "Không gom được mã hàng từ các đơn đã chọn.",
+      onlyNewItems: onlyNewItems,
+      newAfterLabel: newAfterLabel,
+      newBeforeLabel: newBeforeLabel,
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "fast-v10",
-      _debugInfo: { baseDateStr: baseDateStr, selectedList: Object.keys(selectedSet), scannedRows: historyPack.scannedRows || 0 }
+      _debugRun: "new-items-v1",
+      _debugInfo: { baseDateStr: baseDateStr, selectedList: Object.keys(selectedSet), scannedRows: historyPack.scannedRows || 0, skippedByTime: skippedByTime }
     };
   }
 
@@ -4274,9 +4358,12 @@ function taoBangSoanHangNgayMai(payload) {
   _dbgMark("stockIndex", { via: "TON_Q7", stockReady: stockReady, q7Keys: Object.keys(q7Map).length, forceStock: forceStock, itemCount: keys.length });
   // #endregion
 
-  var sheetName = "__TMP_SOAN_NGAY_MAI";
+  var sheetName = onlyNewItems ? "__TMP_SOAN_BO_SUNG" : "__TMP_SOAN_NGAY_MAI";
   var reportSheet = recreateTempSheetFast_(ss, sheetName);
-  var title = "BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy");
+  var title = onlyNewItems
+    ? ("BẢNG BỔ SUNG MÃ MỚI — giao " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy") +
+      " | sau " + newAfterLabel + (newBeforeLabel ? (" đến " + newBeforeLabel) : ""))
+    : ("BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy"));
   var headerRow = 5;
   var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
   for (var h = 0; h < storeList.length; h++) headers.push(formatShortStoreLabel(storeList[h]));
@@ -4344,10 +4431,17 @@ function taoBangSoanHangNgayMai(payload) {
   }
   var colCount = headers.length;
   var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length +
-    (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: TON_Q7") : " | Tồn: chưa có sheet TON_Q7 — Admin import lại file tồn");
+    (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: TON_Q7") : " | Tồn: chưa có sheet TON_Q7 — Admin import lại file tồn") +
+    (onlyNewItems ? (" | Lọc mã thêm mới: " + newAfterLabel + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại")) : "");
   var sheetBlock = [
     padRow_([title], colCount),
-    padRow_(["Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") + " | Gom theo mã | Stock từ " + TON_Q7_SHEET_NAME], colCount),
+    padRow_([
+      "Nguồn: đơn ngày " + Utilities.formatDate(baseDate, Session.getScriptTimeZone(), "dd/MM/yyyy") +
+      (endDate && endDate.getTime() !== baseDate.getTime()
+        ? (" → " + Utilities.formatDate(endDate, Session.getScriptTimeZone(), "dd/MM/yyyy"))
+        : "") +
+      " | Gom theo mã" + (onlyNewItems ? " thêm mới" : "") + " | Stock từ " + TON_Q7_SHEET_NAME
+    ], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
     padRow_(headers, colCount)
@@ -4388,16 +4482,21 @@ function taoBangSoanHangNgayMai(payload) {
     missingItems: missingLines,
     stockReady: stockReady,
     stockSource: TON_Q7_SHEET_NAME,
+    onlyNewItems: onlyNewItems,
+    newAfterLabel: newAfterLabel,
+    newBeforeLabel: newBeforeLabel,
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "dvt-catalog-v1",
+    _debugRun: onlyNewItems ? "new-items-v1" : "dvt-catalog-v1",
     _debugDvtFromOrder: _dbgDvtFromOrder,
     _debugDvtCatalog: _dbgDvtCatalog,
     _debugDvtInferred: _dbgDvtInferred,
     _debugDvtEmpty: _dbgDvtEmpty,
     _debugDvtSample: _dbgDvtSample,
-    _debugDvtBackfill: backfilled
+    _debugDvtBackfill: backfilled,
+    _debugSkippedByTime: skippedByTime,
+    _debugIncludedNewRows: includedNewRows
   };
 }
 
