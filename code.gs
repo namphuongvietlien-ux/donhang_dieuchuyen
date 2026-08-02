@@ -2320,122 +2320,154 @@ function storeMatchesFast_(rowStore, targetStore) {
 
 function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) {
   var t0 = Date.now();
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  if (!historySheet) return [];
-
-  var filterKhoNhan = normalizeStoreName(khoNhan || "");
-  var filterUserStore = normalizeStoreName(userStore || "");
-  var bounds = getNgayFilterBounds_(ngayYYYYMMDD);
-  var lastRow = historySheet.getLastRow();
-  if (lastRow < 2) return [];
-
-  var lastCol = Math.min(Math.max(historySheet.getLastColumn(), 13), 13);
-  var chunkSize = 500;
-  var maxScan = Math.min(bounds.maxScan || 4000, lastRow - 1);
-  var map = {};
+  var storeCalls = 0;
+  var filterKhoNhan = "";
+  var filterUserStore = "";
   var scanned = 0;
-  var endRow = lastRow;
-  var olderChunkStreak = 0;
-  var tz = Session.getScriptTimeZone();
-
-  while (endRow >= 2 && scanned < maxScan) {
-    var startRow = Math.max(2, endRow - chunkSize + 1);
-    if (scanned + (endRow - startRow + 1) > maxScan) {
-      startRow = Math.max(2, endRow - (maxScan - scanned) + 1);
-    }
-    var numRows = endRow - startRow + 1;
-    var body = historySheet.getRange(startRow, 1, numRows, lastCol).getValues();
-    scanned += numRows;
-
-    var chunkHasInRange = false;
-    var chunkAllOlder = bounds.startMs != null;
-    for (var i = 0; i < body.length; i++) {
-      var row = body[i];
-      if (!row) continue;
-      var rowSoPhieu = row[1] ? String(row[1]).trim() : "";
-      if (!rowSoPhieu) continue;
-
-      var rowNgay = row[0];
-      var rowDateStr = "";
-      var rowMs = null;
-      if (rowNgay instanceof Date && !isNaN(rowNgay.getTime())) {
-        rowMs = rowNgay.getTime();
-        rowDateStr = Utilities.formatDate(rowNgay, tz, "yyyy-MM-dd");
-      } else {
-        rowDateStr = formatSheetDateYYYYMMDD(rowNgay);
-        if (rowDateStr) {
-          var parsed = parseDateInputYYYYMMDD(rowDateStr);
-          if (parsed) rowMs = parsed.getTime();
-        }
-      }
-
-      if (bounds.exactDate) {
-        if (rowDateStr !== bounds.exactDate) {
-          if (rowMs != null && rowMs < bounds.startMs) { /* older */ }
-          else chunkAllOlder = false;
-          continue;
-        }
-        chunkHasInRange = true;
-        chunkAllOlder = false;
-      } else if (bounds.startMs != null) {
-        if (rowMs == null || rowMs < bounds.startMs || rowMs > bounds.endMs) {
-          if (!(rowMs != null && rowMs < bounds.startMs)) chunkAllOlder = false;
-          continue;
-        }
-        chunkHasInRange = true;
-        chunkAllOlder = false;
-      } else {
-        chunkAllOlder = false;
-        if (!matchesNgayFilter(rowNgay, ngayYYYYMMDD)) continue;
-      }
-
-      var rowKhoXuat = row[2] ? String(row[2]).trim() : "";
-      var rowKhoNhan = row[3] ? String(row[3]).trim() : "";
-      if (filterKhoNhan && filterKhoNhan !== "all" && !storeMatchesFast_(rowKhoNhan, filterKhoNhan)) continue;
-      if (userRole !== "Admin") {
-        if (!storeMatchesFast_(rowKhoXuat, filterUserStore) && !storeMatchesFast_(rowKhoNhan, filterUserStore)) continue;
-      }
-
-      var slThucTe = row[8];
-      var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
-      var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
-      var thoiGian = rowMs != null ? rowMs : "";
-
-      if (!map[rowSoPhieu]) {
-        map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
-      } else {
-        if (displayStatus === "Đã hủy") map[rowSoPhieu].trangThai = "Đã hủy";
-        else if (displayStatus === "Đã xác nhận" && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xác nhận";
-        else if (displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã hủy" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
-        if (thoiGian && (!map[rowSoPhieu].thoiGian || thoiGian > map[rowSoPhieu].thoiGian)) map[rowSoPhieu].thoiGian = thoiGian;
-      }
-    }
-
-    if (bounds.startMs != null) {
-      if (chunkHasInRange) olderChunkStreak = 0;
-      else if (chunkAllOlder) {
-        olderChunkStreak++;
-        if (olderChunkStreak >= 2) break;
-      } else {
-        olderChunkStreak = 0;
-      }
-    }
-
-    endRow = startRow - 1;
-  }
-
-  var res = [];
-  for (var key in map) res.push(map[key]);
-  res.sort(function(a, b) { return (b.thoiGian || 0) - (a.thoiGian || 0); });
-  // Trả mảng thuần để tương thích FE cũ (res.forEach). Meta debug gắn kèm (JSON có thể bỏ qua).
+  var boundsFilter = "";
   try {
-    res._debugTotalMs = Date.now() - t0;
-    res._debugScanned = scanned;
-    res._debugFilter = bounds.filter;
-    res._debugRun = "ql-fast-v2";
-  } catch (metaErr) {}
-  return res;
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { data: [], _debugTotalMs: Date.now() - t0, _debugRun: "ql-fast-v3", _debugRole: String(userRole || "") };
+    }
+
+    filterKhoNhan = normalizeStoreName(khoNhan || "");
+    filterUserStore = normalizeStoreName(userStore || "");
+    var bounds = getNgayFilterBounds_(ngayYYYYMMDD);
+    boundsFilter = bounds.filter || "";
+    var lastRow = historySheet.getLastRow();
+    if (lastRow < 2) {
+      return { data: [], _debugTotalMs: Date.now() - t0, _debugRun: "ql-fast-v3", _debugRole: String(userRole || "") };
+    }
+
+    function matchStoreCounted_(rowStore, targetStore) {
+      storeCalls++;
+      return storeMatchesFast_(rowStore, targetStore);
+    }
+
+    var lastCol = Math.min(Math.max(historySheet.getLastColumn(), 13), 13);
+    var chunkSize = 500;
+    var maxScan = Math.min(bounds.maxScan || 4000, lastRow - 1);
+    var map = {};
+    var endRow = lastRow;
+    var olderChunkStreak = 0;
+    var tz = Session.getScriptTimeZone();
+
+    while (endRow >= 2 && scanned < maxScan) {
+      var startRow = Math.max(2, endRow - chunkSize + 1);
+      if (scanned + (endRow - startRow + 1) > maxScan) {
+        startRow = Math.max(2, endRow - (maxScan - scanned) + 1);
+      }
+      var numRows = endRow - startRow + 1;
+      var body = historySheet.getRange(startRow, 1, numRows, lastCol).getValues();
+      scanned += numRows;
+
+      var chunkHasInRange = false;
+      var chunkAllOlder = bounds.startMs != null;
+      for (var i = 0; i < body.length; i++) {
+        var row = body[i];
+        if (!row) continue;
+        var rowSoPhieu = row[1] ? String(row[1]).trim() : "";
+        if (!rowSoPhieu) continue;
+
+        var rowNgay = row[0];
+        var rowDateStr = "";
+        var rowMs = null;
+        if (rowNgay instanceof Date && !isNaN(rowNgay.getTime())) {
+          rowMs = rowNgay.getTime();
+          rowDateStr = Utilities.formatDate(rowNgay, tz, "yyyy-MM-dd");
+        } else {
+          rowDateStr = formatSheetDateYYYYMMDD(rowNgay);
+          if (rowDateStr) {
+            var parsed = parseDateInputYYYYMMDD(rowDateStr);
+            if (parsed) rowMs = parsed.getTime();
+          }
+        }
+
+        if (bounds.exactDate) {
+          if (rowDateStr !== bounds.exactDate) {
+            if (rowMs != null && rowMs < bounds.startMs) { /* older */ }
+            else chunkAllOlder = false;
+            continue;
+          }
+          chunkHasInRange = true;
+          chunkAllOlder = false;
+        } else if (bounds.startMs != null) {
+          if (rowMs == null || rowMs < bounds.startMs || rowMs > bounds.endMs) {
+            if (!(rowMs != null && rowMs < bounds.startMs)) chunkAllOlder = false;
+            continue;
+          }
+          chunkHasInRange = true;
+          chunkAllOlder = false;
+        } else {
+          chunkAllOlder = false;
+          if (!matchesNgayFilter(rowNgay, ngayYYYYMMDD)) continue;
+        }
+
+        var rowKhoXuat = row[2] ? String(row[2]).trim() : "";
+        var rowKhoNhan = row[3] ? String(row[3]).trim() : "";
+        if (filterKhoNhan && filterKhoNhan !== "all" && !matchStoreCounted_(rowKhoNhan, filterKhoNhan)) continue;
+        if (userRole !== "Admin") {
+          if (!matchStoreCounted_(rowKhoXuat, filterUserStore) && !matchStoreCounted_(rowKhoNhan, filterUserStore)) continue;
+        }
+
+        var slThucTe = row[8];
+        var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
+        var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe);
+        var thoiGian = rowMs != null ? rowMs : "";
+
+        if (!map[rowSoPhieu]) {
+          map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
+        } else {
+          if (displayStatus === "Đã hủy") map[rowSoPhieu].trangThai = "Đã hủy";
+          else if (displayStatus === "Đã xác nhận" && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xác nhận";
+          else if (displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã hủy" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
+          if (thoiGian && (!map[rowSoPhieu].thoiGian || thoiGian > map[rowSoPhieu].thoiGian)) map[rowSoPhieu].thoiGian = thoiGian;
+        }
+      }
+
+      if (bounds.startMs != null) {
+        if (chunkHasInRange) olderChunkStreak = 0;
+        else if (chunkAllOlder) {
+          olderChunkStreak++;
+          if (olderChunkStreak >= 2) break;
+        } else {
+          olderChunkStreak = 0;
+        }
+      }
+
+      endRow = startRow - 1;
+    }
+
+    var res = [];
+    for (var key in map) res.push(map[key]);
+    res.sort(function(a, b) { return (b.thoiGian || 0) - (a.thoiGian || 0); });
+    // Object wrapper giữ meta debug qua JSON (array custom props bị mất khi stringify).
+    return {
+      data: res,
+      _debugTotalMs: Date.now() - t0,
+      _debugScanned: scanned,
+      _debugFilter: boundsFilter,
+      _debugStoreCalls: storeCalls,
+      _debugRole: String(userRole || ""),
+      _debugKhoNhan: filterKhoNhan,
+      _debugUserStore: filterUserStore,
+      _debugRun: "ql-fast-v3"
+    };
+  } catch (listErr) {
+    return {
+      data: [],
+      error: String(listErr && listErr.message ? listErr.message : listErr),
+      _debugTotalMs: Date.now() - t0,
+      _debugScanned: scanned,
+      _debugStoreCalls: storeCalls,
+      _debugRole: String(userRole || ""),
+      _debugKhoNhan: filterKhoNhan,
+      _debugUserStore: filterUserStore,
+      _debugRun: "ql-fast-v3-err"
+    };
+  }
 }
 
 function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {

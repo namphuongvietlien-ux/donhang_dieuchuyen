@@ -100,9 +100,29 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v27';
+var APP_BUILD = '2026-08-02-v28';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
+
+// #region agent log
+function dbgConfirm_(hypothesisId, location, message, data) {
+  try {
+    fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '4a6e3c' },
+      body: JSON.stringify({
+        sessionId: '4a6e3c',
+        runId: 'confirm-pre',
+        hypothesisId: hypothesisId || 'A',
+        location: location || 'app.js',
+        message: message || '',
+        data: data || {},
+        timestamp: Date.now()
+      })
+    }).catch(function() {});
+  } catch (e) {}
+}
+// #endregion
 (function() {
   var el = document.getElementById('app-build-tag');
   if (el) el.textContent = 'build: ' + APP_BUILD;
@@ -980,23 +1000,85 @@ function confirm_loadPhieu(selectedSoPhieu) {
   selectEl.innerHTML = '<option value="">⏳ Đang tải...</option>';
   var confirmStoreFilter = sessionUser.role === 'Admin' ? 'all' : (sessionUser.store || '');
   var ngay = getNgayFilterParam('confirm-ngay');
+  var t0 = Date.now();
+  // #region agent log
+  dbgConfirm_('C', 'confirm_loadPhieu:start', 'confirm list request', {
+    role: sessionUser.role || '',
+    store: sessionUser.store || '',
+    khoNhan: confirmStoreFilter,
+    ngay: ngay || '',
+    build: APP_BUILD
+  });
+  // #endregion
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: confirmStoreFilter, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
-    var parsed = unwrapListResponse_(res);
-    var confirmableOrders = parsed.rows.filter(function(r) { return r.trangThai === "Đã soạn"; });
-    var html = '<option value="">-- Chọn Phiếu (' + confirmableOrders.length + ') --</option>';
-    confirmableOrders.forEach(function(r) {
-      var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
-      html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
-    });
-    selectEl.innerHTML = html;
-    if (selectedSoPhieu) {
-      var found = confirmableOrders.some(function(item) { return item.soPhieu === selectedSoPhieu; });
-      if (found) {
-        selectEl.value = selectedSoPhieu;
-        confirm_onSelectPhieu();
+    try {
+      // #region agent log
+      dbgConfirm_('A', 'confirm_loadPhieu:response', 'raw response shape', {
+        ms: Date.now() - t0,
+        isArray: Array.isArray(res),
+        type: typeof res,
+        keys: res && typeof res === 'object' ? Object.keys(res).slice(0, 20) : [],
+        error: res && res.error ? String(res.error).slice(0, 300) : '',
+        success: res && res.success,
+        debugRun: res && res._debugRun,
+        debugMs: res && res._debugTotalMs,
+        debugScanned: res && res._debugScanned,
+        debugStoreCalls: res && res._debugStoreCalls,
+        debugRole: res && res._debugRole,
+        debugKhoNhan: res && res._debugKhoNhan,
+        debugUserStore: res && res._debugUserStore,
+        rowLen: Array.isArray(res) ? res.length : (res && Array.isArray(res.data) ? res.data.length : -1)
+      });
+      // #endregion
+      var parsed = unwrapListResponse_(res);
+      var rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      if (res && res.error) {
+        // #region agent log
+        dbgConfirm_('B', 'confirm_loadPhieu:gas-error', 'GAS returned error field', { error: String(res.error).slice(0, 400), ms: Date.now() - t0 });
+        // #endregion
       }
+      var confirmableOrders = rows.filter(function(r) { return r && r.trangThai === "Đã soạn"; });
+      // #region agent log
+      dbgConfirm_('D', 'confirm_loadPhieu:parsed', 'parsed confirmable', {
+        totalRows: rows.length,
+        confirmable: confirmableOrders.length,
+        sampleStatus: rows.slice(0, 5).map(function(r) { return r && r.trangThai; })
+      });
+      // #endregion
+      var html = '<option value="">-- Chọn Phiếu (' + confirmableOrders.length + ') --</option>';
+      confirmableOrders.forEach(function(r) {
+        var shortName = storeMap[r.khoNhan] || storeMap[r.khoXuat] || r.khoNhan || r.khoXuat || '';
+        html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
+      });
+      selectEl.innerHTML = html;
+      if (selectedSoPhieu) {
+        var found = confirmableOrders.some(function(item) { return item.soPhieu === selectedSoPhieu; });
+        if (found) {
+          selectEl.value = selectedSoPhieu;
+          confirm_onSelectPhieu();
+        }
+      }
+    } catch (parseErr) {
+      // #region agent log
+      dbgConfirm_('D', 'confirm_loadPhieu:js-error', 'FE runtime after response', {
+        name: parseErr && parseErr.name,
+        message: parseErr && parseErr.message ? String(parseErr.message).slice(0, 400) : '',
+        ms: Date.now() - t0
+      });
+      // #endregion
+      selectEl.innerHTML = '<option value="">-- Lỗi tải --</option>';
+      alert('Lỗi: ' + (parseErr && parseErr.message ? parseErr.message : parseErr));
     }
   }).catch(function(err){
+    // #region agent log
+    dbgConfirm_('B', 'confirm_loadPhieu:catch', 'API/network/timeout', {
+      name: err && err.name,
+      message: err && err.message ? String(err.message).slice(0, 500) : '',
+      ms: Date.now() - t0,
+      role: sessionUser.role || '',
+      store: sessionUser.store || ''
+    });
+    // #endregion
     selectEl.innerHTML = '<option value="">-- Lỗi tải --</option>';
     alert('Lỗi: '+err.message);
   });
