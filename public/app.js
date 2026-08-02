@@ -1047,7 +1047,7 @@ function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
 
   var htmlStr = '<div class="title">Số: ' + soPhieu + '</div><div class="meta"><b>Kho xuất:</b> ' + khoXuat + '<br><b>Kho nhận:</b> ' + khoNhan + '</div>';
   htmlStr += '<table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Số lượng (Soạn)</th><th class="note-cell"></th></tr></thead><tbody>';
-  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td class="code-cell">'+ ((it.maVach || '') + (it.maHang ? ' / ' + it.maHang : '')) +'</td><td>'+it.tenHang+'</td><td>'+it.dvt+'</td><td class="qty-cell">'+it.sl+'</td><td class="note-cell"></td></tr>'; }});
+  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td class="code-cell">'+ ((it.maVach || '') + (it.maHang ? ' / ' + it.maHang : '')) +'</td><td>'+it.tenHang+'</td><td>'+escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.dvt))+'</td><td class="qty-cell">'+it.sl+'</td><td class="note-cell"></td></tr>'; }});
   htmlStr += '</tbody></table><div style="display:flex; justify-content:space-between; margin-top:40px; text-align:center;"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div>';
 
   var iframe = document.createElement('iframe');
@@ -1991,7 +1991,7 @@ function sh_chonDonMobile() {
       html += '<div class="item-card" style="' + cardStyle + '" data-stock="' + (stockDisplay === "" || isNaN(stockDisplay) ? '' : stockDisplay) + '" data-slgoc="' + (Number(it.slGoc) || 0) + '">' +
         '<b>' + escapeHtml(it.tenHang) + '</b><br>' +
         '<small><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b> | Mã hàng hóa: ' + escapeHtml(it.maHang || '') +
-        ' | ĐVT: ' + escapeHtml(it.dvt) + ' | Tồn hiện tại: ' + stockLabel + '</small>' +
+        ' | ĐVT: ' + escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.dvt)) + ' | Tồn hiện tại: ' + stockLabel + '</small>' +
         warnHtml +
         '<div class="action-row"><div>SL Yêu Cầu: <b>' + it.slGoc + '</b>' + prevPackedNote + '<br>SL Soạn: ' +
         '<input type="number" class="sl-thuc-te" data-row="' + it.rowIndex + '" value="' + packQty + '" oninput="sh_onPackQtyInput(this)">' +
