@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v26';
+var APP_BUILD = '2026-08-02-v27';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 console.warn('[donhang] build', APP_BUILD);
 (function() {
@@ -1743,13 +1743,20 @@ function sh_taoBangSoanTuDonDaChon() {
     }
     if (res.stockReady) shStockWarmState.ready = true;
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
-      "- Chế độ: " + (res.onlyNewItems ? ("Mã thêm mới (" + (res.newAfterLabel || "") + (res.newBeforeLabel ? (" → " + res.newBeforeLabel) : "") + ")") : "Tổng hợp đầy đủ") + "\n" +
+      "- Chế độ: " + (res.onlyNewItems
+        ? ("Chỉ mã bổ sung / Thêm mới vào đơn (" + (res.newAfterLabel || "") + (res.newBeforeLabel ? (" → " + res.newBeforeLabel) : "") + ")")
+        : "Tổng hợp đầy đủ") + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
       "- Tồn kho: " + (res.stockReady ? ("CÓ (" + (res.stockSource || "TON_Q7") + ")") : "KHÔNG — Admin import lại file tồn để tạo sheet TON_Q7");
+    if (res.onlyNewItems) {
+      msg += "\n- Dòng bổ sung lấy: " + (res._debugIncludedNewRows != null ? res._debugIncludedNewRows : "?");
+      msg += "\n- Bỏ qua (không phải bổ sung): " + (res._debugSkippedNotSupplement != null ? res._debugSkippedNotSupplement : "?");
+      if (res._debugSkippedByTime) msg += "\n- Bỏ qua (ngoài khung giờ): " + res._debugSkippedByTime;
+    }
     if (res._debugTotalMs) msg += "\n(Server tạo bảng: " + Math.round(res._debugTotalMs / 1000) + "s)";
-    msg += "\n(Tổng chờ: " + Math.round(clientMs / 1000) + "s)\n[" + APP_BUILD + "]";
+    msg += "\n(Tổng chờ: " + Math.round(clientMs / 1000) + "s)\n[" + APP_BUILD + (res._debugRun ? (" / " + res._debugRun) : "") + "]";
     alert(msg);
     if (res.url) window.open(res.url, '_blank', 'noopener,noreferrer');
   }).catch(function(err) {

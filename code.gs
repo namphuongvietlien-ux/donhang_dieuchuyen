@@ -4253,6 +4253,7 @@ function taoBangSoanHangNgayMai(payload) {
   // #endregion
   var historyDvtBackfill = []; // { sheetRow, dvt }
   var skippedByTime = 0;
+  var skippedNotSupplement = 0;
   var includedNewRows = 0;
 
   for (var i = 1; i < data.length; i++) {
@@ -4279,18 +4280,25 @@ function taoBangSoanHangNgayMai(payload) {
     if (status === "Đã hủy đơn" || status === "Đã hủy dòng") continue;
     if (soLuong <= 0) continue;
 
-    // Chế độ bổ sung: chỉ lấy dòng có Thời gian tạo trong cửa sổ sau lần chốt 1
-    // (mã thêm vào đơn cũ có timestamp mới; đơn mới sau 8h cũng được lấy)
-    if (onlyNewItems && newAfterCutoff) {
-      var createdMs = toMillisSafe_(row[0]);
-      var afterMs = newAfterCutoff.getTime();
-      var beforeMs = newBeforeCutoff ? newBeforeCutoff.getTime() : null;
-      var isAddedNote = noteText.indexOf("Thêm mới vào đơn") !== -1;
-      var inWindow = !isNaN(createdMs) && createdMs >= afterMs && (beforeMs === null || createdMs <= beforeMs);
-      // Nếu ghi chú "Thêm mới" nhưng thiếu timestamp hợp lệ → vẫn lấy khi đang lọc mã mới
-      if (!inWindow && !(isAddedNote && isNaN(createdMs))) {
-        skippedByTime++;
+    // Chế độ bổ sung: CHỈ lấy dòng ghi chú "Thêm mới vào đơn" (mã bổ sung vào đơn cũ).
+    // Không lấy cả đơn/dòng đặt mới chỉ vì tạo sau 8h.
+    if (onlyNewItems) {
+      var isSupplementLine = noteText.indexOf("Thêm mới vào đơn") !== -1;
+      if (!isSupplementLine) {
+        skippedNotSupplement++;
         continue;
+      }
+      if (newAfterCutoff) {
+        var createdMs = toMillisSafe_(row[0]);
+        var afterMs = newAfterCutoff.getTime();
+        var beforeMs = newBeforeCutoff ? newBeforeCutoff.getTime() : null;
+        if (!isNaN(createdMs)) {
+          var inWindow = createdMs >= afterMs && (beforeMs === null || createdMs <= beforeMs);
+          if (!inWindow) {
+            skippedByTime++;
+            continue;
+          }
+        }
       }
       includedNewRows++;
     }
@@ -4339,6 +4347,7 @@ function taoBangSoanHangNgayMai(payload) {
     orderCount: Object.keys(orderSeen).length,
     onlyNewItems: onlyNewItems,
     skippedByTime: skippedByTime,
+    skippedNotSupplement: skippedNotSupplement,
     includedNewRows: includedNewRows,
     newAfterLabel: newAfterLabel,
     newBeforeLabel: newBeforeLabel
@@ -4348,15 +4357,25 @@ function taoBangSoanHangNgayMai(payload) {
     return {
       success: false,
       msg: onlyNewItems
-        ? ("Không có mã thêm mới trong khoảng " + newAfterLabel + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại") + ". Kiểm tra giờ chốt hoặc các đơn đã chọn.")
+        ? ("Không có mã bổ sung (ghi chú \"Thêm mới vào đơn\") trong khoảng " +
+          (newAfterLabel || "?") + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại") +
+          ".\nĐã bỏ qua " + skippedNotSupplement + " dòng không phải bổ sung" +
+          (skippedByTime ? (", " + skippedByTime + " dòng ngoài khung giờ") : "") + ".")
         : "Không gom được mã hàng từ các đơn đã chọn.",
       onlyNewItems: onlyNewItems,
       newAfterLabel: newAfterLabel,
       newBeforeLabel: newBeforeLabel,
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "new-items-v1",
-      _debugInfo: { baseDateStr: baseDateStr, selectedList: Object.keys(selectedSet), scannedRows: historyPack.scannedRows || 0, skippedByTime: skippedByTime }
+      _debugRun: "new-items-v2",
+      _debugInfo: {
+        baseDateStr: baseDateStr,
+        selectedList: Object.keys(selectedSet),
+        scannedRows: historyPack.scannedRows || 0,
+        skippedByTime: skippedByTime,
+        skippedNotSupplement: skippedNotSupplement,
+        includedNewRows: includedNewRows
+      }
     };
   }
 
@@ -4385,8 +4404,9 @@ function taoBangSoanHangNgayMai(payload) {
   var sheetName = onlyNewItems ? "__TMP_SOAN_BO_SUNG" : "__TMP_SOAN_NGAY_MAI";
   var reportSheet = recreateTempSheetFast_(ss, sheetName);
   var title = onlyNewItems
-    ? ("BẢNG BỔ SUNG MÃ MỚI — giao " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy") +
-      " | sau " + newAfterLabel + (newBeforeLabel ? (" đến " + newBeforeLabel) : ""))
+    ? ("BẢNG BỔ SUNG MÃ MỚI (chỉ dòng \"Thêm mới vào đơn\") — giao " +
+      Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy") +
+      " | " + newAfterLabel + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại"))
     : ("BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + Utilities.formatDate(tomorrow, Session.getScriptTimeZone(), "dd/MM/yyyy"));
   var headerRow = 5;
   var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
@@ -4456,7 +4476,9 @@ function taoBangSoanHangNgayMai(payload) {
   var colCount = headers.length;
   var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length +
     (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: TON_Q7") : " | Tồn: chưa có sheet TON_Q7 — Admin import lại file tồn") +
-    (onlyNewItems ? (" | Lọc mã thêm mới: " + newAfterLabel + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại")) : "");
+    (onlyNewItems
+      ? (" | Chỉ mã bổ sung: " + includedNewRows + " dòng | " + newAfterLabel + (newBeforeLabel ? (" → " + newBeforeLabel) : " → hiện tại"))
+      : "");
   var sheetBlock = [
     padRow_([title], colCount),
     padRow_([
@@ -4464,7 +4486,7 @@ function taoBangSoanHangNgayMai(payload) {
       (endDate && endDate.getTime() !== baseDate.getTime()
         ? (" → " + Utilities.formatDate(endDate, Session.getScriptTimeZone(), "dd/MM/yyyy"))
         : "") +
-      " | Gom theo mã" + (onlyNewItems ? " thêm mới" : "") + " | Stock từ " + TON_Q7_SHEET_NAME
+      " | Gom theo mã" + (onlyNewItems ? " bổ sung (Thêm mới vào đơn)" : "") + " | Stock từ " + TON_Q7_SHEET_NAME
     ], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
@@ -4512,7 +4534,7 @@ function taoBangSoanHangNgayMai(payload) {
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: onlyNewItems ? "new-items-v1" : "dvt-catalog-v1",
+    _debugRun: onlyNewItems ? "new-items-v2" : "dvt-catalog-v1",
     _debugDvtFromOrder: _dbgDvtFromOrder,
     _debugDvtCatalog: _dbgDvtCatalog,
     _debugDvtInferred: _dbgDvtInferred,
@@ -4520,6 +4542,7 @@ function taoBangSoanHangNgayMai(payload) {
     _debugDvtSample: _dbgDvtSample,
     _debugDvtBackfill: backfilled,
     _debugSkippedByTime: skippedByTime,
+    _debugSkippedNotSupplement: skippedNotSupplement,
     _debugIncludedNewRows: includedNewRows
   };
 }
