@@ -3302,11 +3302,14 @@ function xacNhanNhanHang(payload) {
     var confCheck = confirmations[c];
     var rowCheck = Number(confCheck.row);
     if (!rowCheck || rowCheck < 2) continue;
-    var checkValues = historySheet.getRange(rowCheck, 1, 1, 13).getValues()[0];
+    // Đọc đủ tới cột 16 (SL Giao/Soạn) — không chỉ cột 9
+    var checkValues = historySheet.getRange(rowCheck, 1, 1, 16).getValues()[0];
     var rowSoPhieu = checkValues[1] ? String(checkValues[1]).trim() : "";
     var rowStatus = checkValues[12] ? String(checkValues[12]).trim() : "Mới";
-    var hasPackedQty = checkValues[8] !== "" && checkValues[8] !== null && checkValues[8] !== undefined;
-    if (!rowSoPhieu || rowSoPhieu.toLowerCase() !== String(payload.soPhieu || "").trim().toLowerCase()) {
+    var hasCol9 = checkValues[8] !== "" && checkValues[8] !== null && checkValues[8] !== undefined;
+    var hasCol16 = checkValues[15] !== "" && checkValues[15] !== null && checkValues[15] !== undefined;
+    var hasPackedQty = hasCol9 || hasCol16;
+    if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, payload.soPhieu || "")) {
       invalidRows.push(rowCheck + " (sai số phiếu)");
       continue;
     }
@@ -3318,6 +3321,7 @@ function xacNhanNhanHang(payload) {
       invalidRows.push(rowCheck + " (đã xác nhận)");
       continue;
     }
+    // Đã soạn nếu: status Đã soạn hàng, hoặc đã có SL ở cột 9/16
     if (!hasPackedQty && rowStatus !== "Đã soạn hàng") {
       invalidRows.push(rowCheck + " (chưa soạn)");
     }

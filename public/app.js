@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v43';
+var APP_BUILD = '2026-08-02-v44';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -1264,6 +1264,16 @@ function confirm_loadPhieu(selectedSoPhieu) {
   });
 }
 
+/** SL hiển thị/điền sẵn ở tab Xác nhận = SL soạn/giao (không dùng SL đặt) */
+function confirm_resolvePackedQty_(r) {
+  if (!r) return 0;
+  var fromSoan = ql_getSlSoan_(r);
+  if (fromSoan !== "") return Number(fromSoan) || 0;
+  // Fallback cũ: trước khi có cột 16, SL soạn nằm ở slThucTe
+  if (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") return Number(r.slThucTe) || 0;
+  return Number(r.slGoc) || 0;
+}
+
 function confirm_onSelectPhieu() {
   var val = document.getElementById("confirm-phieu").value;
   if (!val) { document.getElementById("confirm-view").style.display = "none"; return; }
@@ -1279,11 +1289,32 @@ function confirm_onSelectPhieu() {
     document.getElementById("confirm-meta").innerText = "Đã tải " + rows.length + " dòng để xác nhận." + (serverMs ? (" (" + Math.round(serverMs/1000) + "s)") : "");
     var tbody = document.getElementById("confirm-tbody");
     tbody.innerHTML = "";
+    var qtyDebugSample = [];
     rows.filter(function(r){ return r.trangThai !== "Đã hủy dòng" && r.trangThai !== "Đã hủy đơn"; }).forEach(function(r, idx) {
-      var packedQty = (r.slThucTe !== undefined && r.slThucTe !== null && r.slThucTe !== "") ? Number(r.slThucTe) : Number(r.slGoc || 0);
+      // Ưu tiên slSoan (cột SL Giao/Soạn) — không fallback SL đặt khi đã có số soạn
+      var packedQty = confirm_resolvePackedQty_(r);
       var inputValue = packedQty;
-      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td>' + (r.dvt || 'Cái') + '</td><td style="font-weight:700;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
+      if (qtyDebugSample.length < 5) {
+        qtyDebugSample.push({
+          maHang: r.maHang,
+          slGoc: r.slGoc,
+          slSoan: r.slSoan,
+          slThucTe: r.slThucTe,
+          packedQty: packedQty,
+          trangThai: r.trangThai
+        });
+      }
+      tbody.insertAdjacentHTML('beforeend', '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small></td><td>' + (r.dvt || 'Cái') + '</td><td style="font-weight:700;color:#c2410c;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input same" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + packedQty + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"></td></tr>');
     });
+    // #region agent log
+    dbgConfirm_('QTY', 'confirm_onSelectPhieu', 'confirm qty source post-fix', {
+      runId: 'confirm-qty-fix',
+      soPhieu: val,
+      rows: rows.length,
+      sample: qtyDebugSample,
+      build: APP_BUILD
+    });
+    // #endregion
     viewEl.style.display = "block";
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
