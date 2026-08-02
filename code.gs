@@ -3540,16 +3540,47 @@ function getChiTietDonHangMobile(soPhieu) {
   var ss = getSS();
   var catalogLookup = getCatalogLookup(ss);
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  var data = historySheet.getDataRange().getValues();
+  if (!historySheet || !soPhieu) return [];
+  ensureHistoryStatusColumn(historySheet);
+  var lastRow = historySheet.getLastRow();
+  var lastCol = Math.max(historySheet.getLastColumn(), 16);
+  if (lastRow < 2) return [];
+  var data = historySheet.getRange(1, 1, lastRow, lastCol).getValues();
   var items = [];
   var khoXuat = "";
+  var target = String(soPhieu).trim().toLowerCase();
   for (var i = 1; i < data.length; i++) {
-    if (data[i][1] && data[i][1].toString().trim().toLowerCase() === soPhieu.toLowerCase()) {
-      if (!khoXuat && data[i][2]) khoXuat = String(data[i][2]).trim();
-      var slGoc = Number(data[i][7]) || 0;
-      var slThucTe = (data[i][8] !== "" && data[i][8] !== undefined) ? Number(data[i][8]) : slGoc;
-      items.push({ rowIndex: i + 1, maHang: data[i][4], maVach: data[i][5], tenHang: data[i][6], dvt: resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]), slGoc: slGoc, slThucTe: slThucTe, anhXacNhan: (data[i][10]||""), nguoiSoanHang: data[i][13] || "" });
+    if (!data[i][1] || String(data[i][1]).trim().toLowerCase() !== target) continue;
+    if (!khoXuat && data[i][2]) khoXuat = String(data[i][2]).trim();
+    var slGoc = Number(data[i][7]) || 0;
+    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
+    var isReceived = rowStatus === "Đã xác nhận nhận hàng";
+    var hasActualQty = data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null;
+    // Cột 16 = SL đã soạn; cột 9 = thực nhận (sau xác nhận) hoặc SL soạn (dữ liệu cũ)
+    var rawSlGiao = data[i][15];
+    var hasSlGiao = rawSlGiao !== "" && rawSlGiao !== null && rawSlGiao !== undefined;
+    var slSoan = "";
+    if (hasSlGiao) {
+      slSoan = Number(rawSlGiao) || 0;
+    } else if (hasActualQty && !isReceived) {
+      slSoan = Number(data[i][8]) || 0;
     }
+    // Input soạn hàng: ưu tiên SL đã soạn trước đó, không fallback nhầm sang SL đặt khi đã có lần soạn
+    var packInputQty = slSoan !== "" ? Number(slSoan) : (hasActualQty && !isReceived ? Number(data[i][8]) : slGoc);
+    var slThucTe = isReceived && hasActualQty ? Number(data[i][8]) : packInputQty;
+    items.push({
+      rowIndex: i + 1,
+      maHang: data[i][4],
+      maVach: data[i][5],
+      tenHang: data[i][6],
+      dvt: resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]),
+      slGoc: slGoc,
+      slSoan: slSoan,
+      slThucTe: slThucTe,
+      trangThai: rowStatus,
+      anhXacNhan: (data[i][10] || ""),
+      nguoiSoanHang: data[i][13] || ""
+    });
   }
   var tonKhoMap = getStockMapForStore(ss, khoXuat);
   for (var j = 0; j < items.length; j++) {
@@ -3578,6 +3609,7 @@ function luuSoSoanHangVaAnh(payload) {
         rowMap[updates[ui].row] = updates[ui];
       }
       var blockHeight = maxRow - minRow + 1;
+      // getRange(row, column, numRows, numColumns) — 8 cột: I→P (SL thực tế … SL Giao/Soạn)
       var block = historySheet.getRange(minRow, 9, blockHeight, 8).getValues();
       for (var br = 0; br < blockHeight; br++) {
         var sheetRow = minRow + br;
@@ -3585,11 +3617,11 @@ function luuSoSoanHangVaAnh(payload) {
         if (!upd) continue;
         if (upd.val !== "") {
           var parsedVal = Number(upd.val);
-          block[br][0] = parsedVal;
-          block[br][4] = "Đã soạn hàng";
-          block[br][5] = actor;
-          block[br][6] = "Soạn hàng";
-          block[br][7] = parsedVal;
+          block[br][0] = parsedVal; // cột 9 — tạm giữ SL soạn (tương thích cũ)
+          block[br][4] = "Đã soạn hàng"; // cột 13
+          block[br][5] = actor; // cột 14
+          block[br][6] = "Soạn hàng"; // cột 15
+          block[br][7] = parsedVal; // cột 16 — SL Giao (Soạn), nguồn chính khi soạn lại
         } else {
           block[br][0] = "";
           block[br][7] = "";
@@ -3597,6 +3629,14 @@ function luuSoSoanHangVaAnh(payload) {
         }
       }
       historySheet.getRange(minRow, 9, blockHeight, 8).setValues(block);
+      // Ghi rõ từng ô cột 16 để chắc chắn khi soạn lại đọc được SL đã soạn
+      for (var wr = 0; wr < updates.length; wr++) {
+        var wRow = Number(updates[wr].row);
+        if (!wRow || wRow < 2) continue;
+        if (updates[wr].val !== "") {
+          historySheet.getRange(wRow, 16).setValue(Number(updates[wr].val));
+        }
+      }
     }
     var targetFolder;
     try {

@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v33';
+var APP_BUILD = '2026-08-02-v34';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -1691,6 +1691,15 @@ function sh_taiDanhSachDon() {
 }
 
 var pendingImages = {}; var isCompressing = 0;
+
+/** SL điền sẵn khi soạn / soạn lại: ưu tiên slSoan đã lưu, rồi slThucTe (cũ), cuối cùng SL đặt */
+function sh_resolvePackInputQty_(it) {
+  if (!it) return 0;
+  if (it.slSoan !== undefined && it.slSoan !== null && it.slSoan !== "") return Number(it.slSoan) || 0;
+  if (it.slThucTe !== undefined && it.slThucTe !== null && it.slThucTe !== "") return Number(it.slThucTe) || 0;
+  return Number(it.slGoc) || 0;
+}
+
 function sh_chonDonMobile() {
   var sp = document.getElementById("sh-phieu").value; if(!sp) return;
   document.getElementById("sh-list-container").innerHTML = '<div style="text-align:center;">⏳ Đang tải SP...</div>';
@@ -1700,7 +1709,8 @@ function sh_chonDonMobile() {
     var lowStockCount = 0;
     (items || []).forEach(function(it, j) {
       var stockDisplay = (it.stock !== undefined && it.stock !== null && it.stock !== "") ? Number(it.stock) : "";
-      var packQty = (it.slThucTe !== undefined && it.slThucTe !== null && it.slThucTe !== "") ? Number(it.slThucTe) : Number(it.slGoc || 0);
+      // Ưu tiên SL đã soạn (slSoan / cột 16); không dùng lại SL đặt khi đã soạn trước đó
+      var packQty = sh_resolvePackInputQty_(it);
       var compareQty = Math.max(Number(it.slGoc) || 0, packQty || 0);
       var short = stockShortageInfo_(stockDisplay, compareQty);
       if (short) lowStockCount++;
@@ -1711,13 +1721,16 @@ function sh_chonDonMobile() {
       var warnHtml = short
         ? ('<div class="sh-stock-warn" style="margin-top:6px; font-size:12px; color:#b91c1c; font-weight:700;">⚠️ Tồn thấp hơn SL đặt/soạn — thiếu ' + short.thieu + ' (vẫn lưu được)</div>')
         : '<div class="sh-stock-warn" style="display:none; margin-top:6px; font-size:12px; color:#b91c1c; font-weight:700;"></div>';
+      var prevPackedNote = (it.slSoan !== undefined && it.slSoan !== null && it.slSoan !== "" && Number(it.slSoan) !== Number(it.slGoc))
+        ? (' <small style="color:#c2410c;">(đã soạn: ' + Number(it.slSoan) + ')</small>')
+        : '';
       html += '<div class="item-card" style="' + cardStyle + '" data-stock="' + (stockDisplay === "" || isNaN(stockDisplay) ? '' : stockDisplay) + '" data-slgoc="' + (Number(it.slGoc) || 0) + '">' +
         '<b>' + escapeHtml(it.tenHang) + '</b><br>' +
         '<small><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b> | Mã hàng hóa: ' + escapeHtml(it.maHang || '') +
         ' | ĐVT: ' + escapeHtml(it.dvt) + ' | Tồn hiện tại: ' + stockLabel + '</small>' +
         warnHtml +
-        '<div class="action-row"><div>SL Yêu Cầu: <b>' + it.slGoc + '</b><br>Thực tế: ' +
-        '<input type="number" class="sl-thuc-te" data-row="' + it.rowIndex + '" value="' + it.slThucTe + '" oninput="sh_onPackQtyInput(this)">' +
+        '<div class="action-row"><div>SL Yêu Cầu: <b>' + it.slGoc + '</b>' + prevPackedNote + '<br>SL Soạn: ' +
+        '<input type="number" class="sl-thuc-te" data-row="' + it.rowIndex + '" value="' + packQty + '" oninput="sh_onPackQtyInput(this)">' +
         '</div><div style="text-align:right;"><label class="btn-camera" for="c-' + j + '">📷 Ảnh</label>' +
         '<input type="file" id="c-' + j + '" accept="image/*" capture="environment" style="display:none;" data-row="' + it.rowIndex + '" data-j="' + j + '" onchange="nenAnh(this)">' +
         '<img id="p-' + j + '" src="' + (it.anhXacNhan || '') + '" style="display:' + (it.anhXacNhan ? 'block' : 'none') + '; width:50px; height:50px; margin-top:5px;">' +
