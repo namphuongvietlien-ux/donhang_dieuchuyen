@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v34';
+var APP_BUILD = '2026-08-02-v36';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -213,15 +213,15 @@ function updateHeroGuideForRole() {
   if (role === 'Admin') {
     list.innerHTML =
       '<li><b>Tạo Đơn / Quản Lý:</b> tạo, sửa, hủy đơn; theo dõi toàn hệ thống.</li>' +
+      '<li><b>Bán kèm DV:</b> nhập HĐ liên kết → thêm mã bán kèm → lưu sheet Xuất Bán Hàng.</li>' +
       '<li><b>Soạn Hàng:</b> chọn ngày tổng hợp → xuất bảng chính hoặc bảng bổ sung 8h–10h.</li>' +
-      '<li><b>Xác Nhận:</b> hỗ trợ xem; chi nhánh tự xác nhận nhận hàng.</li>' +
       '<li><b>Tài Khoản:</b> tạo user chi nhánh, gán kho.</li>';
   } else {
     list.innerHTML =
       '<li><b>Tạo Đơn:</b> chọn kho → quét/thêm mã → Lưu đơn (xem cảnh báo khung giờ phía trên).</li>' +
-      '<li><b>Quản Lý:</b> xem đơn của chi nhánh; in / Excel khi cần.</li>' +
+      '<li><b>Bán kèm DV:</b> nhập số HĐ liên kết → quét/thêm mã → Lưu xuất bán.</li>' +
       '<li><b>Xác Nhận:</b> chọn phiếu <b>Đã soạn</b> → nhập SL nhận → Lưu.</li>' +
-      '<li><b>Tổng Quan:</b> theo dõi nhanh đơn gần đây của chi nhánh.</li>';
+      '<li><b>Quản Lý / Tổng Quan:</b> theo dõi đơn chi nhánh.</li>';
   }
 }
 
@@ -361,6 +361,8 @@ function renderStoreDropdowns() {
   var elX = getEl('select-kho-xuat'); if (elX) elX.innerHTML = htmlStores;
   var elN = getEl('select-kho-nhan'); if (elN) elN.innerHTML = htmlStores;
   var elQ = getEl('ql-kho-nhan'); if (elQ) elQ.innerHTML = '<option value="all">-- Tất cả --</option>' + htmlStores;
+  var elXb = getEl('xb-chi-nhanh'); if (elXb) elXb.innerHTML = htmlStores;
+  xb_applyStoreQuyen_();
 }
 
 function renderAdminStoreDropdown() {
@@ -625,6 +627,7 @@ function switchTab(tabId) {
   if(tabId === 'tab-soan-hang') sh_taiDanhSachDon();
   if(tabId === 'tab-dashboard') loadDashboardSummary();
   if(tabId === 'tab-admin') loadDSUser();
+  if(tabId === 'tab-ban-kem') xb_onTabOpen();
 }
 
 function formatDateInputValue(date) {
@@ -745,6 +748,7 @@ function applyQuyenKho() {
     if(khoNhanEl) khoNhanEl.removeAttribute("disabled");
     if (sessionUser.role !== "Admin" && khoXuatEl) khoXuatEl.value = sessionUser.store;
   }
+  xb_applyStoreQuyen_();
 }
 
 // ================= TÌM KIẾM & TẠO PHIẾU =================
@@ -919,8 +923,11 @@ document.addEventListener("click", function(event) {
   var input = document.getElementById("input-scan");
   var qlBox = document.getElementById("ql-suggest-box");
   var qlInput = document.getElementById("ql-add-code");
+  var xbBox = document.getElementById("xb-suggest-box");
+  var xbInput = document.getElementById("xb-input-scan");
   if (box && event.target !== box && event.target !== input && !box.contains(event.target)) box.style.display = "none";
   if (qlBox && event.target !== qlBox && event.target !== qlInput && !qlBox.contains(event.target)) qlBox.style.display = "none";
+  if (xbBox && event.target !== xbBox && event.target !== xbInput && !xbBox.contains(event.target)) xbBox.style.display = "none";
 });
 
 function thayDoiSoLuong(index, delta) { var currentSl = Number(arrItems[index].sl) || 0; var newSl = currentSl + delta; if (newSl > 0) { arrItems[index].sl = newSl; renderTable(); } }
@@ -1704,9 +1711,23 @@ function sh_chonDonMobile() {
   var sp = document.getElementById("sh-phieu").value; if(!sp) return;
   document.getElementById("sh-list-container").innerHTML = '<div style="text-align:center;">⏳ Đang tải SP...</div>';
   pendingImages = {}; isCompressing = 0;
-  apiGet('getChiTietDonHangMobile', { soPhieu: sp }).then(function(items) {
+  apiGet('getChiTietDonHangMobile', { soPhieu: sp }, { directOnly: true, timeoutMs: 60000 }).then(function(items) {
+    // Fallback nếu API mobile trả rỗng / lỗi hình dạng
+    if (!Array.isArray(items) || !items.length) {
+      return apiGet('getChiTietPhieu', { soPhieu: sp, includeStock: '0' }, { directOnly: true, timeoutMs: 60000 }).then(function(res2) {
+        var parsed = unwrapListResponse_(res2);
+        return parsed.rows || [];
+      });
+    }
+    return items;
+  }).then(function(items) {
     var html = "";
     var lowStockCount = 0;
+    if (!items || !items.length) {
+      document.getElementById("sh-list-container").innerHTML = '<div class="card" style="color:#b91c1c;">Không tải được chi tiết đơn <b>' + escapeHtml(sp) + '</b>. Thử lại hoặc kiểm tra deploy code.gs.</div>';
+      document.getElementById("sh-footer").style.display = "none";
+      return;
+    }
     (items || []).forEach(function(it, j) {
       var stockDisplay = (it.stock !== undefined && it.stock !== null && it.stock !== "") ? Number(it.stock) : "";
       // Ưu tiên SL đã soạn (slSoan / cột 16); không dùng lại SL đặt khi đã soạn trước đó
@@ -2701,3 +2722,251 @@ function doiMatKhau() {
 
 function showLoad(text) { var loadingText = getEl("loading-text"); if (loadingText) loadingText.innerText = text; var overlay = getEl("loading-overlay"); if (overlay) overlay.style.display = "flex"; }
 function hideLoad() { var overlay = getEl("loading-overlay"); if (overlay) overlay.style.display = "none"; }
+
+// ================= BÁN KÈM DỊCH VỤ / XUẤT BÁN HÀNG =================
+var xbItems = [];
+var xbInvoiceLocked = "";
+
+function xb_applyStoreQuyen_() {
+  var el = document.getElementById("xb-chi-nhanh");
+  if (!el) return;
+  if (sessionUser && sessionUser.role !== "Admin" && sessionUser.store) {
+    el.value = sessionUser.store;
+    el.setAttribute("disabled", "true");
+  } else {
+    el.removeAttribute("disabled");
+  }
+}
+
+function xb_setItemsEnabled_(enabled) {
+  var card = document.getElementById("xb-items-card");
+  var banner = document.getElementById("xb-invoice-banner");
+  var lockBtn = document.getElementById("xb-btn-lock");
+  var hdInput = document.getElementById("xb-so-hoa-don");
+  var cnEl = document.getElementById("xb-chi-nhanh");
+  if (card) {
+    card.style.opacity = enabled ? "1" : "0.55";
+    card.style.pointerEvents = enabled ? "auto" : "none";
+  }
+  if (banner) banner.style.display = enabled ? "block" : "none";
+  if (lockBtn) lockBtn.style.display = enabled ? "none" : "block";
+  if (hdInput) hdInput.disabled = !!enabled;
+  if (cnEl && enabled) cnEl.setAttribute("disabled", "true");
+  else xb_applyStoreQuyen_();
+}
+
+function xb_onTabOpen() {
+  xb_applyStoreQuyen_();
+  xb_renderTable();
+  xb_setItemsEnabled_(!!xbInvoiceLocked);
+  xb_loadRecent();
+  var scan = document.getElementById("xb-input-scan");
+  if (xbInvoiceLocked && scan) scan.focus();
+  else {
+    var hd = document.getElementById("xb-so-hoa-don");
+    if (hd) hd.focus();
+  }
+}
+
+function xb_xacNhanHoaDon() {
+  var hdEl = document.getElementById("xb-so-hoa-don");
+  var cnEl = document.getElementById("xb-chi-nhanh");
+  var soHd = hdEl ? String(hdEl.value || "").trim() : "";
+  if (!soHd) return alert("Vui lòng nhập số hóa đơn liên kết (từ phần mềm khác).");
+  if (!cnEl || !cnEl.value) return alert("Vui lòng chọn chi nhánh xuất bán.");
+  xbInvoiceLocked = soHd;
+  var lockedLbl = document.getElementById("xb-locked-invoice");
+  if (lockedLbl) lockedLbl.textContent = soHd + " · " + (storeMap[cnEl.value] || cnEl.value);
+  xb_setItemsEnabled_(true);
+  var scan = document.getElementById("xb-input-scan");
+  if (scan) {
+    scan.placeholder = "Quét / tìm mã bán kèm cho HĐ " + soHd;
+    scan.focus();
+  }
+}
+
+function xb_doiHoaDon() {
+  if (xbItems.length && !confirm("Đổi hóa đơn sẽ xóa danh sách mã đang nhập. Tiếp tục?")) return;
+  xbItems = [];
+  xbInvoiceLocked = "";
+  xb_renderTable();
+  xb_setItemsEnabled_(false);
+  var hdEl = document.getElementById("xb-so-hoa-don");
+  if (hdEl) {
+    hdEl.disabled = false;
+    hdEl.focus();
+    hdEl.select();
+  }
+  var scan = document.getElementById("xb-input-scan");
+  if (scan) scan.placeholder = "Nhập số HĐ trước, rồi mới thêm mã...";
+}
+
+function xb_handleSearchInput(e) {
+  if (!xbInvoiceLocked) {
+    alert("Nhập và xác nhận số hóa đơn liên kết trước khi thêm mã.");
+    return;
+  }
+  if (!catalogLoadState.ready) {
+    var box0 = document.getElementById("xb-suggest-box");
+    if (box0) {
+      box0.innerHTML = '<div class="suggest-empty">Danh mục hàng đang tải. Vui lòng đợi vài giây...</div>';
+      box0.style.display = "block";
+    }
+    return;
+  }
+  var inputEl = document.getElementById("xb-input-scan");
+  var box = document.getElementById("xb-suggest-box");
+  if (!inputEl || !box) return;
+  positionSuggestionBox(box, inputEl);
+  var val = inputEl.value.trim();
+  if (val.length < 1) { box.style.display = "none"; return; }
+  var kw = val.toUpperCase();
+
+  if (e.key === "Enter") {
+    var exactMatch = danhMucGoc[kw];
+    if (exactMatch) xb_chonSanPham(exactMatch);
+    else {
+      var matched = filterProducts(kw);
+      if (matched.length > 0) xb_chonSanPham(matched[0]);
+      else {
+        xbItems.unshift({ maHang: "LỖI MÃ", maVach: val, tenHang: "❌ Không tồn tại", dvt: "Lỗi", sl: "1" });
+        xb_renderTable();
+      }
+    }
+    inputEl.value = "";
+    box.style.display = "none";
+    return;
+  }
+
+  var results = filterProducts(kw);
+  if (results.length === 0) {
+    box.innerHTML = '<div class="suggest-empty">Không tìm thấy sản phẩm phù hợp.</div>';
+    box.style.display = "block";
+    return;
+  }
+  var html = "";
+  results.slice(0, 10).forEach(function(item) {
+    var itemStr = encodeURIComponent(JSON.stringify(item));
+    html += '<div class="suggest-item" onclick="xb_chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
+  });
+  box.innerHTML = html;
+  box.style.display = "block";
+}
+
+function xb_chonSanPhamFromSuggest(itemStr) {
+  xb_chonSanPham(JSON.parse(decodeURIComponent(itemStr)));
+  var input = document.getElementById("xb-input-scan");
+  var box = document.getElementById("xb-suggest-box");
+  if (input) { input.value = ""; input.focus(); }
+  if (box) box.style.display = "none";
+}
+
+function xb_chonSanPham(it) {
+  if (!xbInvoiceLocked) return alert("Xác nhận số hóa đơn liên kết trước.");
+  var existingIndex = xbItems.findIndex(function(x) { return x.maVach === it.maVach && x.maHang !== "LỖI MÃ"; });
+  if (existingIndex !== -1) {
+    xbItems[existingIndex].sl = Number(xbItems[existingIndex].sl) + 1;
+    xbItems[existingIndex].highlight = true;
+  } else {
+    xbItems.unshift({ maHang: it.maHang, maVach: it.maVach, tenHang: it.tenHang, dvt: it.dvt, sl: "1", highlight: true });
+  }
+  xb_renderTable();
+}
+
+function xb_thayDoiSoLuong(index, delta) {
+  var currentSl = Number(xbItems[index].sl) || 0;
+  var newSl = currentSl + delta;
+  if (newSl > 0) { xbItems[index].sl = newSl; xb_renderTable(); }
+}
+
+function xb_renderTable() {
+  var tbody = document.getElementById("xb-tbody-items");
+  var tongEl = document.getElementById("xb-lbl-tong-sl");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  var tongSl = 0;
+  xbItems.forEach(function(it, i) {
+    var isErr = (it.maHang === "LỖI MÃ" || isNaN(Number(it.sl)));
+    tongSl += (Number(it.sl) || 0);
+    var trClass = isErr ? "row-error" : (it.highlight ? "scan-highlight" : "");
+    it.highlight = false;
+    tbody.insertAdjacentHTML("beforeend",
+      '<tr class="' + trClass + '"><td>' + (xbItems.length - i) + '</td>' +
+      '<td><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b><br><small style="color:gray;">Mã hàng hóa: ' + escapeHtml(it.maHang) + '</small></td>' +
+      '<td style="font-weight:500;">' + escapeHtml(it.tenHang) + '</td><td>' + escapeHtml(it.dvt) + '</td>' +
+      '<td><div class="qty-control"><button class="qty-btn" onclick="xb_thayDoiSoLuong(' + i + ', -1)">-</button>' +
+      '<input type="number" class="qty-input" value="' + it.sl + '" onchange="xbItems[' + i + '].sl=this.value; xb_renderTable();">' +
+      '<button class="qty-btn" onclick="xb_thayDoiSoLuong(' + i + ', 1)">+</button></div></td>' +
+      '<td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="xbItems.splice(' + i + ',1); xb_renderTable();">×</button></td></tr>');
+  });
+  if (tongEl) tongEl.innerText = tongSl;
+  if (xbItems.length === 0) {
+    tbody.insertAdjacentHTML("beforeend",
+      '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:24px;">' +
+      (xbInvoiceLocked ? "Đã khóa HĐ — hãy tìm kiếm và thêm sản phẩm bán kèm." : "Nhập số hóa đơn liên kết rồi bấm Xác nhận HĐ để bắt đầu.") +
+      "</td></tr>");
+  }
+}
+
+function xb_submit() {
+  if (!xbInvoiceLocked) return alert("Vui lòng xác nhận số hóa đơn liên kết trước.");
+  if (!xbItems.length) return alert("Chưa có hàng!");
+  if (!catalogLoadState.ready) return alert("Danh mục hàng đang tải. Vui lòng đợi rồi thử lại.");
+  if (!sessionUser || !sessionUser.user) return alert("Vui lòng đăng nhập.");
+  var cnEl = document.getElementById("xb-chi-nhanh");
+  var chiNhanh = cnEl ? cnEl.value : "";
+  if (!chiNhanh) return alert("Thiếu chi nhánh xuất bán.");
+  if (!confirm("Lưu xuất bán cho HĐ " + xbInvoiceLocked + " (" + xbItems.length + " dòng)?")) return;
+
+  showLoad("Đang lưu xuất bán...");
+  apiPost("luuXuatBanHang", {
+    soHoaDon: xbInvoiceLocked,
+    chiNhanh: chiNhanh,
+    items: xbItems,
+    actor: sessionUser.user
+  }).then(function(res) {
+    hideLoad();
+    if (!res || res.success === false) throw new Error((res && (res.error || res.msg)) || "Không lưu được.");
+    alert((res.message || "✅ Đã lưu.") + (res.coLoi ? "\n⚠️ Có dòng lỗi — kiểm tra sheet Xuất Bán Hàng." : ""));
+    xbItems = [];
+    xb_renderTable();
+    xb_loadRecent();
+    var scan = document.getElementById("xb-input-scan");
+    if (scan) scan.focus();
+  }).catch(function(err) {
+    hideLoad();
+    alert("Lỗi: " + err.message + "\nDeploy lại code.gs nếu chưa có API luuXuatBanHang.");
+  });
+}
+
+function xb_loadRecent() {
+  var box = document.getElementById("xb-recent-list");
+  if (!box || !sessionUser || !sessionUser.user) return;
+  box.textContent = "Đang tải...";
+  apiGet("layDanhSachXuatBanHang", {
+    ngay: "7days",
+    userRole: sessionUser.role || "",
+    userStore: sessionUser.store || ""
+  }, { timeoutMs: 45000 }).then(function(res) {
+    var rows = (res && res.data) ? res.data : [];
+    if (!rows.length) {
+      box.innerHTML = '<div style="color:#94a3b8;">Chưa có phiếu xuất bán trong 7 ngày gần đây.</div>';
+      return;
+    }
+    var html = '<div style="overflow:auto;"><table style="width:100%; border-collapse:collapse; font-size:13px;">' +
+      '<thead><tr style="text-align:left; color:#64748b;"><th style="padding:6px 4px;">Mã XB</th><th>Số HĐ</th><th>Chi nhánh</th><th>SL dòng</th><th>Tổng SL</th><th>Người tạo</th></tr></thead><tbody>';
+    rows.slice(0, 30).forEach(function(r) {
+      html += '<tr style="border-top:1px solid #e2e8f0;">' +
+        '<td style="padding:7px 4px;"><b>' + escapeHtml(r.maPhieu) + '</b></td>' +
+        '<td>' + escapeHtml(r.soHoaDon) + '</td>' +
+        '<td>' + escapeHtml(formatStoreShortLabel_(r.chiNhanh) || r.chiNhanh) + '</td>' +
+        '<td>' + (r.itemCount || 0) + '</td>' +
+        '<td>' + (r.tongSl || 0) + '</td>' +
+        '<td>' + escapeHtml(r.actor || "") + '</td></tr>';
+    });
+    html += "</tbody></table></div>";
+    box.innerHTML = html;
+  }).catch(function(err) {
+    box.innerHTML = '<div style="color:#b91c1c;">Không tải được danh sách: ' + escapeHtml(err.message) + "</div>";
+  });
+}

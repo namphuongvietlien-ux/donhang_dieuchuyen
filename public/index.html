@@ -108,7 +108,7 @@
     .scan-highlight { animation: flashSuccess 0.45s ease-out; }
     @keyframes flashSuccess { 0% { background-color: #ecfdf5; } 100% { background-color: transparent; } }
 
-    #suggest-box, #ql-suggest-box { display: none; position: absolute; background: white; border: 1px solid #e2e8f0; max-height: 300px; overflow-y: auto; z-index: 999; box-shadow: 0 10px 25px rgba(15,23,42,0.08); border-radius: 12px; margin-top: 6px; backdrop-filter: blur(8px); }
+    #suggest-box, #ql-suggest-box, #xb-suggest-box { display: none; position: absolute; background: white; border: 1px solid #e2e8f0; max-height: 300px; overflow-y: auto; z-index: 999; box-shadow: 0 10px 25px rgba(15,23,42,0.08); border-radius: 12px; margin-top: 6px; backdrop-filter: blur(8px); }
     .suggest-item { padding: 11px 12px; border-bottom: 1px solid #f8fafc; cursor: pointer; transition: background-color 0.18s ease; }
     .suggest-item:hover { background-color: #f8fbff; }
     .suggest-empty { padding: 12px; color: #d93025; text-align: center; font-weight: 600; font-size: 13px; }
@@ -214,6 +214,7 @@
   
   <div class="nav-tabs">
     <div class="nav-tab active" onclick="switchTab('tab-tao-phieu')">📝 Tạo Đơn</div>
+    <div class="nav-tab" onclick="switchTab('tab-ban-kem')">🛒 Bán kèm DV</div>
     <div class="nav-tab" onclick="switchTab('tab-dashboard')">📊 Tổng Quan</div>
     <div class="nav-tab" onclick="switchTab('tab-quan-ly')">🖨️ Quản Lý</div>
     <div class="nav-tab" onclick="switchTab('tab-xac-nhan')">📥 Xác Nhận</div>
@@ -228,9 +229,9 @@
         <h3 id="hero-title">Cách dùng theo từng tab</h3>
         <ul class="guide-list" id="hero-guide-list">
           <li><b>Tạo Đơn:</b> chọn kho → quét/thêm mã → Lưu đơn.</li>
+          <li><b>Bán kèm DV:</b> nhập số HĐ liên kết → thêm mã bán kèm → Lưu.</li>
           <li><b>Quản Lý:</b> xem đơn; sửa/thêm mã (nếu được phép) trước khi soạn.</li>
           <li><b>Xác Nhận:</b> khi hàng về, chọn phiếu đã soạn → nhập SL nhận → Lưu.</li>
-          <li><b>Tổng Quan:</b> xem số đơn theo ngày gần đây.</li>
         </ul>
       </div>
       <div class="hero-stats">
@@ -335,6 +336,66 @@
           <div class="total-qty">Tổng cộng: <span id="lbl-tong-sl">0</span> món</div>
           <button id="btn-save-phieu" class="btn-submit" onclick="submitPhieuMoi()" style="width: auto; padding: 12px 30px; font-size: 16px;">💾 LƯU ĐƠN</button>
         </div>
+      </div>
+    </div>
+
+    <!-- TAB: BÁN KÈM DỊCH VỤ / XUẤT BÁN HÀNG -->
+    <div id="tab-ban-kem" class="tab-content">
+      <div class="tab-guide">
+        <b>Tab Bán kèm dịch vụ:</b> nhập <b>số hóa đơn liên kết</b> (từ phần mềm khác) → xác nhận → tìm/quét mã bán kèm → chỉnh SL → <b>Lưu xuất bán</b>.
+        Dữ liệu lưu sheet riêng <b>Xuất Bán Hàng</b>, không vào lịch sử điều chuyển.
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0; color:var(--primary);">🧾 Hóa đơn liên kết</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Chi nhánh xuất bán</label>
+            <select id="xb-chi-nhanh"></select>
+          </div>
+          <div class="form-group">
+            <label>Số hóa đơn liên kết <span style="color:#b91c1c;">*</span></label>
+            <input type="text" id="xb-so-hoa-don" placeholder="VD: HD-2026-001234" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault(); xb_xacNhanHoaDon();}">
+          </div>
+          <div class="form-group" style="max-width:200px;">
+            <label>Thao tác</label>
+            <button class="btn-submit" type="button" id="xb-btn-lock" onclick="xb_xacNhanHoaDon()" style="padding:10px 12px; width:100%; border-radius:12px;">✅ Xác nhận HĐ</button>
+          </div>
+        </div>
+        <div id="xb-invoice-banner" style="display:none; margin-top:8px; padding:10px 12px; border-radius:10px; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; font-size:14px;">
+          Đang nhập mã cho HĐ: <b id="xb-locked-invoice"></b>
+          <button type="button" onclick="xb_doiHoaDon()" style="margin-left:10px; border:none; background:#fff; color:#047857; font-weight:700; cursor:pointer; padding:4px 10px; border-radius:8px; border:1px solid #6ee7b7;">Đổi HĐ</button>
+        </div>
+      </div>
+
+      <div class="card" id="xb-items-card" style="padding-bottom:20px; position:relative; opacity:0.55; pointer-events:none;">
+        <div class="form-row" style="margin-bottom:10px;">
+          <div class="form-group">
+            <label>Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:</label>
+            <input type="text" id="xb-input-scan" placeholder="Nhập số HĐ trước, rồi mới thêm mã..." autocomplete="off" onkeyup="xb_handleSearchInput(event)" style="border:2px solid var(--primary); font-size:16px; font-weight:bold; padding:12px; background:#f8f9fa;">
+          </div>
+          <div class="form-group" style="max-width:180px;">
+            <label>Thao tác nhanh</label>
+            <button class="btn-submit" type="button" onclick="xb_submit()" style="padding:10px 12px; width:100%; border-radius:12px;">💾 Lưu xuất bán</button>
+          </div>
+        </div>
+        <div id="xb-suggest-box"></div>
+        <div class="table-container-pos">
+          <table id="xb-table-items">
+            <thead>
+              <tr><th width="5%">STT</th><th width="20%">Mã SP</th><th width="40%">Tên hàng hóa</th><th width="10%">ĐVT</th><th width="20%" style="text-align:center;">SL</th><th width="5%">❌</th></tr>
+            </thead>
+            <tbody id="xb-tbody-items"></tbody>
+          </table>
+        </div>
+        <div class="action-footer">
+          <div class="total-qty">Tổng cộng: <span id="xb-lbl-tong-sl">0</span> món</div>
+          <button class="btn-submit" type="button" onclick="xb_submit()" style="width:auto; padding:12px 30px; font-size:16px;">💾 LƯU XUẤT BÁN</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h4 style="margin-top:0; color:var(--primary);">🗂️ Phiếu xuất bán gần đây (7 ngày)</h4>
+        <div id="xb-recent-list" style="font-size:14px; color:#64748b;">Chưa có dữ liệu.</div>
       </div>
     </div>
 
@@ -582,6 +643,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v34"></script>
+  <script src="app.js?v=20260802v36"></script>
 </body>
 </html>
