@@ -4926,8 +4926,10 @@ function luuXuatBanHang(payload) {
 
   var rows = [];
   var coLoi = false;
+  var debugDvt = [];
   for (var i = 0; i < items.length; i++) {
     var item = items[i] || {};
+    var catalogHit = resolveCatalogProduct(catalogLookup, item.maHang, item.maVach);
     var dvtResolved = resolveDvtValue(catalogLookup, item.maHang, item.maVach, item.dvt);
     var slNum = Number(item.sl);
     var note = "";
@@ -4942,6 +4944,17 @@ function luuXuatBanHang(payload) {
       note += (note ? " | " : "") + "Mã không tồn tại";
     }
     if (bad) coLoi = true;
+    if (debugDvt.length < 12) {
+      debugDvt.push({
+        maHang: item.maHang || "",
+        maVach: item.maVach || "",
+        inDvt: item.dvt || "",
+        catalogHit: !!catalogHit,
+        catalogDvt: catalogHit && catalogHit.dvt ? String(catalogHit.dvt) : "",
+        resolved: dvtResolved || "",
+        note: note
+      });
+    }
     rows.push([
       now,
       soHoaDon,
@@ -4977,7 +4990,9 @@ function luuXuatBanHang(payload) {
     chiNhanh: chiNhanh,
     itemCount: items.length,
     coLoi: coLoi,
-    message: "✅ Đã lưu xuất bán " + maPhieu + " · HĐ " + soHoaDon + " (" + items.length + " món)"
+    message: "✅ Đã lưu xuất bán " + maPhieu + " · HĐ " + soHoaDon + " (" + items.length + " món)",
+    _debugDvt: debugDvt,
+    _debugRun: "xb-dvt-v1"
   };
 }
 
