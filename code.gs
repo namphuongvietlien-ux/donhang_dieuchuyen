@@ -4530,21 +4530,15 @@ function taoBangSoanHangNgayMai(payload) {
   var userRole = payload && payload.userRole ? payload.userRole : "";
   var userStore = payload && payload.userStore ? payload.userStore : "";
   var selectedOrdersRaw = payload && payload.selectedOrders && payload.selectedOrders.length ? payload.selectedOrders : [];
-  var selectedSet = {};
-  for (var so0 = 0; so0 < selectedOrdersRaw.length; so0++) {
-    var pick0 = String(selectedOrdersRaw[so0] || "").trim();
-    if (pick0) selectedSet[pick0] = true;
-  }
+  var selectedSet = buildOrderMatchSet_(selectedOrdersRaw);
 
   var historyPack;
-  if (Object.keys(selectedSet).length) {
+  if (selectedSet._list && selectedSet._list.length) {
     historyPack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 2500);
   } else {
     historyPack = readHistoryDataPack_(historySheet, 3000);
     var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win);
-    for (var eo = 0; eo < eligibleOrders.length; eo++) {
-      selectedSet[String(eligibleOrders[eo].soPhieu).trim()] = true;
-    }
+    selectedSet = buildOrderMatchSet_(eligibleOrders.map(function(o) { return o && o.soPhieu; }));
   }
   // #region agent log
   _dbgMark("readHistory", {

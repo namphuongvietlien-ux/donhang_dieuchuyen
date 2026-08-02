@@ -22,13 +22,44 @@ export default async function handler(req, res) {
     }
   }
 
+  /**
+   * Apps Script POST thường trả 302 → googleusercontent /macros/echo?...
+   * Node fetch redirect:'follow' dễ biến POST thành GET sai và nhận HTML.
+   * Cách đúng: redirect manual, rồi GET Location (kết quả JSON đã sẵn).
+   */
   async function fetchGas(url, init, timeoutMs) {
     const controller = new AbortController();
-    const timer = setTimeout(function() { controller.abort(); }, timeoutMs || 50000);
+    const timer = setTimeout(function() { controller.abort(); }, timeoutMs || 55000);
     try {
-      const r = await fetch(url, Object.assign({}, init, { signal: controller.signal, redirect: 'follow' }));
-      const text = await r.text();
-      return { status: r.status, text: text };
+      const baseInit = Object.assign({}, init || {}, {
+        signal: controller.signal,
+        redirect: 'manual'
+      });
+      let r = await fetch(url, baseInit);
+
+      // Một số runtime vẫn auto-follow; nếu đã JSON thì dùng luôn
+      let text = '';
+      const status = r.status;
+      if (status >= 300 && status < 400) {
+        const loc = r.headers.get('location') || r.headers.get('Location');
+        if (!loc) {
+          text = await r.text();
+          return { status: status, text: text, redirected: false, note: 'redirect-without-location' };
+        }
+        // Kết quả Apps Script nằm ở URL redirect — đọc bằng GET
+        r = await fetch(loc, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          redirect: 'follow',
+          signal: controller.signal
+        });
+        text = await r.text();
+        return { status: r.status, text: text, redirected: true, location: loc };
+      }
+
+      text = await r.text();
+      // Nếu follow mặc định trả HTML, thử không dùng (đã manual ở trên)
+      return { status: r.status, text: text, redirected: false };
     } finally {
       clearTimeout(timer);
     }
@@ -50,8 +81,17 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const qs = new URLSearchParams(req.query || {}).toString();
       const target = qs ? `${GAS_URL}?${qs}` : GAS_URL;
-      const r = await fetchGas(target, { method: 'GET', headers: { Accept: 'application/json' } }, 50000);
-      res.status(r.status).send(r.text);
+      const r = await fetchGas(target, { method: 'GET', headers: { Accept: 'application/json' } }, 55000);
+      const looksHtml = /^\s*</.test(r.text || '') || /<!doctype html>/i.test(r.text || '');
+      if (looksHtml) {
+        res.status(502).json({
+          error: 'GAS GET returned HTML instead of JSON.',
+          action: (req.query && req.query.action) || '',
+          snippet: String(r.text || '').slice(0, 180)
+        });
+        return;
+      }
+      res.status(r.status || 200).send(r.text);
       return;
     }
 
@@ -62,21 +102,23 @@ export default async function handler(req, res) {
         return;
       }
 
-      // text/plain giúp GAS nhận body ổn định hơn qua redirect
       const r = await fetchGas(GAS_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Accept': 'application/json' },
+        headers: { 'Content-Type': 'text/plain;charset=utf-8', Accept: 'application/json' },
         body: JSON.stringify(body)
-      }, 50000);
+      }, 55000);
+
       const looksHtml = /^\s*</.test(r.text || '') || /<!doctype html>/i.test(r.text || '');
       if (looksHtml) {
         res.status(502).json({
-          error: 'GAS returned HTML instead of JSON (redirect/doGet). Try direct client POST.',
-          action: body.action
+          error: 'GAS returned HTML instead of JSON (redirect/doGet).',
+          action: body.action,
+          redirected: !!r.redirected,
+          snippet: String(r.text || '').slice(0, 180)
         });
         return;
       }
-      res.status(r.status).send(r.text);
+      res.status(r.status || 200).send(r.text);
       return;
     }
 

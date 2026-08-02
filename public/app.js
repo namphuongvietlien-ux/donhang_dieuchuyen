@@ -79,9 +79,21 @@ async function apiPost(action, payload, options) {
   const plainOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
   const proxyOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
   const timeoutMs = options.timeoutMs || 120000;
+  const proxyTimeoutMs = Math.min(Math.max(timeoutMs, 20000), 60000);
 
   if (options.directOnly) {
     return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+  }
+
+  // Một số action (tạo bảng soạn) hay dính CORS/redirect trên browser → ưu tiên proxy
+  if (options.proxyFirst) {
+    try {
+      return await callJsonApi(['/api/gas-proxy'], proxyOptions, proxyTimeoutMs);
+    } catch (proxyErr) {
+      console.warn('[donhang] proxy POST failed, fallback direct', String(proxyErr && proxyErr.message || proxyErr));
+      if (options.allowDirectFallback === false) throw proxyErr;
+      return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+    }
   }
 
   // Ưu tiên POST thẳng GAS (tránh proxy treo). Proxy chỉ fallback.
@@ -91,7 +103,7 @@ async function apiPost(action, payload, options) {
     const msg = String(directErr && directErr.message || directErr);
     console.warn('[donhang] direct POST failed, fallback proxy', msg);
     if (options.allowDirectFallback === false && options.allowProxyFallback === false) throw directErr;
-    return callJsonApi(['/api/gas-proxy'], proxyOptions, Math.min(timeoutMs, 50000));
+    return callJsonApi(['/api/gas-proxy'], proxyOptions, proxyTimeoutMs);
   }
 }
 
@@ -100,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v50b';
+var APP_BUILD = '2026-08-02-v51';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -2361,9 +2373,19 @@ function sh_taoBangSoanTuDonDaChon() {
       newAfterTime: newAfterTime,
       newBeforeTime: newBeforeTime || '10:00'
     };
+    // proxyFirst: tránh CORS redirect POST→GET trên browser (lỗi 502 HTML)
     var postOpts = stockOk
-      ? { allowDirectFallback: true, timeoutMs: 55000 }
-      : { directOnly: true, timeoutMs: 180000 };
+      ? { proxyFirst: true, timeoutMs: 60000 }
+      : { proxyFirst: true, timeoutMs: 90000 };
+    // #region agent log
+    dbgSend_('P502', 'sh_taoBangSoanTuDonDaChon:post', 'create packing table request', {
+      selectedCount: selectedOrders.length,
+      packingDay: packingDay,
+      stockOk: !!stockOk,
+      onlyNewItems: !!onlyNewItems,
+      sample: selectedOrders.slice(0, 8)
+    });
+    // #endregion
     return apiPost('taoBangSoanHangNgayMai', payload, postOpts);
   }).then(function(res) {
     hideLoad();
