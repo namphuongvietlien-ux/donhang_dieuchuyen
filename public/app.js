@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v30';
+var APP_BUILD = '2026-08-02-v32';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -707,11 +707,26 @@ function loadDashboardSummary() {
     }
 
     var rows = data.recentOrders.map(function(order) {
-      return '<tr><td><b>' + order.soPhieu + '</b></td><td>' + (order.khoXuat || '-') + '</td><td>' + (order.khoNhan || '-') + '</td><td><span style="display:inline-block; padding:4px 8px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:700;">' + order.status + '</span></td><td>' + (order.thoiGian || '-') + '</td></tr>';
+      var kx = formatStoreShortLabel_(order.khoXuat);
+      var kn = formatStoreShortLabel_(order.khoNhan);
+      return '<tr><td><b>' + order.soPhieu + '</b></td><td>' + kx + '</td><td>' + kn + '</td><td><span style="display:inline-block; padding:4px 8px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:700;">' + order.status + '</span></td><td>' + (order.thoiGian || '-') + '</td></tr>';
     }).join('');
 
     recent.innerHTML = '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;"><thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Số phiếu</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho xuất</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho nhận</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Trạng thái</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Cập nhật</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }).catch(function(err){ hideLoad(); console.error(err); });
+}
+
+/** Tên ngắn kho từ storeMap (vd. K9 Quận 7); fallback tên gốc */
+function formatStoreShortLabel_(storeName) {
+  var raw = String(storeName || '').trim();
+  if (!raw) return '-';
+  if (storeMap && storeMap[raw]) return storeMap[raw];
+  // Đôi khi API trả tên ngắn sẵn — giữ nguyên
+  for (var full in storeMap) {
+    if (!Object.prototype.hasOwnProperty.call(storeMap, full)) continue;
+    if (storeMap[full] === raw) return raw;
+  }
+  return raw;
 }
 
 // ================= PHÂN QUYỀN KHO =================
@@ -1804,8 +1819,8 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
       '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + order.soPhieu + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
       '<td><b>' + order.soPhieu + '</b>' + bucket + '</td>' +
-      '<td>' + (order.khoXuat || '-') + '</td>' +
-      '<td>' + (order.khoNhan || '-') + '</td>' +
+      '<td>' + formatStoreShortLabel_(order.khoXuat) + '</td>' +
+      '<td>' + formatStoreShortLabel_(order.khoNhan) + '</td>' +
       '<td>' + (order.thoiGianDat || '-') + '</td>' +
       '</tr>';
   });

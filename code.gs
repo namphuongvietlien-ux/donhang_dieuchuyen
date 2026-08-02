@@ -3804,40 +3804,52 @@ function matchesNgayFilter(rowDate, ngayFilter) {
 
 function lookupStoreCodeDigits_(storeName) {
   // Không gọi isSameStoreName/formatShortStoreLabel ở đây (tránh đệ quy).
+  // Mã link dữ liệu Q4: luôn dùng 178 / 275 (không dùng mã sheet kiểu 004 / 006).
   var raw = String(storeName || "").trim();
   if (!raw) return "";
   var rawNorm = normalizeHeaderText(raw);
+  var activeMap = getActiveStoreMap();
 
-  // 1) Ưu tiên mã trên sheet Hướng dẫn
+  // 1) Cấu hình cố định theo tên đầy đủ / tên ngắn
+  if (STORE_SHORT_CODES[raw]) return STORE_SHORT_CODES[raw];
+  for (var full in STORE_SHORT_CODES) {
+    if (!Object.prototype.hasOwnProperty.call(STORE_SHORT_CODES, full)) continue;
+    var fullNorm = normalizeHeaderText(full);
+    var shortOfFull = normalizeHeaderText(activeMap[full] || "");
+    if (
+      rawNorm === fullNorm ||
+      (shortOfFull && rawNorm === shortOfFull) ||
+      raw === activeMap[full] ||
+      rawNorm.indexOf(fullNorm) !== -1
+    ) {
+      return STORE_SHORT_CODES[full];
+    }
+  }
+
+  // 2) Suy từ tên hiển thị (Quận 4 Mới / Cũ)
+  var display = normalizeHeaderText(activeMap[raw] || raw);
+  if ((display.indexOf("q4") !== -1 || display.indexOf("quan4") !== -1) && display.indexOf("moi") !== -1) return "178";
+  if ((display.indexOf("q4") !== -1 || display.indexOf("quan4") !== -1) && (display.indexOf("cu") !== -1 || display.indexOf("old") !== -1)) return "275";
+
+  // 3) Sheet Hướng dẫn — chỉ nhận mã link hợp lệ 178/275 (bỏ 004/006…)
   try {
     var registry = getStoreRegistry();
     var details = registry && registry.storeDetails ? registry.storeDetails : [];
     for (var i = 0; i < details.length; i++) {
       var d = details[i];
       if (!d) continue;
-      var fullNorm = normalizeHeaderText(d.fullName || "");
-      var shortNorm = normalizeHeaderText(d.shortName || "");
-      if (rawNorm !== fullNorm && rawNorm !== shortNorm && raw !== d.fullName && raw !== d.shortName) continue;
+      var dFullNorm = normalizeHeaderText(d.fullName || "");
+      var dShortNorm = normalizeHeaderText(d.shortName || "");
+      if (rawNorm !== dFullNorm && rawNorm !== dShortNorm && raw !== d.fullName && raw !== d.shortName) continue;
       var code = String(d.code || "").trim();
       var m = code.match(/(\d{2,})/);
-      if (m) return m[1];
+      if (!m) continue;
+      if (m[1] === "178" || m[1] === "275") return m[1];
+      // Map mã kho nội bộ thường gặp → mã link
+      if (STORE_SHORT_CODES[d.fullName]) return STORE_SHORT_CODES[d.fullName];
     }
   } catch (e) {}
 
-  // 2) Fallback cấu hình cố định theo tên đầy đủ
-  if (STORE_SHORT_CODES[raw]) return STORE_SHORT_CODES[raw];
-  for (var full in STORE_SHORT_CODES) {
-    if (!Object.prototype.hasOwnProperty.call(STORE_SHORT_CODES, full)) continue;
-    if (rawNorm === normalizeHeaderText(full) || rawNorm.indexOf(normalizeHeaderText(full)) !== -1) {
-      return STORE_SHORT_CODES[full];
-    }
-  }
-
-  // 3) Suy từ tên hiển thị (Quận 4 Mới / Cũ)
-  var activeMap = getActiveStoreMap();
-  var display = normalizeHeaderText(activeMap[raw] || raw);
-  if ((display.indexOf("q4") !== -1 || display.indexOf("quan4") !== -1) && display.indexOf("moi") !== -1) return "178";
-  if ((display.indexOf("q4") !== -1 || display.indexOf("quan4") !== -1) && (display.indexOf("cu") !== -1 || display.indexOf("old") !== -1)) return "275";
   return "";
 }
 
@@ -3854,10 +3866,15 @@ function formatShortStoreLabel(storeName) {
   else if (normalized.indexOf("q4") !== -1 || normalized.indexOf("quan4") !== -1) base = "Q4";
   else return name || "Khác";
 
-  // Hai cửa hàng Q4 phải tách cột: Q4_178 / Q4_275
+  // Hai cửa hàng Q4 phải tách cột: Q4_178 / Q4_275 (không dùng Q4_004 / Q4_006)
   if (base === "Q4") {
     var code = lookupStoreCodeDigits_(storeName);
-    if (code) return "Q4_" + code;
+    if (!code) code = lookupStoreCodeDigits_(name);
+    if (code === "178" || code === "275") return "Q4_" + code;
+    // Fallback cuối theo tên đã chuẩn hóa
+    if (normalized.indexOf("moi") !== -1) return "Q4_178";
+    if (normalized.indexOf("cu") !== -1 || normalized.indexOf("old") !== -1) return "Q4_275";
+    return "Q4";
   }
   return base;
 }
@@ -4326,6 +4343,7 @@ function taoBangSoanHangNgayMai(payload) {
   var storeList = [];
   var orderSeen = {};
   var storeSeen = {};
+  var ordersByStore = {}; // khoNhan -> { soPhieu: true }
 
   // ĐVT: ưu tiên lịch sử → Data_Excel (cache) → TON_Q7. Ghi ngược vào lịch sử nếu trống.
   var catalogLookup = null;
@@ -4441,6 +4459,8 @@ function taoBangSoanHangNgayMai(payload) {
       storeList.push(khoNhan);
     }
     orderSeen[soPhieu] = true;
+    if (!ordersByStore[khoNhan]) ordersByStore[khoNhan] = {};
+    ordersByStore[khoNhan][soPhieu] = true;
 
     // Lịch sử trống ĐVT nhưng đã resolve từ catalog → ghi lại để lần sau không cần lookup
     if (dvt && !dvtRaw && historyPack.orders && historyPack.orders[i - 1]) {
@@ -4524,11 +4544,19 @@ function taoBangSoanHangNgayMai(payload) {
     ? ("BẢNG BỔ SUNG (mã thêm mới + đơn mới 8h–10h) — ngày " + packingDayTitle +
       " | " + newAfterLabel + " → " + newBeforeLabel)
     : ("BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + packingDayTitle + " | " + mainWindowLabel);
-  var headerRow = 5;
+  // Hàng 5 = số đơn theo cột kho; hàng 6 = header tên cột (Q4_178 / Q4_275 / Q8…)
+  var headerRow = 6;
   var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
-  for (var h = 0; h < storeList.length; h++) headers.push(formatShortStoreLabel(storeList[h]));
+  var storeOrderCountRow = ["", "", "", "", "", "", "Số đơn"];
+  for (var h = 0; h < storeList.length; h++) {
+    headers.push(formatShortStoreLabel(storeList[h]));
+    var storeOrders = ordersByStore[storeList[h]] || {};
+    storeOrderCountRow.push(Object.keys(storeOrders).length);
+  }
   headers.push("Cảnh báo");
   headers.push("Kho xuất");
+  storeOrderCountRow.push("");
+  storeOrderCountRow.push("");
 
   var rows = [];
   var missingLines = 0;
@@ -4606,6 +4634,7 @@ function taoBangSoanHangNgayMai(payload) {
     ], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
+    padRow_(storeOrderCountRow, colCount),
     padRow_(headers, colCount)
   ];
   for (var rb = 0; rb < rows.length; rb++) sheetBlock.push(padRow_(rows[rb], colCount));
