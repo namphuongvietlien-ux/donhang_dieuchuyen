@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v46';
+var APP_BUILD = '2026-08-02-v47';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -234,15 +234,21 @@ function dbgConfirm_(hypothesisId, location, message, data) {
       headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '4a6e3c' },
       body: JSON.stringify({
         sessionId: '4a6e3c',
-        runId: 'confirm-pre',
+        runId: 'confirm-lock-v2',
         hypothesisId: hypothesisId || 'A',
         location: location || 'app.js',
         message: message || '',
-        data: data || {},
+        data: Object.assign({ build: APP_BUILD }, data || {}),
         timestamp: Date.now()
       })
     }).catch(function() {});
   } catch (e) {}
+}
+function dbgStatusBag_(status) {
+  var s = String(status || '');
+  var codes = [];
+  for (var i = 0; i < Math.min(s.length, 24); i++) codes.push(s.charCodeAt(i));
+  return { raw: s, len: s.length, codes: codes };
 }
 // #endregion
 (function() {
@@ -1218,16 +1224,27 @@ function confirm_loadPhieu(selectedSoPhieu) {
         // #endregion
       }
       // Chỉ đơn Đã soạn — loại Đã xác nhận / Đã hủy (không cho mở lại để lưu)
+      var statusHist = {};
+      rows.forEach(function(r) {
+        var st = r && String(r.trangThai || '').trim() || '(empty)';
+        statusHist[st] = (statusHist[st] || 0) + 1;
+      });
       var confirmableOrders = rows.filter(function(r) {
         return r && String(r.trangThai || '').trim() === 'Đã soạn';
       });
       // #region agent log
-      dbgConfirm_('D', 'confirm_loadPhieu:parsed', 'parsed confirmable', {
-        runId: 'confirm-lock-v1',
+      dbgConfirm_('H2', 'confirm_loadPhieu:parsed', 'parsed confirmable + status hist', {
         totalRows: rows.length,
         confirmable: confirmableOrders.length,
-        sampleStatus: rows.slice(0, 8).map(function(r) { return r && r.trangThai; }),
-        excludedConfirmed: rows.filter(function(r) { return r && r.trangThai === 'Đã xác nhận'; }).length
+        statusHist: statusHist,
+        sample: rows.slice(0, 12).map(function(r) {
+          return r ? { soPhieu: r.soPhieu, trangThai: r.trangThai, meta: dbgStatusBag_(r.trangThai) } : null;
+        }),
+        confirmableSample: confirmableOrders.slice(0, 8).map(function(r) { return r && r.soPhieu; }),
+        excludedConfirmed: rows.filter(function(r) {
+          var st = String((r && r.trangThai) || '');
+          return st.indexOf('xác nhận') !== -1 || st.indexOf('Xác nhận') !== -1;
+        }).length
       });
       // #endregion
       var html = '<option value="">-- Chọn Phiếu (' + confirmableOrders.length + ') --</option>';
@@ -1301,14 +1318,21 @@ function confirm_onSelectPhieu() {
     var fullyConfirmed = activeRows.length > 0 && pendingCount === 0;
 
     // #region agent log
-    dbgConfirm_('LOCK', 'confirm_onSelectPhieu', 'confirm open lock check', {
-      runId: 'confirm-lock-v1',
+    var lineStatusHist = {};
+    activeRows.forEach(function(r) {
+      var st = String((r && r.trangThai) || '(empty)');
+      lineStatusHist[st] = (lineStatusHist[st] || 0) + 1;
+    });
+    dbgConfirm_('H3', 'confirm_onSelectPhieu', 'confirm open lock check', {
       soPhieu: val,
       active: activeRows.length,
       confirmedCount: confirmedCount,
       pendingCount: pendingCount,
       fullyConfirmed: fullyConfirmed,
-      build: APP_BUILD
+      lineStatusHist: lineStatusHist,
+      sampleLines: activeRows.slice(0, 6).map(function(r) {
+        return { rowIndex: r.rowIndex, trangThai: r.trangThai, meta: dbgStatusBag_(r.trangThai), slSoan: r.slSoan, slThucTe: r.slThucTe };
+      })
     });
     // #endregion
 
@@ -1373,11 +1397,10 @@ function confirm_xacNhanNhanHang() {
   var tSave0 = Date.now();
   showLoad("Đang lưu xác nhận...");
   // #region agent log
-  dbgConfirm_('PERF', 'confirm_xacNhanNhanHang:start', 'confirm save start', {
-    runId: 'confirm-fast',
+  dbgConfirm_('H1', 'confirm_xacNhanNhanHang:start', 'confirm save start', {
     soPhieu: currentConfirmPhieuObj.soPhieu,
     lines: confirmations.length,
-    build: APP_BUILD
+    rowIndexes: confirmations.map(function(c) { return c.row; }).slice(0, 40)
   });
   // #endregion
   // POST thẳng GAS, không qua proxy (tránh 502 HTML khi request nặng)
@@ -1389,12 +1412,13 @@ function confirm_xacNhanNhanHang() {
   }, { directOnly: true, timeoutMs: 180000 }).then(function(res) {
     hideLoad();
     // #region agent log
-    dbgConfirm_('PERF', 'confirm_xacNhanNhanHang:ok', 'confirm save ok', {
-      runId: 'confirm-fast',
+    dbgConfirm_('H1', 'confirm_xacNhanNhanHang:ok', 'confirm save ok', {
       clientMs: Date.now() - tSave0,
       serverMs: res && res._debugTotalMs,
       debugRun: res && res._debugRun,
       count: res && res.count,
+      success: res && res.success,
+      error: res && (res.error || res.msg) ? String(res.error || res.msg).slice(0, 300) : '',
       hasNotify: !!(res && res.notify)
     });
     // #endregion
@@ -1406,13 +1430,18 @@ function confirm_xacNhanNhanHang() {
     }
   }).catch(function(err){
     hideLoad();
+    var errMsg = String(err && err.message || err);
     // #region agent log
-    dbgConfirm_('PERF', 'confirm_xacNhanNhanHang:err', 'confirm save failed', {
-      runId: 'confirm-fast',
+    dbgConfirm_('H1', 'confirm_xacNhanNhanHang:err', 'confirm save failed', {
       clientMs: Date.now() - tSave0,
-      err: String(err && err.message || err).slice(0, 400)
+      err: errMsg.slice(0, 500),
+      looksAlreadyConfirmed: errMsg.indexOf('đã xác nhận') !== -1 || errMsg.indexOf('Đã xác nhận') !== -1,
+      looksTimeout: /timeout|502|Failed to fetch|HTML|NetworkError/i.test(errMsg),
+      soPhieu: currentConfirmPhieuObj && currentConfirmPhieuObj.soPhieu
     });
     // #endregion
+    // Sau lỗi: reload list để xem đơn còn hiện "Đã soạn" không (khóa một phần)
+    try { confirm_loadPhieu(currentConfirmPhieuObj && currentConfirmPhieuObj.soPhieu); } catch (eReload) {}
     alert('Lỗi: ' + err.message + '\nThử lại sau khi deploy code.gs (confirm-fast).');
   });
 }
