@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v55-preview-isnew';
+var APP_BUILD = '2026-08-04-v56-new-products-ux';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -577,12 +577,12 @@ function isNewProductItem_(item) {
 }
 
 function renderNewProductsHighlight() {
+  // Chỉ 1 block UI duy nhất: #new-products-strip (Trang chủ / Đặt hàng)
   var strip = document.getElementById('new-products-strip');
   var grid = document.getElementById('new-products-grid');
-  var dashHost = document.getElementById('dashboard-new-products');
   if (!newProductsList.length) {
     if (strip) strip.style.display = 'none';
-    if (dashHost) { dashHost.style.display = 'none'; dashHost.innerHTML = ''; }
+    if (grid) grid.innerHTML = '';
     return;
   }
 
@@ -592,6 +592,12 @@ function renderNewProductsHighlight() {
     var mv = escapeHtml(item.maVach || '-');
     var dvt = escapeHtml(item.dvt || 'Cái');
     var ngay = escapeHtml(item.ngayTao || '');
+    var isAdmin = !!(item.isAdminPick || item.sourceReason === 'admin' || (item.isNew && item.sourceReason !== 'auto_date'));
+    var reasonBadge = isAdmin
+      ? '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:800;background:#dbeafe;color:#1d4ed8;">ADMIN CHỌN</span>'
+      : (ngay
+        ? '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;background:#ffedd5;color:#9a3412;">' + ngay + '</span>'
+        : '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;background:#ffedd5;color:#9a3412;">Mới theo ngày</span>');
     var payload = encodeURIComponent(JSON.stringify({
       maHang: item.maHang || '',
       maVach: item.maVach || '',
@@ -600,9 +606,9 @@ function renderNewProductsHighlight() {
     }));
     return '' +
       '<button type="button" class="new-product-card" onclick="addNewProductToOrder(\'' + payload + '\')">' +
-        '<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">' +
+        '<div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap;">' +
           '<span class="badge-new">MỚI #' + (item.rank || (idx + 1)) + '</span>' +
-          (ngay ? '<small style="color:#9a3412;">' + ngay + '</small>' : '') +
+          reasonBadge +
         '</div>' +
         '<div class="np-title">' + title + '</div>' +
         '<div class="np-meta">MH: ' + mh + ' · MV: ' + mv + ' · ĐVT: ' + dvt + '</div>' +
@@ -612,16 +618,6 @@ function renderNewProductsHighlight() {
 
   if (grid) grid.innerHTML = cardsHtml;
   if (strip) strip.style.display = 'block';
-
-  if (dashHost) {
-    dashHost.innerHTML =
-      '<div class="card" style="background:linear-gradient(135deg,#fff7ed 0%,#ffffff 55%); border-color:#fdba74;">' +
-        '<div class="section-title"><div><h4 style="margin:0;color:#c2410c;">✨ Sản phẩm mới trong danh mục</h4>' +
-        '<div class="section-subtitle">Bấm để chuyển sang Tạo đơn và thêm nhanh.</div></div><span class="badge-new">NEW</span></div>' +
-        '<div class="new-products-grid">' + cardsHtml + '</div>' +
-      '</div>';
-    dashHost.style.display = 'block';
-  }
 }
 
 function addNewProductToOrder(encodedItem) {
@@ -642,7 +638,7 @@ function addNewProductToOrder(encodedItem) {
 }
 
 function loadNewProductsInBackground() {
-  apiGet('getNewProductsList', { limit: 8 }, { allowDirectFallback: true, timeoutMs: 45000 })
+  apiGet('getNewProductsList', { limit: 10 }, { allowDirectFallback: true, timeoutMs: 45000 })
     .then(function(res) {
       if (res && res.success && Array.isArray(res.data)) applyNewProductsData(res.data);
     })
@@ -2835,20 +2831,30 @@ function loadDSUser() {
 }
 
 var admNewProductRows_ = [];
+var admNewProductFilterQ_ = '';
+
+function admNormalizeSearch_(value) {
+  return String(value || '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 function adm_loadNewProductFlags() {
   if (sessionUser.role !== 'Admin') return;
-  var qEl = document.getElementById('adm-new-q');
   var meta = document.getElementById('adm-new-meta');
-  var q = qEl ? String(qEl.value || '').trim() : '';
   if (meta) meta.innerText = 'Đang tải danh mục...';
   showLoad('Đang tải danh mục Hàng Mới...');
-  apiGet('getCatalogIsNewAdminList', { q: q, limit: 250 }, { timeoutMs: 60000 }).then(function(res) {
+  // Tải full danh sách; lọc client-side theo ô searchNewProductInput
+  apiGet('getCatalogIsNewAdminList', { q: '', limit: 250 }, { timeoutMs: 60000 }).then(function(res) {
     hideLoad();
     if (!res || !res.success) throw new Error((res && res.error) || 'Không tải được danh mục.');
     admNewProductRows_ = Array.isArray(res.items) ? res.items : [];
-    adm_renderNewProductFlags_();
-    if (meta) meta.innerText = 'Hiển thị ' + admNewProductRows_.length + ' sản phẩm' + (q ? (' · lọc: "' + q + '"') : '') + '. Tick rồi nhấn Lưu.';
+    adm_filterNewProductFlags();
   }).catch(function(err) {
     hideLoad();
     if (meta) meta.innerText = 'Lỗi: ' + (err && err.message || err);
@@ -2856,18 +2862,50 @@ function adm_loadNewProductFlags() {
   });
 }
 
+function adm_getFilteredNewProductIndexes_() {
+  var qEl = document.getElementById('searchNewProductInput') || document.getElementById('adm-new-q');
+  var q = admNormalizeSearch_(qEl ? qEl.value : admNewProductFilterQ_);
+  admNewProductFilterQ_ = q;
+  var indexes = [];
+  for (var i = 0; i < admNewProductRows_.length; i++) {
+    var it = admNewProductRows_[i];
+    if (!it) continue;
+    if (!q) {
+      indexes.push(i);
+      continue;
+    }
+    var hay = admNormalizeSearch_([it.maHang, it.maVach, it.tenHang, it.dvt].join(' '));
+    if (hay.indexOf(q) !== -1) indexes.push(i);
+  }
+  return indexes;
+}
+
+function adm_filterNewProductFlags() {
+  adm_renderNewProductFlags_();
+}
+
 function adm_renderNewProductFlags_() {
   var tb = document.getElementById('adm-new-tbody');
+  var meta = document.getElementById('adm-new-meta');
   if (!tb) return;
   if (!admNewProductRows_.length) {
-    tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:16px;">Không có sản phẩm phù hợp.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:16px;">Không có sản phẩm. Nhấn "Tải danh sách".</td></tr>';
+    if (meta) meta.innerText = 'Chưa có dữ liệu.';
+    return;
+  }
+  var indexes = adm_getFilteredNewProductIndexes_();
+  if (!indexes.length) {
+    tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:16px;">Không có dòng khớp từ khóa.</td></tr>';
+    if (meta) meta.innerText = 'Lọc: 0 / ' + admNewProductRows_.length + ' sản phẩm.';
     return;
   }
   var html = '';
-  admNewProductRows_.forEach(function(it, idx) {
+  indexes.forEach(function(idx) {
+    var it = admNewProductRows_[idx];
     var checked = it.isNew ? ' checked' : '';
-    html += '<tr>' +
-      '<td style="text-align:center;"><input type="checkbox" class="adm-isnew-check" data-idx="' + idx + '"' + checked + '></td>' +
+    html += '<tr class="adm-isnew-row" data-idx="' + idx + '">' +
+      '<td style="text-align:center;"><input type="checkbox" class="adm-isnew-check" data-idx="' + idx + '"' + checked +
+        ' onchange="adm_onNewProductCheckChange_(this)"></td>' +
       '<td><b>' + escapeHtml(it.maHang || '-') + '</b></td>' +
       '<td>' + escapeHtml(it.maVach || '-') + '</td>' +
       '<td>' + escapeHtml(it.tenHang || '-') + '</td>' +
@@ -2875,25 +2913,50 @@ function adm_renderNewProductFlags_() {
       '</tr>';
   });
   tb.innerHTML = html;
+  if (meta) {
+    var qShow = (document.getElementById('searchNewProductInput') || {}).value || '';
+    meta.innerText = 'Hiển thị ' + indexes.length + ' / ' + admNewProductRows_.length +
+      (qShow ? (' · lọc: "' + qShow + '"') : '') + '. Tick rồi nhấn Lưu.';
+  }
+}
+
+function adm_onNewProductCheckChange_(cb) {
+  if (!cb) return;
+  var idx = Number(cb.getAttribute('data-idx'));
+  if (!admNewProductRows_[idx]) return;
+  admNewProductRows_[idx].isNew = !!cb.checked;
+}
+
+function adm_setVisibleNewProductFlags(checked) {
+  var want = !!checked;
+  var indexes = adm_getFilteredNewProductIndexes_();
+  indexes.forEach(function(idx) {
+    if (admNewProductRows_[idx]) admNewProductRows_[idx].isNew = want;
+  });
+  document.querySelectorAll('.adm-isnew-check').forEach(function(cb) {
+    cb.checked = want;
+    var idx = Number(cb.getAttribute('data-idx'));
+    if (admNewProductRows_[idx]) admNewProductRows_[idx].isNew = want;
+  });
+  var meta = document.getElementById('adm-new-meta');
+  if (meta) meta.innerText = (want ? 'Đã CheckAll ' : 'Đã UncheckAll ') + indexes.length + ' dòng đang hiện. Nhấn Lưu để ghi sheet.';
 }
 
 function adm_saveNewProductFlags() {
   if (sessionUser.role !== 'Admin') return alert('Chỉ Admin được lưu Hàng Mới.');
   if (!admNewProductRows_.length) return alert('Chưa có danh sách để lưu. Hãy tải danh sách trước.');
-  var checks = document.querySelectorAll('.adm-isnew-check');
-  var flags = [];
-  checks.forEach(function(cb) {
+  // Đồng bộ checkbox đang hiện → mảng, rồi lưu toàn bộ danh sách đã tải
+  document.querySelectorAll('.adm-isnew-check').forEach(function(cb) {
     var idx = Number(cb.getAttribute('data-idx'));
-    var row = admNewProductRows_[idx];
-    if (!row) return;
-    var next = !!cb.checked;
-    flags.push({
+    if (admNewProductRows_[idx]) admNewProductRows_[idx].isNew = !!cb.checked;
+  });
+  var flags = admNewProductRows_.map(function(row) {
+    return {
       sheetRow: row.sheetRow,
       maHang: row.maHang,
       maVach: row.maVach,
-      isNew: next
-    });
-    row.isNew = next;
+      isNew: !!row.isNew
+    };
   });
   showLoad('Đang lưu Hàng Mới...');
   apiPost('saveCatalogIsNewFlags', { flags: flags, actor: sessionUser.user }, { timeoutMs: 90000 }).then(function(res) {
@@ -2903,7 +2966,7 @@ function adm_saveNewProductFlags() {
     loadCatalogInBackground(true);
     loadNewProductsInBackground();
     var meta = document.getElementById('adm-new-meta');
-    if (meta) meta.innerText = 'Đã lưu · thay đổi: ' + (res.changed || 0) + ' · tổng tick gửi: ' + flags.length;
+    if (meta) meta.innerText = 'Đã lưu · thay đổi: ' + (res.changed || 0) + ' · tổng dòng gửi: ' + flags.length;
   }).catch(function(err) {
     hideLoad();
     alert('Lỗi lưu Hàng Mới: ' + (err && err.message || err));

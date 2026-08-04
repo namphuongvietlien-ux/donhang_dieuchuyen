@@ -26,7 +26,7 @@ var CACHE_STOCK_INDEX_PREFIX = "stock_index_v1_";
 var CACHE_NEW_PRODUCTS_PREFIX = "new_products_v1_";
 var CACHE_TTL_SECONDS = 1800;
 var HISTORY_MAX_ROWS_DEFAULT = 8000;
-var NEW_PRODUCTS_DEFAULT_LIMIT = 8;
+var NEW_PRODUCTS_DEFAULT_LIMIT = 10;
 // Kho soạn hàng chính — sheet nhẹ chỉ chứa tồn Q7 (tạo lúc import file tồn)
 var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
 var TON_Q7_SHEET_NAME = "TON_Q7";
@@ -2593,7 +2593,8 @@ function buildNewProductsList_(ss, limit) {
   var tenHangIdx = findColumnIndexByAliases(headerRow, ["tenhang", "name", "tênhang", "description"]);
   var dvtIdx = findColumnIndexByAliases(headerRow, ["dvt", "donvitinh", "donvi", "unit", "uom"]);
   var ngayTaoIdx = findColumnIndexByAliases(headerRow, ["ngaytao", "createdat", "created", "ngaythem", "importedat", "timestamp"]);
-  var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "moi", "hangmoi", "newflag"]);
+  var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "trangthaimoi", "hangmoi", "newflag", "moi"]);
+  if (isNewIdx === -1 && headerRow && headerRow.length >= 11) isNewIdx = 10;
   if (parentSkuIdxNp === -1 && headerRow && headerRow.length >= 10) parentSkuIdxNp = 9;
   var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
 
@@ -2655,7 +2656,8 @@ function buildNewProductsList_(ss, limit) {
     if (Object.prototype.hasOwnProperty.call(byKey, k)) list.push(byKey[k]);
   }
 
-  // Ưu tiên Admin tick IsNew=true; thiếu flag thì lấy theo ngày tạo / dòng mới
+  // Ưu tiên 1: toàn bộ Admin tick IsNew=true
+  // Ưu tiên 2: nếu < 8 thì lấp đầy theo NgayTao/CreatedAt giảm dần tới 8–10
   var flagged = [];
   var others = [];
   for (var li = 0; li < list.length; li++) {
@@ -2670,24 +2672,30 @@ function buildNewProductsList_(ss, limit) {
     if ((b.ngayMs || 0) !== (a.ngayMs || 0)) return (b.ngayMs || 0) - (a.ngayMs || 0);
     return (b.sheetRow || 0) - (a.sheetRow || 0);
   });
-  var merged = flagged.concat(others);
-  var top = merged.slice(0, limit);
-  for (var t = 0; t < top.length; t++) {
-    top[t].rank = t + 1;
-    // Chỉ giữ isNew=true khi Admin đã tick; không ép toàn bộ Top N
-    top[t].isNew = !!top[t].isNew;
+
+  var FILL_MIN = 8;
+  var FILL_MAX = Math.max(FILL_MIN, Math.min(Number(limit) || NEW_PRODUCTS_DEFAULT_LIMIT, 10));
+  var top = [];
+  for (var fi = 0; fi < flagged.length; fi++) {
+    var fItem = flagged[fi];
+    fItem.isNew = true;
+    fItem.isAdminPick = true;
+    fItem.sourceReason = "admin";
+    fItem.reasonLabel = "ADMIN CHỌN";
+    top.push(fItem);
   }
-  // Nếu chưa có tick nào: fallback Top N theo ngày và đánh dấu hiển thị
-  if (!flagged.length) {
-    for (var t2 = 0; t2 < top.length; t2++) top[t2].isNew = true;
-  } else {
-    // Chỉ trả các sản phẩm Admin tick (đúng nghiệp vụ badge NEW)
-    top = flagged.slice(0, limit);
-    for (var t3 = 0; t3 < top.length; t3++) {
-      top[t3].rank = t3 + 1;
-      top[t3].isNew = true;
+  if (top.length < FILL_MIN) {
+    for (var oi = 0; oi < others.length && top.length < FILL_MAX; oi++) {
+      var oItem = others[oi];
+      oItem.isNew = false;
+      oItem.isAdminPick = false;
+      oItem.sourceReason = "auto_date";
+      oItem.reasonLabel = oItem.ngayTao ? ("Ngày tạo: " + oItem.ngayTao) : "Mới theo ngày";
+      top.push(oItem);
     }
   }
+  // Admin tick nhiều hơn FILL_MAX: vẫn trả hết Admin tick (không cắt)
+  for (var t = 0; t < top.length; t++) top[t].rank = t + 1;
   return top;
 }
 
@@ -2706,7 +2714,7 @@ function getNewProductsList(limit) {
       data: data,
       limit: lim,
       source: "Data_Excel",
-      strategy: "isNew_flag_or_ngayTao_desc"
+      strategy: "admin_isNew_then_ngayTao_fill_8_10"
     };
     try { putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS); } catch (e) {}
     return result;

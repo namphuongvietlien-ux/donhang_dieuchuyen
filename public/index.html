@@ -292,7 +292,7 @@
         <div class="section-title">
           <div>
             <h3 style="margin:0; color:#c2410c;">✨ Sản phẩm mới</h3>
-            <div class="section-subtitle">Top hàng vừa cập nhật trong danh mục — bấm để thêm nhanh vào đơn.</div>
+            <div class="section-subtitle">Admin chọn ưu tiên · thiếu thì lấy theo ngày tạo — bấm để thêm nhanh vào đơn.</div>
           </div>
           <span class="badge-new">NEW</span>
         </div>
@@ -314,7 +314,6 @@
       <div class="tab-guide">
         <b>Cách dùng:</b> chọn timeline → xem số liệu tổng hợp và danh sách đơn gần đây của phạm vi tài khoản.
       </div>
-      <div id="dashboard-new-products" class="new-products-strip" style="display:none; margin-bottom:14px;"></div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📊 Tổng quan hoạt động</h3>
         <p style="margin-top:-4px; color:gray;">Theo dõi nhanh số lượng đơn, trạng thái và đơn mới gần đây.</p>
@@ -710,7 +709,9 @@
         <div class="form-row" style="align-items:end;">
           <div class="form-group" style="flex:1;">
             <label>Tìm mã / tên sản phẩm</label>
-            <input type="text" id="adm-new-q" placeholder="Nhập mã hàng, mã vạch hoặc tên..." onkeydown="if(event.key==='Enter'){event.preventDefault(); adm_loadNewProductFlags();}">
+            <input type="text" id="searchNewProductInput" placeholder="Gõ để lọc: vịt, TQP1011..." autocomplete="off"
+              oninput="adm_filterNewProductFlags()"
+              onkeyup="adm_filterNewProductFlags()">
           </div>
           <div class="form-group" style="max-width:160px;">
             <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadNewProductFlags()">🔎 Tải danh sách</button>
@@ -719,7 +720,11 @@
             <button type="button" class="btn-submit btn-success" style="width:100%;" onclick="adm_saveNewProductFlags()">💾 Lưu Hàng Mới</button>
           </div>
         </div>
-        <div id="adm-new-meta" style="font-size:12px; color:#64748b; margin:4px 0 10px;">Chưa tải danh sách.</div>
+        <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
+          <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#2563eb;" onclick="adm_setVisibleNewProductFlags(true)">☑ CheckAll (đang hiện)</button>
+          <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#64748b;" onclick="adm_setVisibleNewProductFlags(false)">☐ UncheckAll (đang hiện)</button>
+          <div id="adm-new-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách.</div>
+        </div>
         <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
           <table style="min-width:720px; margin:0;">
             <thead>
@@ -742,6 +747,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260804v55"></script>
+  <script src="app.js?v=20260804v56"></script>
 </body>
 </html>
