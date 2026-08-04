@@ -5416,9 +5416,68 @@ function getPartialStockIndexForItems_(ss, itemMap, keys) {
 }
 
 function parseIncludePackedFlag_(value) {
+  // Giữ alias cũ — bảng tổng hợp luôn trả mọi trạng thái trong khung ca.
   if (value === true || value === 1 || value === "1") return true;
   var s = String(value == null ? "" : value).trim().toLowerCase();
   return s === "true" || s === "yes" || s === "y" || s === "on";
+}
+
+/** Gom trạng thái đơn từ các dòng — không dùng để loại đơn khỏi danh sách. */
+function resolvePackingOrderStatusMeta_(item) {
+  item = item || {};
+  // Ưu tiên trạng thái "đặc biệt" để FE cảnh báo / bỏ tích mặc định
+  if (item.hasConfirmed) {
+    return {
+      trangThai: "Đã xác nhận nhận hàng",
+      status: "Đã xác nhận nhận hàng",
+      statusTone: "warn",
+      defaultChecked: false,
+      alreadyPacked: false
+    };
+  }
+  if (item.hasCancelled && !item.hasOpen && !item.hasPacked) {
+    return {
+      trangThai: "Đã hủy",
+      status: "Đã hủy",
+      statusTone: "danger",
+      defaultChecked: false,
+      alreadyPacked: false
+    };
+  }
+  if (item.hasPacked && !item.hasOpen) {
+    return {
+      trangThai: "Đã soạn hàng",
+      status: "Đã soạn hàng",
+      statusTone: "warn",
+      defaultChecked: false,
+      alreadyPacked: true
+    };
+  }
+  if (item.hasPacked && item.hasOpen) {
+    return {
+      trangThai: "Đang xử lý",
+      status: "Đang xử lý",
+      statusTone: "warn",
+      defaultChecked: false,
+      alreadyPacked: false
+    };
+  }
+  if (item.hasCancelled && item.hasOpen) {
+    return {
+      trangThai: "Mới",
+      status: "Mới",
+      statusTone: "ok",
+      defaultChecked: true,
+      alreadyPacked: false
+    };
+  }
+  return {
+    trangThai: "Mới",
+    status: "Mới",
+    statusTone: "ok",
+    defaultChecked: true,
+    alreadyPacked: false
+  };
 }
 
 function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMDD, packingMode, includePacked) {
@@ -5430,9 +5489,9 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
   packingDay = new Date(packingDay.getFullYear(), packingDay.getMonth(), packingDay.getDate(), 0, 0, 0, 0);
   var win = getPackingDayWindows_(packingDay);
   var mode = normalizePackingMode_(packingMode, false);
-  var allowPacked = parseIncludePackedFlag_(includePacked);
+  // Luôn lấy FULL đơn trong khung ca — không lọc theo trạng thái
   var orders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, null, packingDay, win, mode, {
-    includePacked: allowPacked
+    includeAllStatuses: true
   });
   // #region agent log
   var _dbgMs = Date.now() - _dbgT0;
@@ -5443,20 +5502,24 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
     dateTo: win.packingDayStr,
     packingDay: win.packingDayStr,
     packingMode: mode,
-    includePacked: allowPacked,
+    includePacked: true,
+    includeAllStatuses: true,
     mainWindow: win.mainLabel,
     suppWindow: win.suppLabel,
     totalWindow: win.totalLabel,
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "packing-window-v3"
+    _debugRun: "packing-window-v4"
   };
 }
 
+/**
+ * Lấy đơn theo khung ca (createdAt gốc).
+ * Không loại theo trạng thái — FE tự default-check theo badge.
+ */
 function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack, endDate, packingWin, packingMode, opts) {
   opts = opts || {};
-  var includePacked = !!opts.includePacked;
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
@@ -5477,7 +5540,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
 
     var ngayTao = row[0];
     var createdMs = toHoChiMinhMillis_(ngayTao);
-    // Tổng khung ca: N1 10:00 ≤ t < N2 10:00
+    // Chỉ lọc theo createdAt gốc trong khung ca: N1 10:00 ≤ t < N2 10:00
     if (!isInPackingDayWindow_(createdMs, win)) continue;
 
     var khoXuat = row[2] ? String(row[2]).trim() : "";
@@ -5504,15 +5567,15 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     }
 
     var entry = map[soPhieu];
+    // Theo dõi trạng thái để trả FE — KHÔNG dùng để loại đơn
     if (displayStatus === "Đã xác nhận") entry.hasConfirmed = true;
     else if (displayStatus === "Đã soạn") entry.hasPacked = true;
     else if (displayStatus === "Đã hủy" || displayStatus === "Đã hủy dòng") entry.hasCancelled = true;
     else entry.hasOpen = true;
 
-    if (!isNaN(createdMs)) {
-      if (isInPackingMainWindow_(createdMs, win)) entry.inMain = true;
-      if (isInPackingSuppWindow_(createdMs, win)) entry.inSupp = true;
-      if (isNaN(entry.createdAtMs) || createdMs < entry.createdAtMs) entry.createdAtMs = createdMs;
+    // Giữ mốc createdAt sớm nhất (gốc) — không bị lệch khi sửa/soạn sau 10h
+    if (!isNaN(createdMs) && (isNaN(entry.createdAtMs) || createdMs < entry.createdAtMs)) {
+      entry.createdAtMs = createdMs;
     }
   }
 
@@ -5520,24 +5583,27 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
   var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
   for (var key in map) {
     var item = map[key];
-    // Luôn loại đơn đã xác nhận nhận / hủy toàn phần
-    if (item.hasConfirmed) continue;
-    if (item.hasCancelled && !item.hasOpen && !item.hasPacked) continue;
-    // Mặc định (soạn mobile): bỏ đơn đã soạn. Bảng tổng hợp: includePacked=true vẫn giữ.
-    if (item.hasPacked && !item.hasOpen && !includePacked) continue;
+    // Phân ca theo createdAt gốc của đơn
+    item.inMain = isInPackingMainWindow_(item.createdAtMs, win);
+    item.inSupp = isInPackingSuppWindow_(item.createdAtMs, win);
+    // Chỉ lọc theo mode ca (main/supp/total), không lọc trạng thái
     if (mode === "main" && !item.inMain) continue;
     if (mode === "supp" && !item.inSupp) continue;
-    var bucket = item.inMain && item.inSupp ? "cả hai" : (item.inSupp ? "bổ sung" : "chính");
-    var trangThai = item.hasOpen ? "Mới" : (item.hasPacked ? "Đã soạn" : "Mới");
+    var bucket = item.inSupp ? "bổ sung" : "chính";
+    var statusMeta = resolvePackingOrderStatusMeta_(item);
     orders.push({
       soPhieu: item.soPhieu,
       khoXuat: item.khoXuat,
       khoNhan: item.khoNhan,
+      createdAt: item.createdAtMs,
       thoiGianDat: Utilities.formatDate(new Date(item.createdAtMs), tz, "dd/MM/yyyy HH:mm"),
       thoiGianDatMillis: item.createdAtMs,
       packingBucket: bucket,
-      trangThai: trangThai,
-      alreadyPacked: !!(item.hasPacked && !item.hasOpen)
+      trangThai: statusMeta.trangThai,
+      status: statusMeta.status,
+      statusTone: statusMeta.statusTone,
+      defaultChecked: !!statusMeta.defaultChecked,
+      alreadyPacked: !!statusMeta.alreadyPacked
     });
   }
 
@@ -5617,9 +5683,9 @@ function taoBangSoanHangNgayMai(payload) {
     historyPack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 2500);
   } else {
     historyPack = readHistoryDataPack_(historySheet, 3000);
-    // Bảng tổng hợp cần gồm cả đơn đã soạn trong khung ca
+    // Full đơn trong khung ca — không lọc trạng thái
     var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win, packingMode, {
-      includePacked: true
+      includeAllStatuses: true
     });
     selectedSet = buildOrderMatchSet_(eligibleOrders.map(function(o) { return o && o.soPhieu; }));
   }
@@ -5645,7 +5711,7 @@ function taoBangSoanHangNgayMai(payload) {
   if (!Object.keys(selectedSet).length) {
     return {
       success: false,
-      msg: "Không có đơn hợp lệ để tạo bảng soạn. Đơn đã soạn hoặc đã giao không được tính.",
+      msg: "Không có đơn trong khung ca để tạo bảng soạn. Chọn đơn trên danh sách hoặc kiểm tra ngày N2 / mode ca.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
       _debugRun: "fast-v10"
@@ -5674,15 +5740,13 @@ function taoBangSoanHangNgayMai(payload) {
   var includedNewRows = 0;
   var includedMainRows = 0;
 
-  // Pass 1: mốc tạo đơn sớm nhất (để nhận đơn mới trong cửa sổ 8h–10h)
+  // Pass 1: mốc createdAt gốc sớm nhất của đơn (không loại theo trạng thái)
   var orderMinCreated = {};
   for (var p1 = 1; p1 < data.length; p1++) {
     var rowP1 = data[p1];
     if (!rowP1) continue;
     var soP1 = rowP1[1] ? String(rowP1[1]).trim() : "";
     if (!soP1 || !orderInMatchSet_(soP1, selectedSet)) continue;
-    var stP1 = rowP1[12] ? String(rowP1[12]).trim() : "";
-    if (stP1 === "Đã hủy đơn" || stP1 === "Đã hủy dòng") continue;
     var msP1 = toMillisSafe_(rowP1[0]);
     if (isNaN(msP1)) continue;
     if (orderMinCreated[soP1] === undefined || msP1 < orderMinCreated[soP1]) {
@@ -5711,16 +5775,20 @@ function taoBangSoanHangNgayMai(payload) {
     var status = row[12] ? String(row[12]).trim() : "Đang xử lý";
 
     if (!khoNhan) continue;
-    if (status === "Đã hủy đơn" || status === "Đã hủy dòng") continue;
+    // Không lọc theo trạng thái — chỉ bỏ dòng SL <= 0
     if (soLuong <= 0) continue;
 
-    var createdMs = toHoChiMinhMillis_(row[0]);
+    // Lọc theo createdAt GỐC của đơn (min), không theo giờ sửa/thêm dòng sau 10h
+    var createdMs = orderMinCreated[soPhieu];
+    if (createdMs === undefined || isNaN(createdMs)) {
+      createdMs = toHoChiMinhMillis_(row[0]);
+    }
     if (isNaN(createdMs)) {
       skippedByTime++;
       continue;
     }
 
-    // main: N1 10:00 ≤ t < N2 08:00 | supp: N2 08:00 ≤ t < N2 10:00 | total: N1 10:00 ≤ t < N2 10:00
+    // main / supp / total theo mốc tạo gốc đơn
     if (!isInPackingModeWindow_(createdMs, win, packingMode)) {
       skippedByTime++;
       continue;

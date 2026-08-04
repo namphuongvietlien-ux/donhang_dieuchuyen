@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v53-packed-total';
+var APP_BUILD = '2026-08-04-v54-all-status';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -2416,13 +2416,43 @@ function sh_luuPhieu() {
 
 var shOrderCandidates = [];
 
+function sh_isOrderDefaultChecked_(order) {
+  if (!order) return false;
+  if (typeof order.defaultChecked === 'boolean') return order.defaultChecked;
+  var st = String(order.trangThai || order.status || '').trim().toLowerCase();
+  if (!st || st === 'mới' || st === 'moi' || st === 'chờ duyệt' || st === 'cho duyet') return true;
+  return false;
+}
+
+function sh_statusBadgeHtml_(order) {
+  var label = String((order && (order.trangThai || order.status)) || 'Mới').trim() || 'Mới';
+  var tone = String((order && order.statusTone) || '').trim().toLowerCase();
+  if (!tone) {
+    var st = label.toLowerCase();
+    if (st.indexOf('hủy') !== -1 || st.indexOf('huy') !== -1) tone = 'danger';
+    else if (st.indexOf('soạn') !== -1 || st.indexOf('soan') !== -1 || st.indexOf('xác nhận') !== -1 || st.indexOf('xac nhan') !== -1 || st.indexOf('đang xử lý') !== -1 || st.indexOf('cho') !== -1) tone = 'warn';
+    else tone = 'ok';
+  }
+  var bg = '#dcfce7';
+  var fg = '#166534';
+  if (tone === 'danger') { bg = '#fee2e2'; fg = '#b91c1c'; }
+  else if (tone === 'warn') { bg = '#fef3c7'; fg = '#b45309'; }
+  return '<span class="sh-status-badge" style="display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800;background:' + bg + ';color:' + fg + ';">' + escapeHtml(label) + '</span>';
+}
+
 function sh_capNhatTomTatChonDonSoan() {
   var checkboxes = document.querySelectorAll('.sh-order-check');
   var checked = 0;
   checkboxes.forEach(function(cb) { if (cb.checked) checked++; });
+  var countEl = document.getElementById('sh-order-picker-count');
+  if (countEl) {
+    countEl.innerText = 'Đã chọn ' + checked + ' / ' + checkboxes.length + ' đơn';
+  }
   var summaryEl = document.getElementById('sh-order-picker-summary');
-  if (summaryEl) {
-    summaryEl.innerText = 'Đang chọn ' + checked + '/' + checkboxes.length + ' đơn hợp lệ trong ngày (đơn đã soạn/đã giao đã được ẩn).';
+  if (summaryEl && summaryEl.getAttribute('data-base')) {
+    summaryEl.innerText = summaryEl.getAttribute('data-base') + ' · Đã chọn ' + checked + '/' + checkboxes.length + ' đơn.';
+  } else if (summaryEl) {
+    summaryEl.innerText = 'Đã chọn ' + checked + '/' + checkboxes.length + ' đơn trong khung ca (đơn đặc biệt hiện đủ, mặc định bỏ tích).';
   }
 }
 
@@ -2442,7 +2472,7 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
     if (suggested && packingDay !== suggested) {
       emptyHint += ' · Gợi ý: đơn sau 10h nằm ở ngày tổng hợp ' + suggested + '.';
     }
-    bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho N2 <b>' + escapeHtml(packingDay) + '</b> / mode <b>' + escapeHtml(sh_getPackingMode_()) + '</b>.<br><small style="color:#64748b;">' + escapeHtml(emptyHint) + '</small></td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="8" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn trong khung ca cho N2 <b>' + escapeHtml(packingDay) + '</b> / mode <b>' + escapeHtml(sh_getPackingMode_()) + '</b>.<br><small style="color:#64748b;">' + escapeHtml(emptyHint) + '</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
@@ -2450,16 +2480,12 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   candidates.forEach(function(order, idx) {
     var soPhieuSafe = String(order.soPhieu || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + escapeHtml(order.packingBucket) + ']</small>') : '';
-    var statusBadge = '';
-    if (order.alreadyPacked || order.trangThai === 'Đã soạn') {
-      statusBadge = ' <span style="display:inline-block;margin-left:6px;padding:2px 6px;border-radius:999px;font-size:10px;font-weight:800;background:#dcfce7;color:#166534;">Đã soạn</span>';
-    } else if (order.trangThai && order.trangThai !== 'Mới') {
-      statusBadge = ' <small style="color:#64748b;">[' + escapeHtml(order.trangThai) + ']</small>';
-    }
+    var checkedAttr = sh_isOrderDefaultChecked_(order) ? ' checked' : '';
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
-      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + statusBadge + '</td>' +
+      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '"' + checkedAttr + ' onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
+      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + '</td>' +
+      '<td>' + sh_statusBadgeHtml_(order) + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoXuat) + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoNhan) + '</td>' +
       '<td>' + escapeHtml(order.thoiGianDat || '-') + '</td>' +
@@ -2473,13 +2499,13 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   if (summaryEl) {
     var mode = sh_getPackingMode_();
     var modeText = mode === 'main' ? 'Đơn chính' : (mode === 'supp' ? 'Bổ sung' : 'Tổng hợp ca');
-    var summary = 'N2 ' + packingDay + ' · Mode: ' + modeText;
-    if (windowHint) summary += ' · ' + windowHint;
-    summary += ' · Sau 10:00 đơn thuộc ngày hôm sau.';
+    var base = 'N2 ' + packingDay + ' · Mode: ' + modeText + ' · Hiện đủ mọi trạng thái';
+    if (windowHint) base += ' · ' + windowHint;
+    base += ' · Badge xanh = mặc định chọn; đỏ/vàng = mặc định bỏ tích (vẫn chọn tay được)';
     if (suggested && packingDay !== suggested) {
-      summary += ' · Đang lệch ngày gợi ý theo giờ (' + suggested + ').';
+      base += ' · Đang lệch ngày gợi ý theo giờ (' + suggested + ')';
     }
-    summaryEl.innerText = summary;
+    summaryEl.setAttribute('data-base', base);
   }
   sh_capNhatTomTatChonDonSoan();
 }
@@ -2544,7 +2570,7 @@ function sh_taiDanhSachDonSoanChoBang() {
     ngay: ngay,
     ngayTo: ngayTo,
     packingMode: packingMode,
-    includePacked: '1', // bảng tổng hợp: vẫn hiện đơn đã soạn trong khung ca
+    includePacked: '1', // alias — BE luôn trả đủ trạng thái trong khung ca
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
   }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {

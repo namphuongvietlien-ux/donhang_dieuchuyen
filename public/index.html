@@ -570,6 +570,7 @@
           <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
             <div>
               <b style="color:#1e3a8a;">Chọn đơn để phân tích xuất bảng soạn</b>
+              <div id="sh-order-picker-count" style="font-size:13px; font-weight:700; color:#1d4ed8; margin-top:4px;">Đã chọn 0 / 0 đơn</div>
               <div id="sh-order-picker-summary" style="font-size:12px; color:#64748b; margin-top:2px;"></div>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -601,12 +602,13 @@
             </div>
           </div>
           <div style="max-height:260px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
-            <table style="min-width:780px; margin:0;">
+            <table style="min-width:900px; margin:0;">
               <thead>
                 <tr>
-                  <th style="width:56px; text-align:center;">STT</th>
-                  <th style="width:64px; text-align:center;">Chọn</th>
+                  <th style="width:48px; text-align:center;">STT</th>
+                  <th style="width:56px; text-align:center;">Chọn</th>
                   <th>Số phiếu</th>
+                  <th style="width:140px;">Trạng thái</th>
                   <th>Kho xuất</th>
                   <th>Kho nhận</th>
                   <th>Giờ đặt</th>
@@ -614,7 +616,7 @@
                 </tr>
               </thead>
               <tbody id="sh-order-picker-body">
-                <tr><td colspan="7" style="text-align:center; color:#64748b;">Nhấn nút tạo bảng soạn hàng để tải danh sách đơn.</td></tr>
+                <tr><td colspan="8" style="text-align:center; color:#64748b;">Nhấn nút tạo bảng soạn hàng để tải danh sách đơn.</td></tr>
               </tbody>
             </table>
           </div>
