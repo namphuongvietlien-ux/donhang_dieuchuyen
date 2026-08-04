@@ -320,19 +320,21 @@ function sanitizeFileNamePart(value) {
 }
 
 function normalizeOrderCodeText(value) {
-  // Đ/đ không luôn tách thành D trong NFKD → map thủ công để khớp Q7-ĐC… ↔ Q7-DC…
+  // Giữ Đ/đ — MISA phân biệt HĐCXXX1007 ≠ HDCXXX1007 (không map Đ→D).
   return String(value || "")
+    .replace(/[^a-zA-Z0-9Đđ]/g, "")
     .trim()
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .toUpperCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Z0-9]/g, "");
+    .toUpperCase();
 }
 
 
-/** Khớp số phiếu linh hoạt: Q7-DC318957 ↔ DC-318957 ↔ ĐC-318957 */
+/** Alias chuẩn hóa mã chứng từ / hóa đơn MISA (giữ Đ/đ) */
+function normalizeMisaDocumentCode_(value) {
+  return normalizeOrderCodeText(value);
+}
+
+
+/** Khớp số phiếu linh hoạt: Q7-DC318957 ↔ DC-318957 (substring), vẫn phân biệt HĐC ≠ HDC */
 function orderKeysMatch_(left, right) {
   var a = normalizeOrderCodeText(left);
   var b = normalizeOrderCodeText(right);
@@ -598,20 +600,23 @@ function parseQuantityValue(value) {
 
 function normalizeProductCode(value) {
   if (value === null || value === undefined) return "";
-  var text = String(value).trim().toUpperCase();
+  var text = String(value).trim();
   if (!text) return "";
 
   if (text.charAt(0) === "'") text = text.slice(1);
   text = text.replace(/\u00A0/g, "").replace(/\s+/g, "");
 
-  if (/^\d+\.0+$/.test(text)) {
+  // Số Excel kiểu 12345.0 / 1.234.567 — xử lý trước khi lọc ký tự
+  var upperProbe = text.toUpperCase();
+  if (/^\d+\.0+$/.test(upperProbe)) {
     text = text.replace(/\.0+$/, "");
   }
   if (/^\d{1,3}(\.\d{3})+$/.test(text)) {
     text = text.replace(/\./g, "");
   }
 
-  return text.replace(/[^A-Z0-9]/g, "");
+  // BẮT BUỘC giữ Đ/đ — MISA: HĐCXXX1007 ≠ HDCXXX1007
+  return text.replace(/[^a-zA-Z0-9Đđ]/g, "").trim().toUpperCase();
 }
 
 

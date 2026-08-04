@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v60-variant-pdf-merge';
+var APP_BUILD = '2026-08-04-v61-preserve-d-stroke';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -1008,8 +1008,26 @@ function applyQuyenKho() {
 }
 
 // ================= TÌM KIẾM & TẠO PHIẾU =================
+/** Chuẩn hóa mã MISA / mã hàng / số HĐ — GIỮ chữ Đ/đ (HĐC… ≠ HDC…) */
+function normalizeMisaCode_(value) {
+  return String(value || '')
+    .replace(/[^a-zA-Z0-9Đđ]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeProductCodeClient_(value) {
+  return normalizeMisaCode_(value);
+}
+
 function normalizeSearchText(value) {
-  return String(value || "").toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  // Giữ đ/Đ khi tìm mã; chỉ bỏ dấu tổ hợp (á→a), không map Đ→D và không xóa Đ
+  return String(value || "")
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9đ\s]+/g, ' ')
+    .trim();
 }
 
 function getSearchScore(item, query) {
@@ -4209,9 +4227,12 @@ function xb_onTabOpen() {
 function xb_xacNhanHoaDon() {
   var hdEl = document.getElementById("xb-so-hoa-don");
   var cnEl = document.getElementById("xb-chi-nhanh");
-  var soHd = hdEl ? String(hdEl.value || "").trim() : "";
-  if (!soHd) return alert("Vui lòng nhập số hóa đơn liên kết (từ phần mềm khác).");
+  var soHdRaw = hdEl ? String(hdEl.value || "").trim() : "";
+  if (!soHdRaw) return alert("Vui lòng nhập số hóa đơn liên kết (từ phần mềm khác).");
   if (!cnEl || !cnEl.value) return alert("Vui lòng chọn chi nhánh xuất bán.");
+  // Giữ nguyên Đ trong số HĐ MISA (HĐCXXX1007 ≠ HDCXXX1007)
+  var soHd = normalizeMisaCode_(soHdRaw) || soHdRaw;
+  if (hdEl) hdEl.value = soHd;
   xbInvoiceLocked = soHd;
   var lockedLbl = document.getElementById("xb-locked-invoice");
   if (lockedLbl) lockedLbl.textContent = soHd + " · " + (storeMap[cnEl.value] || cnEl.value);

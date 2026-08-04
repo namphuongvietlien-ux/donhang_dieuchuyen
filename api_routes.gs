@@ -754,7 +754,7 @@ function ensureXuatBanHangSheet_(ss) {
 /** Lưu phiếu xuất bán kèm dịch vụ — bắt buộc số hóa đơn liên kết */
 function luuXuatBanHang(payload) {
   payload = payload || {};
-  var soHoaDon = String(payload.soHoaDon || "").trim();
+  var soHoaDon = normalizeOrderCodeText(payload.soHoaDon || "") || String(payload.soHoaDon || "").trim();
   if (!soHoaDon) throw new Error("Vui lòng nhập số hóa đơn liên kết trước khi lưu.");
   var items = payload.items || [];
   if (!items.length) throw new Error("Chưa có mặt hàng nào để lưu.");
@@ -843,7 +843,7 @@ function layDanhSachXuatBanHang(ngayYYYYMMDD, userRole, userStore, soHoaDonFilte
   var start = Math.max(2, lastRow - 3000);
   var num = lastRow - start + 1;
   var body = sh.getRange(start, 1, num, 12).getValues();
-  var filterHd = String(soHoaDonFilter || "").trim().toLowerCase();
+  var filterHd = normalizeOrderCodeText(soHoaDonFilter || "");
   var filterStore = normalizeStoreName(userStore || "");
   var map = {};
 
@@ -853,7 +853,10 @@ function layDanhSachXuatBanHang(ngayYYYYMMDD, userRole, userStore, soHoaDonFilte
     var maPhieu = row[2] ? String(row[2]).trim() : "";
     var soHd = row[1] ? String(row[1]).trim() : "";
     if (!maPhieu && !soHd) continue;
-    if (filterHd && soHd.toLowerCase().indexOf(filterHd) === -1) continue;
+    if (filterHd) {
+      var soHdNorm = normalizeOrderCodeText(soHd);
+      if (soHdNorm.indexOf(filterHd) === -1) continue;
+    }
     if (!matchesNgayFilter(row[0], ngayYYYYMMDD || "7days")) continue;
     var cn = row[3] ? String(row[3]).trim() : "";
     if (userRole !== "Admin" && filterStore && !isSameStoreName(cn, filterStore)) continue;
