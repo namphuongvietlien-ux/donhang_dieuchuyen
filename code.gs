@@ -1851,11 +1851,11 @@ function resolveCatalogProduct(lookup, maHang, maVach) {
 }
 
 function resolveDvtValue(lookup, maHang, maVach, currentDvt) {
-  var current = String(currentDvt || "").trim();
+  // Ép theo Data_Excel khi có ĐVT catalog — không giữ "Cái"/ĐVT sai đã lưu trên đơn
   var catalogItem = resolveCatalogProduct(lookup, maHang, maVach);
   var catalogDvt = catalogItem && catalogItem.dvt ? String(catalogItem.dvt).trim() : "";
-  if (catalogDvt && (!current || normalizeHeaderText(current) === "cai")) return catalogDvt;
-  return current || catalogDvt || "";
+  if (catalogDvt) return catalogDvt;
+  return String(currentDvt || "").trim();
 }
 
 function findHeaderRowIndex(data, maxScanRows) {
@@ -3243,6 +3243,8 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
     var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 4000);
     var data = pack.data || [[]];
     var sheetOrders = pack.orders || [];
+    var catalogLookup = null;
+    try { catalogLookup = getCatalogLookup(ss); } catch (catErr) { catalogLookup = null; }
 
     var matchedRows = [];
     for (var i = 1; i < data.length; i++) {
@@ -3274,7 +3276,7 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
         slGoc: slGoc,
         slSoan: slSoan,
         slThucTe: slThucTe,
-        dvt: data[i][9] || "",
+        dvt: resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9] || "") || data[i][9] || "",
         ghiChu: data[i][11] || "",
         trangThai: rowStatus || "Mới",
         nguoiSoanHang: data[i][13] || "",
@@ -3713,7 +3715,6 @@ function luuChinhSuaPhieu(payload) {
           break;
         }
       }
-
       // rowPatches[sheetRow] = fields to write on cols 6-15 (batch)
       var rowPatches = {};
       function getPatch_(sheetRow) {
@@ -3736,6 +3737,8 @@ function luuChinhSuaPhieu(payload) {
       }
 
       var newRows = [];
+      var catalogLookupForAdd = null;
+      try { catalogLookupForAdd = getCatalogLookup(ss); } catch (catAddErr) { catalogLookupForAdd = null; }
       for (var n = 0; n < newItems.length; n++) {
         var newItem = newItems[n];
         if (hasDuplicateItemInOrder(historySheet, soPhieu, newItem, historyData)) {
@@ -3748,7 +3751,7 @@ function luuChinhSuaPhieu(payload) {
           orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "",
           orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "",
           newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "",
-          itemQty, "", newItem.dvt || "", "",
+          itemQty, "", resolveDvtValue(catalogLookupForAdd, newItem.maHang || "", newItem.maVach || "", newItem.dvt || "") || "", "",
           "Thêm mới vào đơn", "Mới", actor, "Quản lý"
         ]);
         auditRows.push([nowAudit, soPhieu, "Thêm mã vào đơn", actor, newItem.maHang || "", newItem.maVach || "", "", itemQty, newItem.tenHang || ""]);
@@ -3798,7 +3801,7 @@ function luuChinhSuaPhieu(payload) {
           editPatch.actor = actor;
           editPatch.source = "Quản lý";
           if (newMaVach) editPatch.maVach = newMaVach;
-          if (newDvt) editPatch.dvt = newDvt;
+          if (newDvt) editPatch.dvt = resolveDvtValue(catalogLookupForAdd, maHang, newMaVach, newDvt) || newDvt;
           if (newTenHang) editPatch.tenHang = newTenHang;
 
           if (Number(oldSl) !== newVal) {
@@ -3902,7 +3905,8 @@ function themChiTietPhieu(payload) {
   var item = payload.item;
   var quantity = Number(item.sl);
   if (!quantity || quantity < 1) throw new Error("Số lượng thêm phải lớn hơn 0.");
-  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", item.dvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"];
+  var dvtAdd = resolveDvtValue(getCatalogLookup(ss), item.maHang || "", item.maVach || "", item.dvt || "");
+  var row = [new Date(), payload.soPhieu, baseRow[2], baseRow[3], item.maHang || "", item.maVach || "", item.tenHang || "", quantity, "", dvtAdd || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"];
   historySheet.appendRow(row);
   logOrderChange(ss, payload.soPhieu, "Thêm mã vào đơn", payload.actor, item.maHang, item.maVach, "", quantity, item.tenHang || "");
   return { success: true };
@@ -5529,21 +5533,15 @@ function taoBangSoanHangNgayMai(payload) {
   var userRole = payload && payload.userRole ? payload.userRole : "";
   var userStore = payload && payload.userStore ? payload.userStore : "";
   var selectedOrdersRaw = payload && payload.selectedOrders && payload.selectedOrders.length ? payload.selectedOrders : [];
-  var selectedSet = {};
-  for (var so0 = 0; so0 < selectedOrdersRaw.length; so0++) {
-    var pick0 = String(selectedOrdersRaw[so0] || "").trim();
-    if (pick0) selectedSet[pick0] = true;
-  }
+  var selectedSet = buildOrderMatchSet_(selectedOrdersRaw);
 
   var historyPack;
-  if (Object.keys(selectedSet).length) {
+  if (selectedSet._list && selectedSet._list.length) {
     historyPack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 2500);
   } else {
     historyPack = readHistoryDataPack_(historySheet, 3000);
     var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win, packingMode);
-    for (var eo = 0; eo < eligibleOrders.length; eo++) {
-      selectedSet[String(eligibleOrders[eo].soPhieu).trim()] = true;
-    }
+    selectedSet = buildOrderMatchSet_(eligibleOrders.map(function(o) { return o && o.soPhieu; }));
   }
   // #region agent log
   _dbgMark("readHistory", {
@@ -5602,7 +5600,7 @@ function taoBangSoanHangNgayMai(payload) {
     var rowP1 = data[p1];
     if (!rowP1) continue;
     var soP1 = rowP1[1] ? String(rowP1[1]).trim() : "";
-    if (!soP1 || !selectedSet[soP1]) continue;
+    if (!soP1 || !orderInMatchSet_(soP1, selectedSet)) continue;
     var stP1 = rowP1[12] ? String(rowP1[12]).trim() : "";
     if (stP1 === "Đã hủy đơn" || stP1 === "Đã hủy dòng") continue;
     var msP1 = toMillisSafe_(rowP1[0]);
@@ -5616,7 +5614,7 @@ function taoBangSoanHangNgayMai(payload) {
     var row = data[i];
     if (!row) continue;
     var soPhieu = row[1] ? String(row[1]).trim() : "";
-    if (!soPhieu || !selectedSet[soPhieu]) continue;
+    if (!soPhieu || !orderInMatchSet_(soPhieu, selectedSet)) continue;
 
     var khoXuat = row[2] ? String(row[2]).trim() : "";
     var khoNhan = row[3] ? String(row[3]).trim() : "";
@@ -5626,7 +5624,7 @@ function taoBangSoanHangNgayMai(payload) {
     var soLuong = Number(row[7]) || 0;
     var dvtRaw = String(row[9] || "").trim();
     var dvt = dvtRaw;
-    if ((!dvt || normalizeHeaderText(dvt) === "cai") && catalogLookup) {
+    if (catalogLookup) {
       dvt = resolveDvtValue(catalogLookup, maHang, maVach, dvtRaw) || dvtRaw;
     }
     var noteText = row[11] != null ? String(row[11]).trim() : "";

@@ -79,9 +79,21 @@ async function apiPost(action, payload, options) {
   const plainOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
   const proxyOptions = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: jsonBody };
   const timeoutMs = options.timeoutMs || 120000;
+  const proxyTimeoutMs = Math.min(Math.max(timeoutMs, 20000), 60000);
 
   if (options.directOnly) {
     return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+  }
+
+  // Một số action (tạo bảng soạn) hay dính CORS/redirect trên browser → ưu tiên proxy
+  if (options.proxyFirst) {
+    try {
+      return await callJsonApi(['/api/gas-proxy'], proxyOptions, proxyTimeoutMs);
+    } catch (proxyErr) {
+      console.warn('[donhang] proxy POST failed, fallback direct', String(proxyErr && proxyErr.message || proxyErr));
+      if (options.allowDirectFallback === false) throw proxyErr;
+      return callJsonApi([GAS_EXEC_URL], plainOptions, timeoutMs);
+    }
   }
 
   // Ưu tiên POST thẳng GAS (tránh proxy treo). Proxy chỉ fallback.
@@ -91,7 +103,7 @@ async function apiPost(action, payload, options) {
     const msg = String(directErr && directErr.message || directErr);
     console.warn('[donhang] direct POST failed, fallback proxy', msg);
     if (options.allowDirectFallback === false && options.allowProxyFallback === false) throw directErr;
-    return callJsonApi(['/api/gas-proxy'], proxyOptions, Math.min(timeoutMs, 50000));
+    return callJsonApi(['/api/gas-proxy'], proxyOptions, proxyTimeoutMs);
   }
 }
 
@@ -100,7 +112,10 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v49-variant';
+var APP_BUILD = '2026-08-04-v52-variant';
+var shCreateDateUserTouched_ = false;
+// Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
+var DEBUG_INGEST_ENABLED = false;
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -273,22 +288,29 @@ function updateHeroGuideForRole() {
 }
 
 // #region agent log
-function dbgConfirm_(hypothesisId, location, message, data) {
+function dbgSend_(hypothesisId, location, message, data) {
   try {
+    var payload = {
+      sessionId: '4a6e3c',
+      hypothesisId: hypothesisId || '?',
+      location: location || 'app.js',
+      message: message || '',
+      data: Object.assign({ build: APP_BUILD }, data || {}),
+      timestamp: Date.now()
+    };
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[donhang:debug]', hypothesisId || '?', location || '', message || '', payload.data);
+    }
+    if (!DEBUG_INGEST_ENABLED) return;
     fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '4a6e3c' },
-      body: JSON.stringify({
-        sessionId: '4a6e3c',
-        runId: 'confirm-lock-v2',
-        hypothesisId: hypothesisId || 'A',
-        location: location || 'app.js',
-        message: message || '',
-        data: Object.assign({ build: APP_BUILD }, data || {}),
-        timestamp: Date.now()
-      })
+      body: JSON.stringify(payload)
     }).catch(function() {});
   } catch (e) {}
+}
+function dbgConfirm_(hypothesisId, location, message, data) {
+  dbgSend_(hypothesisId, location, message, data);
 }
 function dbgStatusBag_(status) {
   var s = String(status || '');
@@ -321,6 +343,27 @@ function escapeHtml(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Tra cứu sản phẩm trong Data_Excel (danhMucGoc đã load) */
+function lookupCatalogProductClient_(maHang, maVach) {
+  var mv = String(maVach || '').trim().toUpperCase();
+  var mh = String(maHang || '').trim().toUpperCase();
+  if (mv && danhMucGoc[mv]) return danhMucGoc[mv];
+  if (mh && danhMucGoc[mh]) return danhMucGoc[mh];
+  return null;
+}
+
+/** ĐVT bắt buộc theo Data_Excel khi catalog có giá trị — không mặc định giả "Cái" */
+function resolveDvtClient_(maHang, maVach, currentDvt) {
+  var cat = lookupCatalogProductClient_(maHang, maVach);
+  var catalogDvt = cat && String(cat.dvt || '').trim();
+  if (catalogDvt) return catalogDvt;
+  return String(currentDvt || '').trim();
+}
+
+function formatDvtDisplay_(maHang, maVach, currentDvt) {
+  return resolveDvtClient_(maHang, maVach, currentDvt) || '—';
 }
 
 /** Cảnh báo tồn thấp — chỉ hiển thị, không chặn lên đơn / lưu soạn */
@@ -997,7 +1040,7 @@ function handleSearchInput(e) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
     var newBadge = isNewProductItem_(item) ? ' <span class="badge-new">MỚI</span>' : '';
     var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + newBadge + groupBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + (item.parentSku ? (' · Parent: ' + item.parentSku) : '') + '</div></div>';
+    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + newBadge + groupBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + (item.parentSku ? (' · Parent: ' + escapeHtml(item.parentSku)) : '') + '</div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
@@ -1067,7 +1110,7 @@ function ql_handleAddCodeInput(e) {
   results.slice(0, 8).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
     var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
-    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + groupBadge + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + (item.parentSku ? (' · Parent: ' + item.parentSku) : '') + '</div></div>';
+    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + groupBadge + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + (item.parentSku ? (' · Parent: ' + escapeHtml(item.parentSku)) : '') + '</div></div>';
   });
   box.innerHTML = html;
   box.style.display = "block";
@@ -1196,7 +1239,7 @@ function chonSanPhamDirect_(it) {
       maHang: it.maHang,
       maVach: it.maVach,
       tenHang: it.tenHang,
-      dvt: it.dvt,
+      dvt: resolveDvtClient_(it.maHang, it.maVach, it.dvt),
       parentSku: it.parentSku || '',
       sl: "1",
       highlight: true
@@ -1234,7 +1277,9 @@ function renderTable() {
     var isErr = (it.maHang === "LỖI MÃ" || isNaN(Number(it.sl))); tongSl += (Number(it.sl) || 0);
     var trClass = isErr ? 'row-error' : (it.highlight ? 'scan-highlight' : ''); it.highlight = false;
     var newBadge = (!isErr && isNewProductItem_(it)) ? ' <span class="badge-new">MỚI</span>' : '';
-    tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>Mã vạch: ' + it.maVach + '</b><br><small style="color:gray;">Mã hàng hóa: ' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + newBadge + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
+    var dvtShow = formatDvtDisplay_(it.maHang, it.maVach, it.dvt);
+    it.dvt = resolveDvtClient_(it.maHang, it.maVach, it.dvt) || it.dvt;
+    tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b><br><small style="color:gray;">Mã hàng hóa: ' + escapeHtml(it.maHang) + '</small></td><td style="font-weight:500;">' + escapeHtml(it.tenHang) + newBadge + '</td><td>' + escapeHtml(dvtShow) + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
   });
   document.getElementById("lbl-tong-sl").innerText = tongSl;
   if (arrItems.length === 0) {
@@ -1256,8 +1301,22 @@ function submitPhieuMoi() {
   var khoXuat = document.getElementById("select-kho-xuat").value;
   var khoNhan = document.getElementById("select-kho-nhan").value;
   var itemCount = arrItems.length;
+  var itemsToSave = arrItems.map(function(it) {
+    return {
+      maHang: it.maHang,
+      maVach: it.maVach,
+      tenHang: it.tenHang,
+      dvt: resolveDvtClient_(it.maHang, it.maVach, it.dvt),
+      sl: it.sl
+    };
+  });
+  // #region agent log
+  dbgSend_('DVT', 'submitPhieuMoi', 'items dvt before save', {
+    sample: itemsToSave.slice(0, 5).map(function(x) { return { ma: x.maHang || x.maVach, dvt: x.dvt }; })
+  });
+  // #endregion
 
-  apiPost('luuPhieuTuWebApp', { loaiPhieu: lPhieu, khoXuat: khoXuat, khoNhan: khoNhan, items: arrItems }).then(function(res) {
+  apiPost('luuPhieuTuWebApp', { loaiPhieu: lPhieu, khoXuat: khoXuat, khoNhan: khoNhan, items: itemsToSave }).then(function(res) {
     hideLoad();
     if(res.coLoi) { alert("⚠️ Có mã lỗi. Sửa trong tab Quản lý!"); arrItems = []; renderTable(); }
     else {
@@ -1294,7 +1353,7 @@ function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
 
   var htmlStr = '<div class="title">Số: ' + soPhieu + '</div><div class="meta"><b>Kho xuất:</b> ' + khoXuat + '<br><b>Kho nhận:</b> ' + khoNhan + '</div>';
   htmlStr += '<table><thead><tr><th>STT</th><th>Mã</th><th>Tên hàng</th><th>ĐVT</th><th>Số lượng (Soạn)</th><th class="note-cell"></th></tr></thead><tbody>';
-  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td class="code-cell">'+ ((it.maVach || '') + (it.maHang ? ' / ' + it.maHang : '')) +'</td><td>'+it.tenHang+'</td><td>'+it.dvt+'</td><td class="qty-cell">'+it.sl+'</td><td class="note-cell"></td></tr>'; }});
+  var stt = 1; itemsArray.forEach(it => { if(Number(it.sl) > 0) { htmlStr += '<tr><td>'+(stt++)+'</td><td class="code-cell">'+ ((it.maVach || '') + (it.maHang ? ' / ' + it.maHang : '')) +'</td><td>'+it.tenHang+'</td><td>'+escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.dvt))+'</td><td class="qty-cell">'+it.sl+'</td><td class="note-cell"></td></tr>'; }});
   htmlStr += '</tbody></table><div style="display:flex; justify-content:space-between; margin-top:40px; text-align:center;"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div>';
 
   var iframe = document.createElement('iframe');
@@ -1323,15 +1382,23 @@ function getNgayFilterParam(inputId) {
   return inputEl && inputEl.value ? inputEl.value : '';
 }
 
+function sh_getSuggestedPackingDayStr_() {
+  var info = getPackingTimelineInfo(new Date());
+  return formatDateInputValue(info.packingDay);
+}
+
 function sh_ensureCreateDateDefaults_() {
   var fromEl = document.getElementById('sh-create-from');
   var toEl = document.getElementById('sh-create-to');
   if (!toEl) return;
-  var today = new Date();
-  if (!toEl.value) toEl.value = formatDateInputValue(today);
+  // Mặc định = ngày tổng hợp theo khung giờ (sau 10:00 → ngày mai), KHÔNG phải ngày lịch
+  var packingDefault = sh_getSuggestedPackingDayStr_();
+  if (!toEl.value || !shCreateDateUserTouched_) {
+    toEl.value = packingDefault;
+  }
   // from = ngày trước packing day (tự động, dùng cho API cũ)
   if (fromEl) {
-    var packing = new Date((toEl.value || formatDateInputValue(today)) + 'T00:00:00');
+    var packing = new Date((toEl.value || packingDefault) + 'T00:00:00');
     var prev = new Date(packing);
     prev.setDate(packing.getDate() - 1);
     fromEl.value = formatDateInputValue(prev);
@@ -1342,17 +1409,23 @@ function sh_getCreateDateRange_() {
   sh_ensureCreateDateDefaults_();
   var fromEl = document.getElementById('sh-create-from');
   var toEl = document.getElementById('sh-create-to');
-  var packingDay = toEl && toEl.value ? toEl.value : formatDateInputValue(new Date());
+  var packingDay = toEl && toEl.value ? toEl.value : sh_getSuggestedPackingDayStr_();
   if (toEl) toEl.value = packingDay;
   var packing = new Date(packingDay + 'T00:00:00');
   var prev = new Date(packing);
   prev.setDate(packing.getDate() - 1);
   var from = formatDateInputValue(prev);
   if (fromEl) fromEl.value = from;
-  return { from: from, to: packingDay, packingDay: packingDay };
+  return {
+    from: from,
+    to: packingDay,
+    packingDay: packingDay,
+    suggestedPackingDay: sh_getSuggestedPackingDayStr_()
+  };
 }
 
 function sh_onCreateDateRangeChange() {
+  shCreateDateUserTouched_ = true;
   sh_getCreateDateRange_();
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl && pickerEl.style.display !== 'none') sh_taiDanhSachDonSoanChoBang();
@@ -1655,7 +1728,7 @@ function confirm_onSelectPhieu() {
       var disabledAttr = isConfirmedLine ? ' disabled' : '';
       var rowNote = isConfirmedLine ? ' <small style="color:#64748b;">(đã xác nhận)</small>' : '';
       tbody.insertAdjacentHTML('beforeend',
-        '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small>' + rowNote + '</td><td>' + (r.dvt || 'Cái') + '</td><td style="font-weight:700;color:#c2410c;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input' + (isConfirmedLine ? '' : ' same') + '" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + inputValue + '" data-confirmed="' + (isConfirmedLine ? '1' : '0') + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"' + disabledAttr + '></td></tr>');
+        '<tr><td>' + (idx + 1) + '</td><td><b>' + (r.maVach || '') + '</b><br><small style="color:gray;">' + (r.maHang || '') + '</small><br><small>' + (r.tenHang || '') + '</small>' + rowNote + '</td><td>' + escapeHtml(formatDvtDisplay_(r.maHang, r.maVach, r.dvt)) + '</td><td style="font-weight:700;color:#c2410c;">' + packedQty + '</td><td><input type="number" class="confirm-qty-input' + (isConfirmedLine ? '' : ' same') + '" data-row="' + r.rowIndex + '" data-packed="' + packedQty + '" data-previous="' + inputValue + '" data-confirmed="' + (isConfirmedLine ? '1' : '0') + '" value="' + inputValue + '" min="0" oninput="confirm_updateInput(this)"' + disabledAttr + '></td></tr>');
     });
     var saveBtn = document.querySelector('#confirm-view .btn-success');
     if (saveBtn) {
@@ -1820,7 +1893,8 @@ function ql_hienThiChiTiet(phieu, options) {
         ? 'background:#fce8e6; color:#777; text-decoration:line-through;'
         : (shortInfo ? 'background:#fef2f2;' : (r.ghiChu ? 'background:#fff8e1;' : ''));
       var rowKey = String(r.tempKey || r.rowIndex);
-      var dvtDisplay = r.dvt || "Cái";
+      var dvtDisplay = formatDvtDisplay_(r.maHang, r.maVach, r.dvt);
+      r.dvt = resolveDvtClient_(r.maHang, r.maVach, r.dvt) || r.dvt;
       var variantHtml = ql_renderVariantSelector(r, rowKey, isReadOnlyRow);
       var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-stock="'+(r.stock === '' || r.stock == null ? '' : r.stock)+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;" oninput="ql_onEditQtyInput(this)">';
       var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
@@ -1904,23 +1978,25 @@ function ql_getVariantOptions(rowMeta) {
       ? (itemParent === parentSku)
       : (maHang && itemMaHang === maHang);
     if (!sameGroup) return;
-    var key = String(item.maHang || '').trim().toUpperCase() + '|' + String(item.maVach || '').trim().toUpperCase() + '|' + String(item.dvt || 'Cái').trim().toUpperCase();
+    var dvtItem = resolveDvtClient_(item.maHang, item.maVach, item.dvt);
+    var key = String(item.maHang || '').trim().toUpperCase() + '|' + String(item.maVach || '').trim().toUpperCase() + '|' + String(dvtItem || '').trim().toUpperCase();
     if (!key || seen[key]) return;
     seen[key] = true;
     variants.push({
       maVach: item.maVach || '',
-      dvt: item.dvt || 'Cái',
+      dvt: dvtItem,
       tenHang: item.tenHang || rowMeta.tenHang || '',
       maHang: item.maHang || rowMeta.maHang || '',
       parentSku: itemParent || parentSku || ''
     });
   });
 
-  var currentKey = String(rowMeta.maHang || '').trim().toUpperCase() + '|' + String(rowMeta.maVach || '').trim().toUpperCase() + '|' + String(rowMeta.dvt || 'Cái').trim().toUpperCase();
+  var currentDvt = resolveDvtClient_(rowMeta.maHang, rowMeta.maVach, rowMeta.dvt);
+  var currentKey = String(rowMeta.maHang || '').trim().toUpperCase() + '|' + String(rowMeta.maVach || '').trim().toUpperCase() + '|' + String(currentDvt || '').trim().toUpperCase();
   if (!seen[currentKey]) {
     variants.unshift({
       maVach: rowMeta.maVach || '',
-      dvt: rowMeta.dvt || 'Cái',
+      dvt: currentDvt,
       tenHang: rowMeta.tenHang || '',
       maHang: rowMeta.maHang || '',
       parentSku: parentSku || ''
@@ -1942,7 +2018,7 @@ function ql_renderVariantSelector(rowMeta, rowKey, isReadOnlyRow) {
       ? ' selected' : '';
     var payload = encodeURIComponent(JSON.stringify(v));
     var label = (v.tenHang || v.maVach || '-') + ' | MH: ' + (v.maHang || '-') + ' | MV: ' + (v.maVach || '-') + ' | ĐVT: ' + (v.dvt || 'Cái');
-    optionsHtml += '<option value="' + payload + '"' + selected + '>' + label + '</option>';
+    optionsHtml += '<option value="' + payload + '"' + selected + '>' + escapeHtml(label.replace(v.dvt || 'Cái', formatDvtDisplay_(v.maHang, v.maVach, v.dvt))) + '</option>';
   });
   return '<select class="ql-variant-select" data-row="' + rowKey + '" onchange="ql_onVariantChange(this)">' + optionsHtml + '</select>';
 }
@@ -1957,11 +2033,11 @@ function ql_onVariantChange(selectEl) {
   var rowMeta = editRows.find(function(item) { return String(item.tempKey || item.rowIndex) === rowKey; });
   if (!rowMeta || !variant) return;
   rowMeta.maVach = variant.maVach || rowMeta.maVach;
-  rowMeta.dvt = variant.dvt || rowMeta.dvt || 'Cái';
   rowMeta.tenHang = variant.tenHang || rowMeta.tenHang;
   if (variant.maHang) rowMeta.maHang = variant.maHang;
+  rowMeta.dvt = resolveDvtClient_(rowMeta.maHang, rowMeta.maVach, variant.dvt || rowMeta.dvt);
   var dvtCell = document.getElementById('ql-dvt-' + rowKey);
-  if (dvtCell) dvtCell.innerText = rowMeta.dvt || 'Cái';
+  if (dvtCell) dvtCell.innerText = formatDvtDisplay_(rowMeta.maHang, rowMeta.maVach, rowMeta.dvt);
 }
 
 function ql_isDuplicateOrderItem(item) {
@@ -2003,15 +2079,25 @@ function ql_luuSua() {
       if (isNew) {
         var rowMeta = editRows.find(function(item) { return String(item.tempKey || item.rowIndex) === String(rowKey); });
         if (rowMeta) {
-          newItems.push({ maHang: rowMeta.maHang, maVach: rowMeta.maVach, tenHang: rowMeta.tenHang, dvt: rowMeta.dvt, sl: qtyValue });
+          newItems.push({
+            maHang: rowMeta.maHang,
+            maVach: rowMeta.maVach,
+            tenHang: rowMeta.tenHang,
+            dvt: resolveDvtClient_(rowMeta.maHang, rowMeta.maVach, rowMeta.dvt),
+            sl: qtyValue
+          });
         }
       } else {
         var variant = variantByRow[String(rowKey)] || null;
+        var rowMetaUpd = editRows.find(function(item) { return String(item.rowIndex) === String(rowKey); });
+        var dvtUpd = variant
+          ? resolveDvtClient_(variant.maHang || (rowMetaUpd && rowMetaUpd.maHang), variant.maVach || (rowMetaUpd && rowMetaUpd.maVach), variant.dvt)
+          : resolveDvtClient_(rowMetaUpd && rowMetaUpd.maHang, rowMetaUpd && rowMetaUpd.maVach, rowMetaUpd && rowMetaUpd.dvt);
         updates.push({
           row: parseInt(rowKey),
           valSl: qtyValue,
           valMaVach: variant ? (variant.maVach || '') : '',
-          valDvt: variant ? (variant.dvt || '') : '',
+          valDvt: dvtUpd || '',
           valTenHang: variant ? (variant.tenHang || '') : ''
         });
       }
@@ -2062,12 +2148,13 @@ function ql_themMaHangDirect_(item, quantity) {
   if (tb) {
     var latestQty = Number(quantity) || 1;
     var tempKey = 'new-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    var dvtAdd = resolveDvtClient_(item.maHang, item.maVach, item.dvt);
     editRows.push({
       tempKey: tempKey,
       maHang: item.maHang,
       maVach: item.maVach,
       tenHang: item.tenHang,
-      dvt: item.dvt || "Cái",
+      dvt: dvtAdd || item.dvt || "Cái",
       parentSku: item.parentSku || "",
       slGoc: latestQty,
       slThucTe: latestQty,
@@ -2076,7 +2163,7 @@ function ql_themMaHangDirect_(item, quantity) {
       trangThai: "Chưa lưu",
       nguoiSoanHang: ""
     });
-    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>' + (item.dvt || 'Cái') + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><span style="color:#94a3b8;">-</span></td><td><span style="color:#94a3b8;">-</span></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
+    tb.insertAdjacentHTML('beforeend', '<tr><td>' + (editRows.length) + '</td><td><b>Mã vạch: ' + (item.maVach || '') + '</b><br><small style="color:gray;">Mã hàng hóa: ' + (item.maHang || '') + '</small></td><td>' + (item.tenHang || '') + '</td><td>' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, dvtAdd)) + '</td><td>0</td><td><input type="number" class="edit-sl-input" data-row="' + tempKey + '" data-new="1" value="' + latestQty + '" style="border:2px solid #1a73e8;text-align:center;width:70px;"></td><td><span style="color:#94a3b8;">-</span></td><td><span style="color:#94a3b8;">-</span></td><td><button type="button" onclick="ql_huyDong(' + tempKey + ')" style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td></tr>');
   }
 
   alert("✅ Đã thêm mã vào bảng chỉnh sửa. Nhấn Lưu để ghi vào hệ thống.");
@@ -2255,7 +2342,7 @@ function sh_chonDonMobile() {
       html += '<div class="item-card" style="' + cardStyle + '" data-stock="' + (stockDisplay === "" || isNaN(stockDisplay) ? '' : stockDisplay) + '" data-slgoc="' + (Number(it.slGoc) || 0) + '">' +
         '<b>' + escapeHtml(it.tenHang) + '</b><br>' +
         '<small><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b> | Mã hàng hóa: ' + escapeHtml(it.maHang || '') +
-        ' | ĐVT: ' + escapeHtml(it.dvt) + ' | Tồn hiện tại: ' + stockLabel + '</small>' +
+        ' | ĐVT: ' + escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.dvt)) + ' | Tồn hiện tại: ' + stockLabel + '</small>' +
         warnHtml +
         '<div class="action-row"><div>SL Yêu Cầu: <b>' + it.slGoc + '</b>' + prevPackedNote + '<br>SL Soạn: ' +
         '<input type="number" class="sl-thuc-te" data-row="' + it.rowIndex + '" value="' + packQty + '" oninput="sh_onPackQtyInput(this)">' +
@@ -2344,36 +2431,95 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   if (!bodyEl) return;
   var range = sh_getCreateDateRange_();
   var packingDay = (meta && meta.packingDay) || range.packingDay || range.to || '';
+  var suggested = (meta && meta.suggestedPackingDay) || range.suggestedPackingDay || sh_getSuggestedPackingDayStr_();
   var windowHint = '';
   if (meta && (meta.mainWindow || meta.suppWindow || meta.totalWindow)) {
     windowHint = 'Chính: ' + (meta.mainWindow || '') + ' · Bổ sung: ' + (meta.suppWindow || '') +
       (meta.totalWindow ? (' · Tổng: ' + meta.totalWindow) : '');
   }
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho N2 <b>' + escapeHtml(packingDay) + '</b> / mode <b>' + escapeHtml(sh_getPackingMode_()) + '</b>.<br><small style="color:#64748b;">' + escapeHtml(windowHint || 'N1 10:00 ≤ t &lt; N2 10:00') + '</small></td></tr>';
+    var emptyHint = 'Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + windowHint;
+    if (suggested && packingDay !== suggested) {
+      emptyHint += ' · Gợi ý: đơn sau 10h nằm ở ngày tổng hợp ' + suggested + '.';
+    }
+    bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho N2 <b>' + escapeHtml(packingDay) + '</b> / mode <b>' + escapeHtml(sh_getPackingMode_()) + '</b>.<br><small style="color:#64748b;">' + escapeHtml(emptyHint) + '</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
   var html = '';
   candidates.forEach(function(order, idx) {
-    var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + order.packingBucket + ']</small>') : '';
+    var soPhieuSafe = String(order.soPhieu || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + escapeHtml(order.packingBucket) + ']</small>') : '';
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
-      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + order.soPhieu + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><b>' + order.soPhieu + '</b>' + bucket + '</td>' +
+      '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
+      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoXuat) + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoNhan) + '</td>' +
-      '<td>' + (order.thoiGianDat || '-') + '</td>' +
+      '<td>' + escapeHtml(order.thoiGianDat || '-') + '</td>' +
+      '<td style="text-align:center;">' +
+        '<button type="button" class="btn-submit" style="width:auto; padding:6px 10px; border-radius:8px; box-shadow:none; background:#0f766e; font-size:12px;" onclick="sh_inDonTuBangSoan(\'' + soPhieuSafe + '\')">🖨️ In</button>' +
+      '</td>' +
       '</tr>';
   });
   bodyEl.innerHTML = html;
   var summaryEl = document.getElementById('sh-order-picker-summary');
-  if (summaryEl && windowHint) {
+  if (summaryEl) {
     var mode = sh_getPackingMode_();
     var modeText = mode === 'main' ? 'Đơn chính' : (mode === 'supp' ? 'Bổ sung' : 'Tổng hợp ca');
-    summaryEl.innerText = 'N2 ' + packingDay + ' · Mode: ' + modeText + ' · ' + windowHint + ' · Chọn đơn rồi xuất bảng.';
+    var summary = 'N2 ' + packingDay + ' · Mode: ' + modeText;
+    if (windowHint) summary += ' · ' + windowHint;
+    summary += ' · Sau 10:00 đơn thuộc ngày hôm sau.';
+    if (suggested && packingDay !== suggested) {
+      summary += ' · Đang lệch ngày gợi ý theo giờ (' + suggested + ').';
+    }
+    summaryEl.innerText = summary;
   }
   sh_capNhatTomTatChonDonSoan();
+}
+
+/** In từng đơn từ bảng chọn đơn soạn hàng (cùng mẫu in tab Quản lý) */
+function sh_inDonTuBangSoan(soPhieu) {
+  var code = String(soPhieu || '').trim();
+  if (!code) return alert('Thiếu số phiếu.');
+  var fromList = (shOrderCandidates || []).find(function(o) {
+    return o && String(o.soPhieu || '').trim() === code;
+  });
+  showLoad('Đang tải đơn ' + code + ' để in...');
+  apiGet('getChiTietPhieu', {
+    soPhieu: code,
+    storeName: (fromList && fromList.khoXuat) || (sessionUser && sessionUser.store) || '',
+    includeStock: '0'
+  }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+    hideLoad();
+    var parsed = unwrapListResponse_(res);
+    var rows = parsed.rows || [];
+    var items = [];
+    rows.forEach(function(row) {
+      if (!row) return;
+      if (row.trangThai === 'Đã hủy dòng' || row.trangThai === 'Đã hủy đơn') return;
+      var sl = ql_resolvePrintQty_(row);
+      if (Number(sl) > 0) {
+        items.push({
+          maHang: row.maHang,
+          maVach: row.maVach,
+          tenHang: row.tenHang,
+          dvt: resolveDvtClient_(row.maHang, row.maVach, row.dvt),
+          sl: sl
+        });
+      }
+    });
+    if (!items.length) {
+      alert('Đơn ' + code + ' không có dòng hợp lệ để in.');
+      return;
+    }
+    var khoXuat = (fromList && fromList.khoXuat) || '';
+    var khoNhan = (fromList && fromList.khoNhan) || '';
+    executePrintWeb(code, khoXuat, khoNhan, items);
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi tải đơn để in: ' + (err && err.message || err));
+  });
 }
 
 
@@ -2385,7 +2531,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl) pickerEl.style.display = 'block';
   var bodyEl = document.getElementById('sh-order-picker-body');
-  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
+  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#64748b; padding:14px;">Đang tải danh sách đơn...</td></tr>';
 
   showLoad('Đang tải danh sách đơn soạn...');
   apiGet('getDanhSachDonSoanHang', {
@@ -2400,8 +2546,20 @@ function sh_taiDanhSachDonSoanChoBang() {
       throw new Error((res && (res.error || res.msg)) || 'Không thể tải danh sách đơn.');
     }
     shOrderCandidates = Array.isArray(res.orders) ? res.orders : [];
+    var suggested = range.suggestedPackingDay || sh_getSuggestedPackingDayStr_();
+    // #region agent log
+    dbgSend_('PD1', 'sh_taiDanhSachDonSoanChoBang:ok', 'packing picker list', {
+      selectedPackingDay: res.packingDay || ngayTo,
+      suggestedPackingDay: suggested,
+      userTouched: !!shCreateDateUserTouched_,
+      total: shOrderCandidates.length,
+      hasDH435102: shOrderCandidates.some(function(o) { return o && String(o.soPhieu || '').indexOf('435102') !== -1; }),
+      sample: shOrderCandidates.slice(0, 8).map(function(o) { return o && o.soPhieu; })
+    });
+    // #endregion
     sh_renderDanhSachDonSoan(shOrderCandidates, {
       packingDay: res.packingDay || ngayTo,
+      suggestedPackingDay: suggested,
       mainWindow: res.mainWindow || '',
       suppWindow: res.suppWindow || '',
       totalWindow: res.totalWindow || ''
@@ -2410,7 +2568,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   }).catch(function(err) {
     hideLoad();
     shOrderCandidates = [];
-    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + escapeHtml(err.message) + '</td></tr>';
+    if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#b91c1c; padding:14px;">Lỗi tải danh sách: ' + escapeHtml(err.message) + '</td></tr>';
     sh_capNhatTomTatChonDonSoan();
   });
 }
@@ -2471,6 +2629,11 @@ function sh_moBangChonDonSoan() {
     alert('Vui lòng đăng nhập trước khi tạo bảng soạn.');
     return;
   }
+  // Mỗi lần mở: nếu user chưa tự chọn ngày thì sync theo khung giờ hiện tại
+  if (!shCreateDateUserTouched_) {
+    var toEl = document.getElementById('sh-create-to');
+    if (toEl) toEl.value = sh_getSuggestedPackingDayStr_();
+  }
   sh_taiDanhSachDonSoanChoBang();
 }
 
@@ -2524,9 +2687,19 @@ function sh_taoBangSoanTuDonDaChon() {
       newAfterTime: newAfterTime,
       newBeforeTime: newBeforeTime || '10:00'
     };
+    // proxyFirst: tránh CORS redirect POST→GET trên browser (lỗi 502 HTML)
     var postOpts = stockOk
-      ? { allowDirectFallback: true, timeoutMs: 55000 }
-      : { directOnly: true, timeoutMs: 180000 };
+      ? { proxyFirst: true, timeoutMs: 60000 }
+      : { proxyFirst: true, timeoutMs: 90000 };
+    // #region agent log
+    dbgSend_('P502', 'sh_taoBangSoanTuDonDaChon:post', 'create packing table request', {
+      selectedCount: selectedOrders.length,
+      packingDay: packingDay,
+      stockOk: !!stockOk,
+      onlyNewItems: !!onlyNewItems,
+      sample: selectedOrders.slice(0, 8)
+    });
+    // #endregion
     return apiPost('taoBangSoanHangNgayMai', payload, postOpts);
   }).then(function(res) {
     hideLoad();
@@ -2610,8 +2783,7 @@ function impNormalizeText(value) {
 
 function dbgBranch_(hypothesisId, location, message, data) {
   // #region agent log
-  var payload = data || {};
-  fetch('http://127.0.0.1:7480/ingest/48e8fdfc-ebb8-4d81-9aee-1659862ac812',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4a6e3c'},body:JSON.stringify({sessionId:'4a6e3c',runId:payload.runId||'branch-import',hypothesisId:hypothesisId||'?',location:location||'app.js',message:message||'',data:payload,timestamp:Date.now(),build:APP_BUILD})}).catch(function(){});
+  dbgSend_(hypothesisId, location, message, data);
   // #endregion
 }
 
@@ -3398,7 +3570,7 @@ function xb_handleSearchInput(e) {
   var html = "";
   results.slice(0, 10).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="xb_chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
+    html += '<div class="suggest-item" onclick="xb_chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + '</div></div>';
   });
   box.innerHTML = html;
   box.style.display = "block";
@@ -3412,28 +3584,18 @@ function xb_chonSanPhamFromSuggest(itemStr) {
   if (box) box.style.display = "none";
 }
 
-/** Tra cứu catalog Data_Excel đã load (danhMucGoc) — cùng nguồn tab Tạo đơn / Quản lý */
-function lookupCatalogProductClient_(maHang, maVach) {
-  var mv = String(maVach || "").trim().toUpperCase();
-  var mh = String(maHang || "").trim().toUpperCase();
-  if (mv && danhMucGoc[mv]) return danhMucGoc[mv];
-  if (mh && danhMucGoc[mh]) return danhMucGoc[mh];
-  return null;
-}
-
 function xb_chonSanPham(it) {
   if (!xbInvoiceLocked) return alert("Xác nhận số hóa đơn liên kết trước.");
   var cat = lookupCatalogProductClient_(it && it.maHang, it && it.maVach) || it || {};
   var maHang = cat.maHang || it.maHang || "";
   var maVach = cat.maVach || it.maVach || "";
   var tenHang = cat.tenHang || it.tenHang || "";
-  // ĐVT từ Data_Excel (catalog), fallback giống tab Quản lý
-  var dvt = String(cat.dvt || it.dvt || "").trim() || "Cái";
+  var dvt = resolveDvtClient_(maHang, maVach, (cat && cat.dvt) || (it && it.dvt));
   var existingIndex = xbItems.findIndex(function(x) { return x.maVach === maVach && x.maHang !== "LỖI MÃ"; });
   if (existingIndex !== -1) {
     xbItems[existingIndex].sl = Number(xbItems[existingIndex].sl) + 1;
     xbItems[existingIndex].highlight = true;
-    if (!String(xbItems[existingIndex].dvt || "").trim()) xbItems[existingIndex].dvt = dvt;
+    xbItems[existingIndex].dvt = dvt || xbItems[existingIndex].dvt;
   } else {
     xbItems.unshift({ maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt, sl: "1", highlight: true });
   }
@@ -3460,7 +3622,7 @@ function xb_renderTable() {
     tbody.insertAdjacentHTML("beforeend",
       '<tr class="' + trClass + '"><td>' + (xbItems.length - i) + '</td>' +
       '<td><b>Mã vạch: ' + escapeHtml(it.maVach) + '</b><br><small style="color:gray;">Mã hàng hóa: ' + escapeHtml(it.maHang) + '</small></td>' +
-      '<td style="font-weight:500;">' + escapeHtml(it.tenHang) + '</td><td>' + escapeHtml(it.dvt || 'Cái') + '</td>' +
+      '<td style="font-weight:500;">' + escapeHtml(it.tenHang) + '</td><td>' + escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.dvt)) + '</td>' +
       '<td><div class="qty-control"><button class="qty-btn" onclick="xb_thayDoiSoLuong(' + i + ', -1)">-</button>' +
       '<input type="number" class="qty-input" value="' + it.sl + '" onchange="xbItems[' + i + '].sl=this.value; xb_renderTable();">' +
       '<button class="qty-btn" onclick="xb_thayDoiSoLuong(' + i + ', 1)">+</button></div></td>' +
@@ -3485,14 +3647,14 @@ function xb_submit() {
   if (!chiNhanh) return alert("Thiếu chi nhánh xuất bán.");
   if (!confirm("Lưu xuất bán cho HĐ " + xbInvoiceLocked + " (" + xbItems.length + " dòng)?")) return;
 
-  // Đồng bộ lại ĐVT từ catalog Data_Excel trước khi lưu (giống resolve phía server)
+  // Đồng bộ lại ĐVT từ catalog Data_Excel trước khi lưu
   var itemsToSave = xbItems.map(function(it) {
     var cat = lookupCatalogProductClient_(it.maHang, it.maVach);
     return {
       maHang: (cat && cat.maHang) || it.maHang,
       maVach: (cat && cat.maVach) || it.maVach,
       tenHang: (cat && cat.tenHang) || it.tenHang,
-      dvt: String((cat && cat.dvt) || it.dvt || "").trim() || "Cái",
+      dvt: resolveDvtClient_(it.maHang, it.maVach, it.dvt),
       sl: it.sl
     };
   });

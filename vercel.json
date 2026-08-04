@@ -1,1 +1,7 @@
-{}
+{
+  "functions": {
+    "api/gas-proxy.js": {
+      "maxDuration": 60
+    }
+  }
+}
