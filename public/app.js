@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v52-variant';
+var APP_BUILD = '2026-08-04-v53-packed-total';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -2450,10 +2450,16 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   candidates.forEach(function(order, idx) {
     var soPhieuSafe = String(order.soPhieu || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + escapeHtml(order.packingBucket) + ']</small>') : '';
+    var statusBadge = '';
+    if (order.alreadyPacked || order.trangThai === 'Đã soạn') {
+      statusBadge = ' <span style="display:inline-block;margin-left:6px;padding:2px 6px;border-radius:999px;font-size:10px;font-weight:800;background:#dcfce7;color:#166534;">Đã soạn</span>';
+    } else if (order.trangThai && order.trangThai !== 'Mới') {
+      statusBadge = ' <small style="color:#64748b;">[' + escapeHtml(order.trangThai) + ']</small>';
+    }
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
       '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '" checked onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + '</td>' +
+      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + statusBadge + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoXuat) + '</td>' +
       '<td>' + formatStoreShortLabel_(order.khoNhan) + '</td>' +
       '<td>' + escapeHtml(order.thoiGianDat || '-') + '</td>' +
@@ -2538,6 +2544,7 @@ function sh_taiDanhSachDonSoanChoBang() {
     ngay: ngay,
     ngayTo: ngayTo,
     packingMode: packingMode,
+    includePacked: '1', // bảng tổng hợp: vẫn hiện đơn đã soạn trong khung ca
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
   }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {

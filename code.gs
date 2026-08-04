@@ -1120,7 +1120,14 @@ function doGet(e) {
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');
           break;
         case 'getDanhSachDonSoanHang':
-          res = getDanhSachDonSoanHang(e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.ngayTo || '', e.parameter.packingMode || '');
+          res = getDanhSachDonSoanHang(
+            e.parameter.ngay || '',
+            e.parameter.userRole || '',
+            e.parameter.userStore || '',
+            e.parameter.ngayTo || '',
+            e.parameter.packingMode || '',
+            e.parameter.includePacked
+          );
           break;
         case 'getChiTietDonHangMobile':
           res = getChiTietDonHangMobile(e.parameter.soPhieu || '');
@@ -4597,6 +4604,8 @@ function debugOrderInfo_(key) {
   var num = lastRow - start + 1;
   var values = sh.getRange(start, 1, num, lastCol).getValues();
   var found = [];
+  var minCreatedMs = NaN;
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
   for (var i = 0; i < values.length; i++) {
     var sp = values[i][1] != null ? String(values[i][1]).trim() : "";
     if (!sp) continue;
@@ -4604,9 +4613,17 @@ function debugOrderInfo_(key) {
     if (key && (sp.indexOf(key) !== -1 || orderKeysMatch_(sp, key))) hit = true;
     if (!hit && digits && sp.indexOf(digits) !== -1) hit = true;
     if (!hit) continue;
+    var createdMs = toHoChiMinhMillis_(values[i][0]);
+    if (!isNaN(createdMs) && (isNaN(minCreatedMs) || createdMs < minCreatedMs)) minCreatedMs = createdMs;
     found.push({
       sheetRow: start + i,
       soPhieu: sp,
+      ngayTao: values[i][0] instanceof Date
+        ? Utilities.formatDate(values[i][0], tz, "dd/MM/yyyy HH:mm:ss")
+        : String(values[i][0] || ""),
+      createdMs: createdMs,
+      khoXuat: values[i][2],
+      khoNhan: values[i][3],
       slGoc: values[i][7],
       col9: values[i][8],
       status: values[i][12],
@@ -4615,6 +4632,41 @@ function debugOrderInfo_(key) {
       source: values[i][14]
     });
   }
+
+  var packingProbe = null;
+  if (!isNaN(minCreatedMs)) {
+    // Đoán N2: tạo >= 10:00 → N2 = ngày tạo + 1; tạo < 10:00 → N2 = ngày tạo
+    var createdLocal = new Date(minCreatedMs);
+    var y = Number(Utilities.formatDate(createdLocal, tz, "yyyy"));
+    var m = Number(Utilities.formatDate(createdLocal, tz, "M")) - 1;
+    var d = Number(Utilities.formatDate(createdLocal, tz, "d"));
+    var hh = Number(Utilities.formatDate(createdLocal, tz, "H"));
+    var packingDay = hh >= 10 ? new Date(y, m, d + 1, 0, 0, 0, 0) : new Date(y, m, d, 0, 0, 0, 0);
+    var win = getPackingDayWindows_(packingDay);
+    packingProbe = {
+      packingDay: win.packingDayStr,
+      totalWindow: win.totalLabel,
+      inTotal: isInPackingDayWindow_(minCreatedMs, win),
+      inMain: isInPackingMainWindow_(minCreatedMs, win),
+      inSupp: isInPackingSuppWindow_(minCreatedMs, win),
+      reasonIfMissing: ""
+    };
+  }
+
+  var statuses = {};
+  for (var fi = 0; fi < found.length; fi++) {
+    var st = String(found[fi].status || "Mới").trim() || "Mới";
+    statuses[st] = (statuses[st] || 0) + 1;
+  }
+  if (packingProbe) {
+    if (!packingProbe.inTotal) packingProbe.reasonIfMissing = "Ngoài khung giờ tổng hợp N2=" + packingProbe.packingDay;
+    else if (statuses["Đã soạn hàng"] || statuses["Đã xác nhận nhận hàng"]) {
+      packingProbe.reasonIfMissing = "Trong khung giờ nhưng bị loại vì trạng thái đã soạn/đã xác nhận (picker mặc định)";
+    } else {
+      packingProbe.reasonIfMissing = "";
+    }
+  }
+
   return {
     success: true,
     key: key,
@@ -4622,8 +4674,12 @@ function debugOrderInfo_(key) {
     lastRow: lastRow,
     lastCol: lastCol,
     matchCount: found.length,
-    found: found,
-    _debugRun: "debug-order-v1"
+    minCreatedMs: minCreatedMs,
+    minCreatedLabel: isNaN(minCreatedMs) ? "" : Utilities.formatDate(new Date(minCreatedMs), tz, "dd/MM/yyyy HH:mm:ss"),
+    statusSummary: statuses,
+    packingProbe: packingProbe,
+    found: found.slice(0, 20),
+    _debugRun: "debug-order-v2"
   };
 }
 
@@ -5359,7 +5415,13 @@ function getPartialStockIndexForItems_(ss, itemMap, keys) {
   return index;
 }
 
-function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMDD, packingMode) {
+function parseIncludePackedFlag_(value) {
+  if (value === true || value === 1 || value === "1") return true;
+  var s = String(value == null ? "" : value).trim().toLowerCase();
+  return s === "true" || s === "yes" || s === "y" || s === "on";
+}
+
+function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMDD, packingMode, includePacked) {
   // #region agent log
   var _dbgT0 = Date.now();
   // #endregion
@@ -5368,7 +5430,10 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
   packingDay = new Date(packingDay.getFullYear(), packingDay.getMonth(), packingDay.getDate(), 0, 0, 0, 0);
   var win = getPackingDayWindows_(packingDay);
   var mode = normalizePackingMode_(packingMode, false);
-  var orders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, null, packingDay, win, mode);
+  var allowPacked = parseIncludePackedFlag_(includePacked);
+  var orders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, null, packingDay, win, mode, {
+    includePacked: allowPacked
+  });
   // #region agent log
   var _dbgMs = Date.now() - _dbgT0;
   // #endregion
@@ -5378,17 +5443,20 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
     dateTo: win.packingDayStr,
     packingDay: win.packingDayStr,
     packingMode: mode,
+    includePacked: allowPacked,
     mainWindow: win.mainLabel,
     suppWindow: win.suppLabel,
     totalWindow: win.totalLabel,
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "packing-window-v2"
+    _debugRun: "packing-window-v3"
   };
 }
 
-function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack, endDate, packingWin, packingMode) {
+function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack, endDate, packingWin, packingMode, opts) {
+  opts = opts || {};
+  var includePacked = !!opts.includePacked;
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
@@ -5429,6 +5497,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
         hasPacked: false,
         hasConfirmed: false,
         hasCancelled: false,
+        hasOpen: false,
         inMain: false,
         inSupp: false
       };
@@ -5438,6 +5507,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     if (displayStatus === "Đã xác nhận") entry.hasConfirmed = true;
     else if (displayStatus === "Đã soạn") entry.hasPacked = true;
     else if (displayStatus === "Đã hủy" || displayStatus === "Đã hủy dòng") entry.hasCancelled = true;
+    else entry.hasOpen = true;
 
     if (!isNaN(createdMs)) {
       if (isInPackingMainWindow_(createdMs, win)) entry.inMain = true;
@@ -5450,17 +5520,24 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
   var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
   for (var key in map) {
     var item = map[key];
-    if (item.hasPacked || item.hasConfirmed || item.hasCancelled) continue;
+    // Luôn loại đơn đã xác nhận nhận / hủy toàn phần
+    if (item.hasConfirmed) continue;
+    if (item.hasCancelled && !item.hasOpen && !item.hasPacked) continue;
+    // Mặc định (soạn mobile): bỏ đơn đã soạn. Bảng tổng hợp: includePacked=true vẫn giữ.
+    if (item.hasPacked && !item.hasOpen && !includePacked) continue;
     if (mode === "main" && !item.inMain) continue;
     if (mode === "supp" && !item.inSupp) continue;
     var bucket = item.inMain && item.inSupp ? "cả hai" : (item.inSupp ? "bổ sung" : "chính");
+    var trangThai = item.hasOpen ? "Mới" : (item.hasPacked ? "Đã soạn" : "Mới");
     orders.push({
       soPhieu: item.soPhieu,
       khoXuat: item.khoXuat,
       khoNhan: item.khoNhan,
       thoiGianDat: Utilities.formatDate(new Date(item.createdAtMs), tz, "dd/MM/yyyy HH:mm"),
       thoiGianDatMillis: item.createdAtMs,
-      packingBucket: bucket
+      packingBucket: bucket,
+      trangThai: trangThai,
+      alreadyPacked: !!(item.hasPacked && !item.hasOpen)
     });
   }
 
@@ -5540,7 +5617,10 @@ function taoBangSoanHangNgayMai(payload) {
     historyPack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 2500);
   } else {
     historyPack = readHistoryDataPack_(historySheet, 3000);
-    var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win, packingMode);
+    // Bảng tổng hợp cần gồm cả đơn đã soạn trong khung ca
+    var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win, packingMode, {
+      includePacked: true
+    });
     selectedSet = buildOrderMatchSet_(eligibleOrders.map(function(o) { return o && o.soPhieu; }));
   }
   // #region agent log
