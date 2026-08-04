@@ -52,6 +52,15 @@ function doPost(e) {
             requireAdminAction(action, payload.payload || {});
             result = nhapKhauCapNhatThongTin(payload.payload || {});
             break;
+          case 'removeDuplicateStockRows':
+            requireAdminAction(action, payload.payload || {});
+            requireAdmin((payload.payload && payload.payload.actor) || "");
+            result = removeDuplicateStockRows();
+            break;
+          case 'updateProductLockStatus':
+            requireAdminAction(action, payload.payload || {});
+            result = updateProductLockStatus_(payload.payload || {});
+            break;
           case 'doiMatKhau':
             result = doiMatKhau(payload.payload || {});
             break;
@@ -193,18 +202,18 @@ function handleTelegramMessage(message) {
     }
     var orders = getPendingOrdersForStore(storeName, 10);
     if (!orders.length) {
-      var short = STORE_MAP[storeName] || storeName;
-      sendTelegramText(chatId, "Hiện không có đơn mới cho kho: " + storeName + " (" + short + ").\n\nMở web app để kiểm tra toàn bộ đơn: " + WEB_APP_URL);
+      var short = formatStoreDisplayLabel_(storeName) || storeName;
+      sendTelegramText(chatId, "Hiện không có đơn mới cho kho: " + short + ".\n\nMở web app để kiểm tra toàn bộ đơn: " + WEB_APP_URL);
       return;
     }
     var lines = orders.map(function(o, idx) {
       var sx = o.khoXuat || ""; var sn = o.khoNhan || "";
-      var sxShort = STORE_MAP[sx] || sx;
-      var snShort = STORE_MAP[sn] || sn;
+      var sxShort = formatStoreDisplayLabel_(sx) || sx;
+      var snShort = formatStoreDisplayLabel_(sn) || sn;
       return (idx + 1) + ". " + o.soPhieu + " (" + sxShort + " → " + snShort + ")\n" + getOrderWebUrl(o.soPhieu);
     });
-    var short = STORE_MAP[storeName] || storeName;
-    sendTelegramText(chatId, "🔔 Đơn mới cho kho " + storeName + " (" + short + "):\n" + lines.join("\n\n"));
+    var short = formatStoreDisplayLabel_(storeName) || storeName;
+    sendTelegramText(chatId, "🔔 Đơn mới cho kho " + short + ":\n" + lines.join("\n\n"));
     return;
   }
 
@@ -502,13 +511,13 @@ function buildTelegramOrderLinkText(soPhieu, pdfUrl) {
 
 function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount, pdfUrl) {
   var typeLabel = soPhieu.indexOf("DH") !== -1 ? "ĐƠN HÀNG MỚI" : "LỆNH ĐIỀU CHUYỂN MỚI";
-  var kxShort = STORE_MAP[khoXuat] || khoXuat;
-  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var kxShort = formatStorePrintLabel_(khoXuat) || formatStoreDisplayLabel_(khoXuat) || khoXuat;
+  var knShort = formatStorePrintLabel_(khoNhan) || formatStoreDisplayLabel_(khoNhan) || khoNhan;
   var text = "📦 *THÔNG BÁO " + typeLabel + "*\n" +
              "*Trạng thái:* Mới\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
-             "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
-             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
+             "*Kho xuất:* " + kxShort + "\n" +
+             "*Kho nhận:* " + knShort + "\n" +
              "*Số mặt hàng:* " + itemCount + "\n\n" +
              buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
@@ -519,11 +528,11 @@ function sendTelegramMessage(soPhieu, khoXuat, khoNhan, itemCount, pdfUrl) {
 
 
 function sendTelegramOrderReady(soPhieu, khoNhan, pdfUrl) {
-  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var knShort = formatStorePrintLabel_(khoNhan) || formatStoreDisplayLabel_(khoNhan) || khoNhan;
   var text = "✅ *ĐÃ HOÀN THÀNH SOẠN HÀNG*\n" +
              "*Trạng thái:* Đã soạn\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
-             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n\n" +
+             "*Kho nhận:* " + knShort + "\n\n" +
              buildTelegramOrderLinkText(soPhieu, pdfUrl);
   if (TELEGRAM_CHAT_ID) {
     sendTelegramText(TELEGRAM_CHAT_ID, text);
@@ -535,13 +544,13 @@ function sendTelegramOrderReady(soPhieu, khoNhan, pdfUrl) {
 
 
 function sendTelegramOrderCancelled(soPhieu, khoXuat, khoNhan, actor, reason) {
-  var kxShort = STORE_MAP[khoXuat] || khoXuat;
-  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var kxShort = formatStorePrintLabel_(khoXuat) || formatStoreDisplayLabel_(khoXuat) || khoXuat;
+  var knShort = formatStorePrintLabel_(khoNhan) || formatStoreDisplayLabel_(khoNhan) || khoNhan;
   var reasonText = reason ? "\n*Lý do:* " + reason : "";
   var text = "🛑 *ĐÃ HỦY ĐƠN HÀNG*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
-             "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
-             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
+             "*Kho xuất:* " + kxShort + "\n" +
+             "*Kho nhận:* " + knShort + "\n" +
              "*Người hủy:* " + (actor || "Không xác định") + reasonText + "\n\n" +
              "Thông tin này đã được lưu vào lịch sử đơn hàng.";
   if (TELEGRAM_CHAT_ID) {
@@ -557,10 +566,12 @@ function sendTelegramOrderCancelled(soPhieu, khoXuat, khoNhan, actor, reason) {
 
 
 function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, changeCount, actor, extraText, pdfUrl) {
-  var kxShort = STORE_MAP[khoXuat] || khoXuat;
-  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var kxShort = formatStoreDisplayLabel_(khoXuat) || khoXuat;
+  var knShort = formatStoreDisplayLabel_(khoNhan) || khoNhan;
   var text = "🔄 *ĐƠN ĐÃ THAY ĐỔI*\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
+             "*Kho xuất:* " + kxShort + "\n" +
+             "*Kho nhận:* " + knShort + "\n" +
              "*Hành động:* " + actionLabel + "\n" +
              "*Số mã thay đổi:* " + changeCount + "\n" +
              "*Người thực hiện:* " + (actor || "Không xác định") + "\n" +
@@ -576,8 +587,8 @@ function sendTelegramOrderChangeSummary(soPhieu, khoXuat, khoNhan, actionLabel, 
 
 
 function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, totalRows, statusLabel, missingCount, extraCount, actor, pdfUrl) {
-  var kxShort = STORE_MAP[khoXuat] || khoXuat;
-  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var kxShort = formatStorePrintLabel_(khoXuat) || formatStoreDisplayLabel_(khoXuat) || khoXuat;
+  var knShort = formatStorePrintLabel_(khoNhan) || formatStoreDisplayLabel_(khoNhan) || khoNhan;
   var detailText = "*Kết quả:* " + statusLabel + "\n" +
                    "*Thiếu hàng:* " + missingCount + " mã\n" +
                    "*Thừa hàng:* " + extraCount + " mã\n" +
@@ -585,8 +596,8 @@ function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, tot
   var text = "📦 *ĐƠN ĐÃ SOẠN XONG*\n" +
              "*Trạng thái:* Đã soạn\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
-             "*Kho xuất:* " + khoXuat + " (" + kxShort + ")\n" +
-             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
+             "*Kho xuất:* " + kxShort + "\n" +
+             "*Kho nhận:* " + knShort + "\n" +
              "*Mã thay đổi:* " + changedCount + "\n" +
              detailText +
              "*Người thực hiện:* " + (actor || "Không xác định") + "\n\n" +
@@ -601,12 +612,12 @@ function sendTelegramPackingSummary(soPhieu, khoXuat, khoNhan, changedCount, tot
 
 
 function sendTelegramReceiveConfirmation(soPhieu, khoNhan, actor, count, confirmedTotal, changedCount, changedQtyTotal, pdfUrl) {
-  var knShort = STORE_MAP[khoNhan] || khoNhan;
+  var knShort = formatStorePrintLabel_(khoNhan) || formatStoreDisplayLabel_(khoNhan) || khoNhan;
   var detailText = changedCount > 0 ? "*Dòng có thay đổi số thực nhận:* " + changedCount + "\n" + "*Tổng số lượng thay đổi:* " + changedQtyTotal + "\n" : "*Không có dòng nào thay đổi số thực nhận.*\n";
   var text = "📥 *XÁC NHẬN NHẬN HÀNG*\n" +
              "*Trạng thái:* Đã xác nhận\n" +
              "*Số phiếu:* " + soPhieu + "\n" +
-             "*Kho nhận:* " + khoNhan + " (" + knShort + ")\n" +
+             "*Kho nhận:* " + knShort + "\n" +
              "*Số dòng xác nhận:* " + count + "\n" +
              "*Người xác nhận:* " + (actor || "Không xác định") + "\n" +
              "*Tổng số lượng đã xác nhận:* " + confirmedTotal + "\n" +
@@ -929,7 +940,8 @@ function layDanhSachXuatBanHang(ngayYYYYMMDD, userRole, userStore, soHoaDonFilte
     if (!maPhieu && !soHd) continue;
     if (filterHd) {
       var soHdNorm = normalizeMisaDocumentCode_(soHd);
-      if (soHdNorm.indexOf(filterHd) === -1 && !invoiceKeysMatch_(soHd, filterHd)) continue;
+      // Exact match only — tránh HĐ Q4 khớp nhầm Q4-275
+      if (soHdNorm !== filterHd && !invoiceKeysMatch_(soHd, filterHd)) continue;
     }
     if (!matchesNgayFilter(row[0], ngayYYYYMMDD || "7days")) continue;
     var cn = row[3] ? String(row[3]).trim() : "";

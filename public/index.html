@@ -31,6 +31,13 @@
     .tab-content { display: none; animation: fadeIn 0.22s ease; }
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .admin-subtabs { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; padding:8px; background:rgba(255,255,255,0.92); border:1px solid #e2e8f0; border-radius:14px; }
+    .admin-subtab { border:1px solid transparent; background:#f8fafc; color:#475569; font-weight:700; font-size:13px; padding:9px 12px; border-radius:999px; cursor:pointer; }
+    .admin-subtab:hover { border-color:#bfdbfe; color:var(--primary); }
+    .admin-subtab.active { background:linear-gradient(135deg, var(--primary), var(--primary-dark)); color:#fff; box-shadow:0 10px 18px rgba(37,99,235,0.16); }
+    .admin-panel { display:none; animation: fadeIn 0.18s ease; }
+    .admin-panel.active { display:block; }
+    .badge-locked { display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px; background:#fef2f2; color:#b91c1c; font-size:11px; font-weight:800; }
 
     .card { background: var(--card-bg); border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); border: 1px solid rgba(226,232,240,0.9); transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; position: relative; overflow: hidden; }
     .card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--accent)); opacity: 0.9; }
@@ -264,6 +271,15 @@
     </div>
   </div>
 
+  <!-- Cảnh báo sản phẩm bị khóa đặt hàng -->
+  <div id="modal-product-locked" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:10003; justify-content:center; align-items:center; padding:16px;">
+    <div class="modal-box" style="max-width:520px; width:100%; text-align:left;">
+      <h3 style="margin:0 0 8px; color:#b91c1c;">🔒 Sản phẩm đã khóa đặt hàng</h3>
+      <p id="product-locked-msg" style="margin:0 0 16px; color:#334155; font-size:14px; line-height:1.55;"></p>
+      <button type="button" class="btn-submit" style="width:100%; background:#b91c1c;" onclick="closeProductLockedModal_()">Đã hiểu — chọn mã khác</button>
+    </div>
+  </div>
+
   <!-- Cảnh báo gộp đơn cùng chi nhánh -->
   <div id="modal-branch-merge" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:10002; justify-content:center; align-items:center; padding:16px;">
     <div class="modal-box" style="max-width:640px; width:100%; text-align:left;">
@@ -316,7 +332,7 @@
     <div class="nav-tab" onclick="switchTab('tab-quan-ly')">🖨️ Quản Lý</div>
     <div class="nav-tab" onclick="switchTab('tab-xac-nhan')">📥 Xác Nhận</div>
     <div class="nav-tab" onclick="switchTab('tab-soan-hang')">📦 Soạn Hàng</div>
-    <div class="nav-tab" id="nav-tab-admin" style="display:none;" onclick="switchTab('tab-admin')">⚙️ Tài Khoản</div>
+    <div class="nav-tab" id="nav-tab-admin" style="display:none;" onclick="switchTab('tab-admin')">⚙️ Quản trị</div>
   </div>
 
   <div class="container" id="main-container">
@@ -353,15 +369,7 @@
       </div>
     </div>
 
-    <div id="password-card" class="card">
-      <h3 style="margin-top:0; color:var(--primary);">🔐 Đổi mật khẩu</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Mật khẩu hiện tại</label><input type="password" id="pw-current" placeholder="Nhập mật khẩu hiện tại"></div>
-        <div class="form-group"><label>Mật khẩu mới</label><input type="password" id="pw-new" placeholder="Nhập mật khẩu mới"></div>
-        <div class="form-group"><label>Xác nhận mật khẩu mới</label><input type="password" id="pw-confirm" placeholder="Nhập lại mật khẩu mới"></div>
-      </div>
-      <button class="btn-submit btn-success" type="button" onclick="doiMatKhau()">🔐 ĐỔI MẬT KHẨU</button>
-    </div>
+    <!-- password form moved into Admin > Cài Đặt -->
     
     <div id="tab-dashboard" class="tab-content">
       <div class="tab-guide">
@@ -683,159 +691,243 @@
       </div>
     </div>
 
-    <!-- TAB 5: ADMIN QUẢN LÝ TÀI KHOẢN -->
+    <!-- TAB 5: ADMIN (chia thẻ) -->
     <div id="tab-admin" class="tab-content">
-      <div class="card" style="border-left: 4px solid #f29900;">
-        <h3 style="margin-top:0;">Cập nhật tự động từ file local</h3>
-        <p style="font-size:13px; color:#5f6368; margin-top:-4px;">Chỉ Admin được phép chọn file từ máy tính và cập nhật trực tiếp lên Google Sheet.</p>
-        <div class="form-row">
-          <div class="form-group" style="max-width:260px;">
-            <label>Loại cập nhật</label>
-            <select id="imp-type" onchange="imp_handleSelectionChange()">
-              <option value="stock">Cập nhật tồn kho Q7 nhanh -> TON_Q7</option>
-              <option value="catalog">Cập nhật file nhập khẩu thông tin -> Data_Excel</option>
-            </select>
+      <div class="admin-subtabs" role="tablist">
+        <button type="button" class="admin-subtab active" id="adm-subtab-catalog" onclick="switchAdminSubTab_('adm-tab-catalog')">1. Danh Mục &amp; Biến Thể</button>
+        <button type="button" class="admin-subtab" id="adm-subtab-sync" onclick="switchAdminSubTab_('adm-tab-sync')">2. Đồng Bộ MISA &amp; Tồn Kho</button>
+        <button type="button" class="admin-subtab" id="adm-subtab-orders" onclick="switchAdminSubTab_('adm-tab-orders')">3. Quản Lý &amp; Khóa Đơn Hàng</button>
+        <button type="button" class="admin-subtab" id="adm-subtab-settings" onclick="switchAdminSubTab_('adm-tab-settings')">4. Cài Đặt Hệ Thống</button>
+      </div>
+
+      <!-- Panel 1: Danh mục / biến thể / khóa SP -->
+      <div id="adm-tab-catalog" class="admin-panel active">
+        <div class="card" style="border-left: 4px solid #7c3aed;">
+          <h3 style="margin-top:0;">Quản lý Biến thể (Parent_SKU)</h3>
+          <p style="font-size:13px; color:#64748b; margin-top:-4px;">
+            Tìm nhóm cha → bấm <b>Sửa Biến Thể</b> để chỉnh mã con, tên chi tiết, mã vạch, tồn ban đầu.
+          </p>
+          <div class="form-row" style="align-items:end;">
+            <div class="form-group" style="flex:1;">
+              <label>Tìm Parent_SKU / tên</label>
+              <input type="text" id="adm-variant-q" placeholder="VD: TQP1011..." autocomplete="off" oninput="adm_filterVariantGroups_()">
+            </div>
+            <div class="form-group" style="max-width:160px;">
+              <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadVariantGroups()">🔎 Tải nhóm</button>
+            </div>
           </div>
-          <div class="form-group">
-            <label>Chọn file từ máy tính</label>
-            <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" onchange="imp_handleSelectionChange()">
-          </div>
-        </div>
-        <p style="font-size:12px; color:#64748b; margin:6px 0 12px;">
-          Tồn kho: trình duyệt tách sẵn tồn <b>Kho Q7</b> rồi ghi sheet nhẹ <b>TON_Q7</b> (nhanh, dùng cho soạn hàng).
-          Tick bên dưới nếu vẫn muốn ghi full sheet TỔNG HỢP TỒN KHO (rất chậm).
-          File nhập khẩu thông tin vẫn ghi Data_Excel.
-        </p>
-        <label id="imp-full-stock-wrap" style="display:flex; align-items:flex-start; gap:8px; margin:0 0 12px; font-size:13px; color:#475569;">
-          <input type="checkbox" id="imp-full-stock">
-          <span>Ghi thêm full sheet TỔNG HỢP TỒN KHO (chậm, chỉ khi cần)</span>
-        </label>
-        <div id="imp-preview-card" style="display:none; margin:12px 0; padding:12px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc;">
-          <div id="imp-preview-meta" style="font-size:13px; color:#334155; margin-bottom:8px;"></div>
-          <div id="imp-preview-warning" style="display:none; font-size:13px; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
-          <div id="imp-preview-ok" style="display:none; font-size:13px; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
-          <div style="overflow-x:auto; max-height:260px; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
-            <table style="min-width:720px; margin:0;">
-              <thead id="imp-preview-head"></thead>
-              <tbody id="imp-preview-body"></tbody>
+          <div id="adm-variant-meta" style="font-size:12px; color:#64748b; margin-bottom:8px;">Chưa tải danh sách nhóm.</div>
+          <div style="overflow-x:auto; max-height:320px; border:1px solid #e2e8f0; border-radius:10px;">
+            <table style="min-width:640px; margin:0;">
+              <thead>
+                <tr>
+                  <th>Parent_SKU</th>
+                  <th>Tên mẫu</th>
+                  <th style="width:90px; text-align:center;">Số mã con</th>
+                  <th style="width:140px; text-align:center;">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="adm-variant-tbody">
+                <tr><td colspan="4" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải nhóm" để quản lý biến thể.</td></tr>
+              </tbody>
             </table>
           </div>
-          <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-size:13px; color:#475569;">
-            <input type="checkbox" id="imp-confirm" onchange="imp_toggleImportButton()">
-            <span>Tôi đã xem trước dữ liệu và xác nhận cập nhật đúng loại file.</span>
+        </div>
+
+        <div class="card" style="border-left: 4px solid #ea580c;">
+          <h3 style="margin-top:0;">Quản lý Hàng Mới (Badge NEW)</h3>
+          <p style="font-size:13px; color:#64748b; margin-top:-4px;">
+            <b>Chỉ Admin</b> tick sản phẩm để hiện badge <b>MỚI</b>. Cập nhật file tồn / danh mục sẽ <b>giữ nguyên</b> IsNew trên Data_Excel.
+          </p>
+          <div class="form-row" style="align-items:end;">
+            <div class="form-group" style="flex:1;">
+              <label>Tìm mã / tên sản phẩm</label>
+              <input type="text" id="searchNewProductInput" placeholder="Gõ để lọc: vịt, TQP1011..." autocomplete="off"
+                oninput="adm_filterNewProductFlags()"
+                onkeyup="adm_filterNewProductFlags()">
+            </div>
+            <div class="form-group" style="max-width:160px;">
+              <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadNewProductFlags()">🔎 Tải danh sách</button>
+            </div>
+            <div class="form-group" style="max-width:160px;">
+              <button type="button" class="btn-submit btn-success" style="width:100%;" onclick="adm_saveNewProductFlags()">💾 Lưu Hàng Mới</button>
+            </div>
+          </div>
+          <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
+            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#2563eb;" onclick="adm_setVisibleNewProductFlags(true)">☑ CheckAll (đang hiện)</button>
+            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#64748b;" onclick="adm_setVisibleNewProductFlags(false)">☐ UncheckAll (đang hiện)</button>
+            <div id="adm-new-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách.</div>
+          </div>
+          <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
+            <table style="min-width:720px; margin:0;">
+              <thead>
+                <tr>
+                  <th style="width:70px; text-align:center;">Hàng Mới</th>
+                  <th>Mã hàng</th>
+                  <th>Mã vạch</th>
+                  <th>Tên sản phẩm</th>
+                  <th style="width:80px;">ĐVT</th>
+                  <th style="width:120px;">Biến thể</th>
+                </tr>
+              </thead>
+              <tbody id="adm-new-tbody">
+                <tr><td colspan="6" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải danh sách" để quản lý badge MỚI.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" style="border-left: 4px solid #b91c1c;">
+          <h3 style="margin-top:0;">Khóa Sản Phẩm (Khóa đặt hàng)</h3>
+          <p style="font-size:13px; color:#64748b; margin-top:-4px;">
+            <b>Chỉ Admin</b> tick để khóa đặt hàng. Trạng thái lưu độc lập trên <b>TON_VARIANT.IsLocked</b> — import MISA / tồn <b>không ghi đè</b>.
+          </p>
+          <div class="form-row" style="align-items:end;">
+            <div class="form-group" style="flex:1;">
+              <label>Tìm mã / tên sản phẩm</label>
+              <input type="text" id="adm-lock-q" placeholder="Gõ mã hoặc tên..." autocomplete="off"
+                oninput="adm_filterProductLocks_()" onkeyup="adm_filterProductLocks_()">
+            </div>
+            <div class="form-group" style="max-width:160px;">
+              <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadProductLocks()">🔎 Tải danh sách</button>
+            </div>
+            <div class="form-group" style="max-width:160px;">
+              <button type="button" class="btn-submit btn-success" style="width:100%;" onclick="adm_saveProductLocks()">💾 Lưu khóa</button>
+            </div>
+          </div>
+          <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
+            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#b91c1c;" onclick="adm_setVisibleProductLocks_(true)">☑ Khóa all (đang hiện)</button>
+            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#64748b;" onclick="adm_setVisibleProductLocks_(false)">☐ Mở all (đang hiện)</button>
+            <div id="adm-lock-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách.</div>
+          </div>
+          <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
+            <table style="min-width:720px; margin:0;">
+              <thead>
+                <tr>
+                  <th style="width:90px; text-align:center;">Khóa đặt hàng</th>
+                  <th>Mã hàng</th>
+                  <th>Mã vạch</th>
+                  <th>Tên sản phẩm</th>
+                  <th style="width:80px;">ĐVT</th>
+                </tr>
+              </thead>
+              <tbody id="adm-lock-tbody">
+                <tr><td colspan="5" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải danh sách" để quản lý khóa đặt hàng.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Đồng bộ MISA & tồn -->
+      <div id="adm-tab-sync" class="admin-panel">
+        <div class="card" style="border-left: 4px solid #f29900;">
+          <h3 style="margin-top:0;">Cập nhật tự động từ file local</h3>
+          <p style="font-size:13px; color:#5f6368; margin-top:-4px;">Chỉ Admin được phép chọn file từ máy tính và cập nhật trực tiếp lên Google Sheet.</p>
+          <div class="form-row">
+            <div class="form-group" style="max-width:260px;">
+              <label>Loại cập nhật</label>
+              <select id="imp-type" onchange="imp_handleSelectionChange()">
+                <option value="stock">Cập nhật tồn kho Q7 nhanh -> TON_Q7</option>
+                <option value="catalog">Cập nhật file nhập khẩu thông tin -> Data_Excel</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Chọn file từ máy tính</label>
+              <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" onchange="imp_handleSelectionChange()">
+            </div>
+          </div>
+          <p style="font-size:12px; color:#64748b; margin:6px 0 12px;">
+            Tồn kho: trình duyệt tách sẵn tồn <b>Kho Q7</b> rồi ghi sheet nhẹ <b>TON_Q7</b>.
+            File nhập khẩu thông tin ghi Data_Excel (giữ Parent_SKU / IsNew / IsLocked).
+          </p>
+          <label id="imp-full-stock-wrap" style="display:flex; align-items:flex-start; gap:8px; margin:0 0 12px; font-size:13px; color:#475569;">
+            <input type="checkbox" id="imp-full-stock">
+            <span>Ghi thêm full sheet TỔNG HỢP TỒN KHO (chậm, chỉ khi cần)</span>
           </label>
-        </div>
-        <button class="btn-submit" id="imp-submit-btn" onclick="importDanhMucTonKho()" disabled style="opacity:0.6; cursor:not-allowed;">⬆️ CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET</button>
-      </div>
-
-      <div class="card" style="border-left: 4px solid var(--primary);">
-        <h3 style="margin-top:0;">Tạo Tài Khoản Mới</h3>
-        <div class="form-row">
-          <div class="form-group"><label>Tên đăng nhập</label><input type="text" id="adm-user"></div>
-          <div class="form-group"><label>Mật khẩu</label><input type="password" id="adm-pass"></div>
-        </div>
-        <div class="form-row">
-          <div class="form-group"><label>Phân quyền</label>
-            <select id="adm-role" onchange="checkAdminRole()">
-              <option value="Chi nhánh">Chi nhánh</option>
-              <option value="Admin">Admin (Toàn quyền)</option>
-            </select>
+          <div id="imp-preview-card" style="display:none; margin:12px 0; padding:12px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc;">
+            <div id="imp-preview-meta" style="font-size:13px; color:#334155; margin-bottom:8px;"></div>
+            <div id="imp-preview-warning" style="display:none; font-size:13px; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
+            <div id="imp-preview-ok" style="display:none; font-size:13px; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:10px; margin-bottom:10px;"></div>
+            <div style="overflow-x:auto; max-height:260px; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
+              <table style="min-width:720px; margin:0;">
+                <thead id="imp-preview-head"></thead>
+                <tbody id="imp-preview-body"></tbody>
+              </table>
+            </div>
+            <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; font-size:13px; color:#475569;">
+              <input type="checkbox" id="imp-confirm" onchange="imp_toggleImportButton()">
+              <span>Tôi đã xem trước dữ liệu và xác nhận cập nhật đúng loại file.</span>
+            </label>
           </div>
-          <div class="form-group"><label>Quản lý Kho/Chi nhánh</label><select id="adm-store"></select></div>
-        </div>
-        <button class="btn-submit btn-success" onclick="taoTaiKhoan()">+ Tạo Tài Khoản</button>
-      </div>
-      
-      <div class="card">
-        <h3>Danh Sách Tài Khoản</h3>
-        <div style="overflow-x:auto;">
-          <table>
-            <thead><tr><th>Tài khoản</th><th>Phân quyền</th><th>Chi nhánh quản lý</th></tr></thead>
-            <tbody id="adm-table-users"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card" style="border-left: 4px solid #ea580c;">
-        <h3 style="margin-top:0;">Quản lý Hàng Mới (Badge NEW)</h3>
-        <p style="font-size:13px; color:#64748b; margin-top:-4px;">
-          <b>Chỉ Admin</b> tick sản phẩm để hiện badge <b>MỚI</b>. Không tự gắn theo ngày tạo hay dòng cuối bảng —
-          cập nhật file tồn / danh mục sẽ <b>giữ nguyên</b> các tick IsNew đã lưu trên Data_Excel.
-        </p>
-        <div class="form-row" style="align-items:end;">
-          <div class="form-group" style="flex:1;">
-            <label>Tìm mã / tên sản phẩm</label>
-            <input type="text" id="searchNewProductInput" placeholder="Gõ để lọc: vịt, TQP1011..." autocomplete="off"
-              oninput="adm_filterNewProductFlags()"
-              onkeyup="adm_filterNewProductFlags()">
-          </div>
-          <div class="form-group" style="max-width:160px;">
-            <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadNewProductFlags()">🔎 Tải danh sách</button>
-          </div>
-          <div class="form-group" style="max-width:160px;">
-            <button type="button" class="btn-submit btn-success" style="width:100%;" onclick="adm_saveNewProductFlags()">💾 Lưu Hàng Mới</button>
+          <button class="btn-submit" id="imp-submit-btn" onclick="importDanhMucTonKho()" disabled style="opacity:0.6; cursor:not-allowed;">⬆️ CẬP NHẬT TỰ ĐỘNG LÊN GOOGLE SHEET</button>
+          <div style="margin-top:14px; padding-top:12px; border-top:1px dashed #cbd5e1;">
+            <p style="font-size:12px; color:#64748b; margin:0 0 8px;">
+              Nếu sheet còn 2 dòng Key trùng (<code>AKV001</code> và <code>AKV001|cai</code>), bấm dọn một lần:
+            </p>
+            <button type="button" class="btn-submit" style="background:#0f766e;" onclick="adm_removeDuplicateStockRows()">🧹 DỌN KEY TRÙNG TỒN (TON_VARIANT / TON_Q7)</button>
           </div>
         </div>
-        <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
-          <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#2563eb;" onclick="adm_setVisibleNewProductFlags(true)">☑ CheckAll (đang hiện)</button>
-          <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#64748b;" onclick="adm_setVisibleNewProductFlags(false)">☐ UncheckAll (đang hiện)</button>
-          <div id="adm-new-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách.</div>
-        </div>
-        <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
-          <table style="min-width:720px; margin:0;">
-            <thead>
-              <tr>
-                <th style="width:70px; text-align:center;">Hàng Mới</th>
-                <th>Mã hàng</th>
-                <th>Mã vạch</th>
-                <th>Tên sản phẩm</th>
-                <th style="width:80px;">ĐVT</th>
-                <th style="width:120px;">Biến thể</th>
-              </tr>
-            </thead>
-            <tbody id="adm-new-tbody">
-              <tr><td colspan="6" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải danh sách" để quản lý badge MỚI.</td></tr>
-            </tbody>
-          </table>
+        <div class="card" style="border-left: 4px solid #0f766e;">
+          <h3 style="margin-top:0;">Tải lại danh mục</h3>
+          <p style="font-size:13px; color:#64748b; margin-top:-4px;">Làm mới Data_Excel + mã con từ TON_VARIANT (kèm IsLocked) trên trình duyệt.</p>
+          <button type="button" class="btn-submit" style="background:#0f766e;" onclick="reloadCatalogNow_()">↻ Tải lại danh mục ngay</button>
         </div>
       </div>
 
-      <div class="card" style="border-left: 4px solid #7c3aed;">
-        <h3 style="margin-top:0;">Quản lý Biến thể (Parent_SKU)</h3>
-        <p style="font-size:13px; color:#64748b; margin-top:-4px;">
-          Tìm nhóm cha → bấm <b>Sửa Biến Thể</b> để chỉnh mã con, tên chi tiết, mã vạch, tồn ban đầu.
-        </p>
-        <div class="form-row" style="align-items:end;">
-          <div class="form-group" style="flex:1;">
-            <label>Tìm Parent_SKU / tên</label>
-            <input type="text" id="adm-variant-q" placeholder="VD: TQP1011..." autocomplete="off" oninput="adm_filterVariantGroups_()">
+      <!-- Panel 3: Tài khoản / quản lý -->
+      <div id="adm-tab-orders" class="admin-panel">
+        <div class="card" style="border-left: 4px solid var(--primary);">
+          <h3 style="margin-top:0;">Tạo Tài Khoản Mới</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Tên đăng nhập</label><input type="text" id="adm-user"></div>
+            <div class="form-group"><label>Mật khẩu</label><input type="password" id="adm-pass"></div>
           </div>
-          <div class="form-group" style="max-width:160px;">
-            <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadVariantGroups()">🔎 Tải nhóm</button>
+          <div class="form-row">
+            <div class="form-group"><label>Phân quyền</label>
+              <select id="adm-role" onchange="checkAdminRole()">
+                <option value="Chi nhánh">Chi nhánh</option>
+                <option value="Admin">Admin (Toàn quyền)</option>
+              </select>
+            </div>
+            <div class="form-group"><label>Quản lý Kho/Chi nhánh</label><select id="adm-store"></select></div>
+          </div>
+          <button class="btn-submit btn-success" onclick="taoTaiKhoan()">+ Tạo Tài Khoản</button>
+        </div>
+        <div class="card">
+          <h3>Danh Sách Tài Khoản</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>Tài khoản</th><th>Phân quyền</th><th>Chi nhánh quản lý</th></tr></thead>
+              <tbody id="adm-table-users"></tbody>
+            </table>
           </div>
         </div>
-        <div id="adm-variant-meta" style="font-size:12px; color:#64748b; margin-bottom:8px;">Chưa tải danh sách nhóm.</div>
-        <div style="overflow-x:auto; max-height:320px; border:1px solid #e2e8f0; border-radius:10px;">
-          <table style="min-width:640px; margin:0;">
-            <thead>
-              <tr>
-                <th>Parent_SKU</th>
-                <th>Tên mẫu</th>
-                <th style="width:90px; text-align:center;">Số mã con</th>
-                <th style="width:140px; text-align:center;">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody id="adm-variant-tbody">
-              <tr><td colspan="4" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải nhóm" để quản lý biến thể.</td></tr>
-            </tbody>
-          </table>
+      </div>
+
+      <!-- Panel 4: Cài đặt -->
+      <div id="adm-tab-settings" class="admin-panel">
+        <div class="card" style="border-left: 4px solid #2563eb;">
+          <h3 style="margin-top:0; color:var(--primary);">🔐 Đổi mật khẩu</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Mật khẩu hiện tại</label><input type="password" id="pw-current" placeholder="Nhập mật khẩu hiện tại"></div>
+            <div class="form-group"><label>Mật khẩu mới</label><input type="password" id="pw-new" placeholder="Nhập mật khẩu mới"></div>
+            <div class="form-group"><label>Xác nhận mật khẩu mới</label><input type="password" id="pw-confirm" placeholder="Nhập lại mật khẩu mới"></div>
+          </div>
+          <button class="btn-submit btn-success" type="button" onclick="doiMatKhau()">🔐 ĐỔI MẬT KHẨU</button>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Thông tin hệ thống</h3>
+          <p style="font-size:13px; color:#64748b;">Build FE: <b id="adm-build-label">-</b></p>
+          <p style="font-size:12px; color:#94a3b8;">Khóa đặt hàng lưu tại TON_VARIANT cột IsLocked. Import MISA giữ nguyên cờ này.</p>
         </div>
       </div>
     </div>
+
     
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260804v67-invoice-pdf"></script>
+  <script src="app.js?v=20260804v70-store-exact-q4"></script>
 </body>
 </html>

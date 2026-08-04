@@ -70,7 +70,11 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     var title = "PHIẾU CHI TIẾT ĐƠN: " + target;
     tempSheet.getRange("A1:H1").merge().setValue(title).setFontSize(14).setFontWeight("bold").setHorizontalAlignment("center");
     var ngayText = createdAt ? Utilities.formatDate(new Date(createdAt), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm") : "";
-    tempSheet.getRange("A2:H2").merge().setValue("Kho xuất: " + khoXuat + " | Kho nhận: " + khoNhan + (ngayText ? " | Thời gian tạo: " + ngayText : "")).setFontStyle("italic");
+    tempSheet.getRange("A2:H2").merge().setValue(
+      "Kho xuất: " + (formatStorePrintLabel_(khoXuat) || khoXuat) +
+      " | Kho nhận: " + (formatStorePrintLabel_(khoNhan) || khoNhan) +
+      (ngayText ? " | Thời gian tạo: " + ngayText : "")
+    ).setFontStyle("italic");
 
     var headers = [["STT", "Mã Parent (kệ)", "Mã vạch", "Tên / Phân loại biến thể", "ĐVT", "SL Giao (Soạn)", "SL Thực Nhận", "Trạng thái dòng"]];
     tempSheet.getRange(4, 1, 1, 8).setValues(headers).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
@@ -183,6 +187,11 @@ function getOrderDetail(soPhieu) {
     if (!code) return { success: false, error: "Thiếu số phiếu." };
     var info = getThongTinPhieu(code);
     if (!info) return { success: false, error: "Không tìm thấy phiếu " + code };
+    // Exact match: không chấp nhận phiếu khác chỉ vì substring (Q4 ≠ Q4-275)
+    var infoCode = String(info.soPhieu || "").trim();
+    if (normalizeOrderCodeText(infoCode) !== normalizeOrderCodeText(code)) {
+      return { success: false, error: "Không khớp chính xác phiếu " + code + " (gặp " + infoCode + ")." };
+    }
     var rows = getChiTietPhieu(code, info.khoXuat || "", "0") || [];
     var items = [];
     for (var i = 0; i < rows.length; i++) {
@@ -1676,8 +1685,10 @@ function taoFileExcelVaLayLink(payload) {
   
   targetSheet.getRange("A4:F4").merge().setValue(tieuDe).setFontSize(16).setFontWeight("bold").setHorizontalAlignment("center");
   targetSheet.getRange("A6:F6").merge().setValue("Số: " + payload.soPhieu).setFontStyle("italic").setHorizontalAlignment("center");
-  targetSheet.getRange("A8").setValue("Kho xuất:").setFontWeight("bold"); targetSheet.getRange("B8").setValue(khoXuat);
-  targetSheet.getRange("A9").setValue("Kho nhận:").setFontWeight("bold"); targetSheet.getRange("B9").setValue(khoNhan);
+  targetSheet.getRange("A8").setValue("Kho xuất:").setFontWeight("bold");
+  targetSheet.getRange("B8").setValue(formatStorePrintLabel_(khoXuat) || khoXuat);
+  targetSheet.getRange("A9").setValue("Kho nhận:").setFontWeight("bold");
+  targetSheet.getRange("B9").setValue(formatStorePrintLabel_(khoNhan) || khoNhan);
   
   var headers = ["STT", "Mã Parent (kệ)", "Mã vạch", "Tên / Phân loại biến thể", "ĐVT", "Số lượng (Soạn)"];
   targetSheet.getRange("A12:F12").setValues([headers]).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#f8f9fa");

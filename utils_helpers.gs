@@ -13,11 +13,58 @@ function normalizeDvtKey_(dvt) {
 }
 
 
+/**
+ * Chuẩn hóa Key sheet tồn (TON_Q7 / lookup): giữ prefix MH:/MV:, BỎ hậu tố |DV: / |ĐVT.
+ * ĐVT lưu cột Dvt riêng — tránh sinh 2 dòng MH:X và MH:X|DV:cai.
+ */
+function canonicalizeStockSheetKey_(key) {
+  var k = String(key || "").trim();
+  if (!k) return "";
+  var prefix = "";
+  if (k.indexOf("MH:") === 0) {
+    prefix = "MH:";
+    k = k.substring(3);
+  } else if (k.indexOf("MV:") === 0) {
+    prefix = "MV:";
+    k = k.substring(3);
+  }
+  var dvIdx = k.toUpperCase().indexOf("|DV:");
+  if (dvIdx !== -1) k = k.substring(0, dvIdx);
+  else {
+    var pipe = k.indexOf("|");
+    if (pipe !== -1) k = k.substring(0, pipe);
+  }
+  k = normalizeProductCode(k) || String(k || "").trim().toUpperCase();
+  return k ? (prefix + k) : "";
+}
+
+
+/**
+ * Key TON_VARIANT duy nhất = mã SP (Parent hoặc mã con). KHÔNG gắn |ĐVT.
+ */
+function canonicalizeTonVariantKey_(keyOrMaHang) {
+  var k = String(keyOrMaHang || "").trim();
+  if (!k) return "";
+  if (k.indexOf("MH:") === 0) k = k.substring(3);
+  if (k.indexOf("MV:") === 0) k = k.substring(3);
+  var dvIdx = k.toUpperCase().indexOf("|DV:");
+  if (dvIdx !== -1) k = k.substring(0, dvIdx);
+  var pipe = k.indexOf("|");
+  if (pipe !== -1) k = k.substring(0, pipe);
+  return normalizeProductCode(k) || String(k || "").trim().toUpperCase();
+}
+
+
 function dvtFromStockKey_(key) {
   var text = String(key || "");
-  var idx = text.indexOf("|DV:");
-  if (idx === -1) return "";
-  return text.substring(idx + 4);
+  var idx = text.toUpperCase().indexOf("|DV:");
+  if (idx !== -1) return text.substring(idx + 4);
+  // Legacy TON_VARIANT: CODE|cai
+  var pipe = text.indexOf("|");
+  if (pipe !== -1 && text.indexOf("MH:") !== 0 && text.indexOf("MV:") !== 0) {
+    return text.substring(pipe + 1);
+  }
+  return "";
 }
 
 
@@ -275,7 +322,8 @@ function getStoreRegistry(ss) {
 function getActiveStoreMap() {
   try {
     var registry = getStoreRegistry();
-    var merged = copyObject_(STORE_MAP);
+    var merged = {};
+    // Ưu tiên STORE_MAP cố định (2× Q4 phân biệt Mới/Cũ); Guide chỉ bổ sung kho thiếu
     if (registry && registry.storeMap) {
       for (var key in registry.storeMap) {
         if (Object.prototype.hasOwnProperty.call(registry.storeMap, key)) {
@@ -283,10 +331,124 @@ function getActiveStoreMap() {
         }
       }
     }
+    for (var fixed in STORE_MAP) {
+      if (Object.prototype.hasOwnProperty.call(STORE_MAP, fixed)) {
+        merged[fixed] = STORE_MAP[fixed];
+      }
+    }
     return merged;
   } catch (e) {
     return STORE_MAP;
   }
+}
+
+
+/**
+ * Tên ngắn thống nhất trên UI: 2 kho Q4 (178/275) → chung "Q4".
+ * Mã cột soạn Q4_178/Q4_275 vẫn dùng formatShortStoreLabel riêng.
+ */
+function formatStoreDisplayLabel_(storeName) {
+  var raw = String(storeName || "").trim();
+  if (!raw) return "";
+  var norm = normalizeHeaderText(raw);
+  // Quy đổi 178 / 275 / Q4_* / tên cũ → Q4
+  if (
+    norm === "178" || norm === "275" ||
+    norm === "q4178" || norm === "q4275" ||
+    norm === "q4_178" || norm === "q4_275" ||
+    norm.indexOf("quan4") !== -1 ||
+    (norm.indexOf("q4") !== -1 && (norm.indexOf("moi") !== -1 || norm.indexOf("cu") !== -1 || norm.indexOf("178") !== -1 || norm.indexOf("275") !== -1 || norm === "q4"))
+  ) {
+    return "Q4";
+  }
+  var activeMap = getActiveStoreMap();
+  if (activeMap[raw]) {
+    var mapped = String(activeMap[raw]).trim();
+    var mappedNorm = normalizeHeaderText(mapped);
+    if (mappedNorm.indexOf("quan4") !== -1 || mappedNorm.indexOf("q4") !== -1) return "Q4";
+    return mapped;
+  }
+  // Full name cố định 01/06
+  if (STORE_SHORT_CODES[raw]) return "Q4";
+  for (var full in activeMap) {
+    if (!Object.prototype.hasOwnProperty.call(activeMap, full)) continue;
+    if (String(activeMap[full]).trim() === raw) {
+      var sn = normalizeHeaderText(raw);
+      if (sn.indexOf("quan4") !== -1 || sn.indexOf("q4") !== -1) return "Q4";
+      return raw;
+    }
+  }
+  try {
+    var registry = getStoreRegistry();
+    var details = registry && registry.storeDetails ? registry.storeDetails : [];
+    var rawNorm = normalizeHeaderText(raw);
+    for (var i = 0; i < details.length; i++) {
+      var d = details[i];
+      if (!d) continue;
+      if (raw === d.fullName || raw === d.shortName ||
+          rawNorm === normalizeHeaderText(d.fullName) ||
+          rawNorm === normalizeHeaderText(d.shortName)) {
+        if (STORE_SHORT_CODES[d.fullName]) return "Q4";
+        var shortN = String(d.shortName || d.fullName || raw).trim();
+        var shortNorm = normalizeHeaderText(shortN);
+        if (shortNorm.indexOf("quan4") !== -1 || shortNorm.indexOf("q4") !== -1) return "Q4";
+        return shortN;
+      }
+    }
+  } catch (e2) {}
+  return raw;
+}
+
+
+/** Địa chỉ kho từ sheet Hướng dẫn (storeDetails) — phân biệt 2 điểm Q4 theo tên đầy đủ */
+function lookupStoreAddress_(storeName) {
+  var raw = String(storeName || "").trim();
+  if (!raw) return "";
+  try {
+    var registry = getStoreRegistry();
+    var details = registry && registry.storeDetails ? registry.storeDetails : [];
+    var rawNorm = normalizeHeaderText(raw);
+    var codeHint = "";
+    if (STORE_SHORT_CODES[raw]) codeHint = STORE_SHORT_CODES[raw];
+    else if (rawNorm.indexOf("178") !== -1) codeHint = "178";
+    else if (rawNorm.indexOf("275") !== -1) codeHint = "275";
+    else if (rawNorm.indexOf("moi") !== -1 && (rawNorm.indexOf("q4") !== -1 || rawNorm.indexOf("quan4") !== -1)) codeHint = "178";
+    else if ((rawNorm.indexOf("cu") !== -1 || rawNorm.indexOf("old") !== -1) && (rawNorm.indexOf("q4") !== -1 || rawNorm.indexOf("quan4") !== -1)) codeHint = "275";
+
+    for (var i = 0; i < details.length; i++) {
+      var d = details[i];
+      if (!d) continue;
+      var dFull = normalizeHeaderText(d.fullName || "");
+      var dShort = normalizeHeaderText(d.shortName || "");
+      var dCode = String(d.code || "").trim();
+      if (
+        raw === d.fullName || raw === d.shortName ||
+        rawNorm === dFull || rawNorm === dShort
+      ) {
+        return String(d.address || "").trim();
+      }
+      if (codeHint && (dCode.indexOf(codeHint) !== -1 || STORE_SHORT_CODES[d.fullName] === codeHint)) {
+        return String(d.address || "").trim();
+      }
+    }
+    // Fallback địa chỉ theo mã link nếu Guide thiếu
+    if (codeHint === "178") return "178";
+    if (codeHint === "275") return "275";
+  } catch (e) {}
+  return "";
+}
+
+
+/**
+ * Nhãn in phiếu: [Tên ngắn] - [Địa chỉ]
+ * VD: "Q4 - 178 Nguyễn Tất Thành, P.13, Q.4"
+ */
+function formatStorePrintLabel_(storeName) {
+  var shortName = formatStoreDisplayLabel_(storeName) || String(storeName || "").trim();
+  if (!shortName) return "";
+  var address = lookupStoreAddress_(storeName);
+  if (address) return shortName + " - " + address;
+  return shortName;
 }
 
 
@@ -334,14 +496,12 @@ function normalizeMisaDocumentCode_(value) {
 }
 
 
-/** Khớp số HĐ / mã chứng từ (giữ Đ; substring linh hoạt) */
+/** Khớp số HĐ / mã chứng từ — CHỈ exact sau chuẩn hóa (tránh Q4 khớp nhầm Q4-275) */
 function invoiceKeysMatch_(left, right) {
   var a = normalizeMisaDocumentCode_(left);
   var b = normalizeMisaDocumentCode_(right);
   if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.indexOf(b) !== -1 || b.indexOf(a) !== -1) return true;
-  return false;
+  return a === b;
 }
 
 
@@ -363,15 +523,12 @@ function isXuatBanServiceLine_(maHang, tenHang, dvt, loaiDong) {
 }
 
 
-/** Khớp số phiếu linh hoạt: Q7-DC318957 ↔ DC-318957 (substring), vẫn phân biệt HĐC ≠ HDC */
+/** Khớp số phiếu — CHỈ exact sau chuẩn hóa (Q4-275 ≠ Q4) */
 function orderKeysMatch_(left, right) {
   var a = normalizeOrderCodeText(left);
   var b = normalizeOrderCodeText(right);
   if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.length >= 6 && b.indexOf(a) !== -1) return true;
-  if (b.length >= 6 && a.indexOf(b) !== -1) return true;
-  return false;
+  return a === b;
 }
 
 
@@ -393,9 +550,11 @@ function buildOrderMatchSet_(soPhieuOrList) {
 function orderInMatchSet_(soPhieu, matchSet) {
   var s = String(soPhieu || "").trim();
   if (!s || !matchSet) return false;
-  if (matchSet[s] || matchSet[s.toLowerCase()] || matchSet[normalizeOrderCodeText(s)]) return true;
+  var norm = normalizeOrderCodeText(s);
+  if (matchSet[s] || matchSet[s.toLowerCase()] || (norm && matchSet[norm])) return true;
   var list = matchSet._list || [];
   for (var i = 0; i < list.length; i++) {
+    // Exact only — không substring (tránh Q4 khớp Q4-275)
     if (orderKeysMatch_(s, list[i])) return true;
   }
   return false;
@@ -806,7 +965,7 @@ function requireAuthenticatedAction(payload) {
 
 
 function requireAdminAction(action, payload) {
-  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin'];
+  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin', 'removeDuplicateStockRows', 'saveCatalogIsNewFlags', 'saveChildVariants', 'updateProductLockStatus'];
   if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
     throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
   }

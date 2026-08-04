@@ -313,7 +313,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
       var gk = o.groupKey || "";
       o.mergeWithMain = !!(o.packingBucket === "bổ sung" && gk && storesWithMain[gk]);
       o.groupHint = o.mergeWithMain
-        ? ("Gộp với đơn chính kho " + (formatShortStoreLabel(o.khoNhan) || o.khoNhan || ""))
+        ? ("Gộp với đơn chính kho " + (formatStoreDisplayLabel_(o.khoNhan) || o.khoNhan || ""))
         : "";
     }
     // Sắp xếp: theo kho nhận → chính trước bổ sung → giờ tạo
@@ -343,7 +343,7 @@ function buildBranchMergeHints_(orders) {
       byBranch[gk] = {
         groupKey: gk,
         khoNhan: o.khoNhan || gk,
-        khoNhanLabel: formatShortStoreLabel(o.khoNhan) || o.khoNhan || gk,
+        khoNhanLabel: formatStoreDisplayLabel_(o.khoNhan) || o.khoNhan || gk,
         orderCount: 0,
         soPhieuList: []
       };
