@@ -89,6 +89,34 @@
     .badge-status { padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; margin-left: 6px; }
     .status-new { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
     .status-done { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    .badge-new {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800;
+      letter-spacing: 0.04em; color: #9a3412; background: linear-gradient(135deg, #ffedd5, #fdba74);
+      border: 1px solid #fb923c; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.45);
+      animation: newPulse 1.6s ease-out infinite;
+    }
+    @keyframes newPulse {
+      0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.45); }
+      70% { box-shadow: 0 0 0 8px rgba(249, 115, 22, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+    }
+    .new-products-strip { margin: 0 0 14px; }
+    .new-products-strip .card { background: linear-gradient(135deg, #fff7ed 0%, #ffffff 55%); border-color: #fdba74; }
+    .new-products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+    .new-product-card {
+      display: flex; flex-direction: column; gap: 6px; text-align: left;
+      padding: 12px; border-radius: 14px; border: 1px solid #fed7aa; background: #fff;
+      cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    }
+    .new-product-card:hover { transform: translateY(-2px); border-color: #f97316; box-shadow: 0 10px 22px rgba(249, 115, 22, 0.12); }
+    .new-product-card .np-title { font-size: 14px; font-weight: 700; color: #0f172a; line-height: 1.35; }
+    .new-product-card .np-meta { font-size: 12px; color: #64748b; }
+    .new-product-card .np-actions { margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+    .new-product-card .np-btn {
+      border: none; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700;
+      background: linear-gradient(135deg, #ea580c, #c2410c); color: #fff; cursor: pointer;
+    }
     .stats-bar { display: flex; gap: 12px; margin-bottom: 12px; padding: 10px 12px; background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%); border-radius: 12px; border: 1px solid #e2e8f0; justify-content:center; flex-wrap:wrap; }
     .stat-box { font-size: 14px; font-weight: 700; }
 
@@ -243,6 +271,19 @@
     </div>
     <div id="packing-timeline-banner" class="timeline-banner" aria-live="polite"></div>
 
+    <div id="new-products-strip" class="new-products-strip" style="display:none;">
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h3 style="margin:0; color:#c2410c;">✨ Sản phẩm mới</h3>
+            <div class="section-subtitle">Top hàng vừa cập nhật trong danh mục — bấm để thêm nhanh vào đơn.</div>
+          </div>
+          <span class="badge-new">NEW</span>
+        </div>
+        <div id="new-products-grid" class="new-products-grid"></div>
+      </div>
+    </div>
+
     <div id="password-card" class="card">
       <h3 style="margin-top:0; color:var(--primary);">🔐 Đổi mật khẩu</h3>
       <div class="form-row">
@@ -257,6 +298,7 @@
       <div class="tab-guide">
         <b>Cách dùng:</b> chọn timeline → xem số liệu tổng hợp và danh sách đơn gần đây của phạm vi tài khoản.
       </div>
+      <div id="dashboard-new-products" class="new-products-strip" style="display:none; margin-bottom:14px;"></div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">📊 Tổng quan hoạt động</h3>
         <p style="margin-top:-4px; color:gray;">Theo dõi nhanh số lượng đơn, trạng thái và đơn mới gần đây.</p>
@@ -489,7 +531,7 @@
     <div id="tab-soan-hang" class="tab-content">
       <div class="tab-guide">
         <b>Cách dùng:</b> chọn ngày tổng hợp / giao → chọn phiếu → nhập SL soạn → lưu.
-        <b>Tạo bảng:</b> không tick = cả khung chính+bổ sung; tick bổ sung = chỉ 08:00–10:00. Sau 10:00 thuộc ngày hôm sau.
+        <b>Tạo bảng:</b> chọn chế độ <b>Chính</b> / <b>Bổ sung</b> / <b>Tổng hợp</b> theo ca N1→N2. Mốc 10:00 thuộc ngày hôm sau.
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
@@ -499,11 +541,13 @@
         </div>
         <div class="form-row">
           <div class="form-group" style="display:none;"><label>Từ (tự động):</label><input type="date" id="sh-create-from"></div>
-          <div class="form-group"><label>Ngày tổng hợp / giao:</label><input type="date" id="sh-create-to" onchange="sh_onCreateDateRangeChange()"></div>
+          <div class="form-group"><label>Ngày tổng hợp / giao (N2):</label><input type="date" id="sh-create-to" onchange="sh_onCreateDateRangeChange()"></div>
           <div class="form-group" style="display:flex; align-items:flex-end;"><button class="btn-submit" type="button" onclick="sh_moBangChonDonSoan()">🧾 TẠO BẢNG SOẠN HÀNG</button></div>
         </div>
         <div style="font-size:12px; color:#64748b; margin:-6px 0 10px;">
-          <b>Tổng hợp:</b> hôm trước <b>10:00</b> → ngày giao <b>10:00</b> (gồm cả 8h–10h) · <b>Tick bổ sung:</b> chỉ <b>08:00–10:00</b> · Sau <b>10:00</b> → ngày hôm sau.
+          Với N2 đã chọn: <b>Chính</b> = N1 10:00 → N2 08:00 (≥10:00 &amp; &lt;08:00) ·
+          <b>Bổ sung</b> = N2 08:00 → N2 10:00 (≥08:00 &amp; &lt;10:00) ·
+          <b>Tổng hợp</b> = N1 10:00 → N2 10:00 · ≥10:00 N2 → ngày N2+1.
         </div>
         <div class="stats-bar" id="sh-stats"></div>
         <div id="sh-order-picker" style="display:none; margin-top:12px; border:1px solid #dbeafe; border-radius:12px; padding:12px; background:#f8fbff;">
@@ -519,27 +563,25 @@
             </div>
           </div>
           <div style="margin:0 0 10px; padding:10px 12px; border:1px dashed #93c5fd; border-radius:10px; background:#eff6ff;">
-            <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; color:#1e3a8a; cursor:pointer;">
-              <input type="checkbox" id="sh-only-new-items" onchange="sh_toggleOnlyNewItemsUi()" style="margin-top:2px;">
-              <span>
-                <b>Bảng bổ sung (8h–10h)</b>
-                <span style="display:block; font-size:12px; color:#64748b; font-weight:400; margin-top:2px;">
-                  Chỉ gom <b>mọi dòng/đơn chưa soạn trong 08:00–10:00</b> (không bỏ qua đơn bổ sung). Không lấy đợt chính trước 8h.
-                </span>
-              </span>
-            </label>
+            <div style="font-size:13px; color:#1e3a8a; font-weight:700; margin-bottom:8px;">Chế độ lọc ca (theo ngày tổng hợp N2)</div>
+            <div class="radio-group" style="background:#fff; border-color:#bfdbfe;">
+              <label><input type="radio" name="sh-packing-mode" value="total" checked onchange="sh_onPackingModeChange()"> Tổng hợp ca (N1 10:00 → N2 10:00)</label>
+              <label><input type="radio" name="sh-packing-mode" value="main" onchange="sh_onPackingModeChange()"> Đơn chính (N1 10:00 → N2 08:00)</label>
+              <label><input type="radio" name="sh-packing-mode" value="supp" onchange="sh_onPackingModeChange()"> Bổ sung (N2 08:00 → N2 10:00)</label>
+            </div>
+            <input type="checkbox" id="sh-only-new-items" style="display:none;">
             <div id="sh-only-new-items-opts" style="display:none; margin-top:10px;">
               <div class="form-row" style="margin:0; gap:12px;">
                 <div class="form-group" style="margin:0; max-width:160px;">
-                  <label style="font-size:12px;">Từ giờ (chốt lần 1)</label>
+                  <label style="font-size:12px;">Từ giờ (mặc định 08:00)</label>
                   <input type="time" id="sh-new-after-time" value="08:00">
                 </div>
                 <div class="form-group" style="margin:0; max-width:160px;">
-                  <label style="font-size:12px;">Đến giờ (chốt lần 2)</label>
+                  <label style="font-size:12px;">Đến giờ (không gồm mốc, mặc định 10:00)</label>
                   <input type="time" id="sh-new-before-time" value="10:00">
                 </div>
               </div>
-              <div style="font-size:11px; color:#64748b; margin-top:6px;">Mặc định 08:00–10:00 theo ngày tổng hợp / giao ở trên.</div>
+              <div style="font-size:11px; color:#64748b; margin-top:6px;">Biên: ≥ từ giờ và &lt; đến giờ. Đúng 10:00 thuộc ngày tổng hợp hôm sau.</div>
             </div>
           </div>
           <div style="max-height:260px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">

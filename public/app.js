@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-02-v47';
+var APP_BUILD = '2026-08-04-v48-shift';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -112,52 +112,82 @@ function formatDateVN_(d) {
 }
 function formatDateTimeVN_(d) {
   if (!(d instanceof Date) || isNaN(d.getTime())) return '';
-  return formatDateVN_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes());
+  return formatDateVN_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()) + ':' + pad2_(d.getSeconds());
 }
 function startOfLocalDay_(d) {
-  var x = new Date(d.getTime());
-  x.setHours(0, 0, 0, 0);
-  return x;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 }
 function addDaysLocal_(d, days) {
-  var x = new Date(d.getTime());
-  x.setDate(x.getDate() + days);
-  return x;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 0, 0, 0, 0);
 }
-function atLocalTime_(dayDate, hh, mm) {
-  var x = startOfLocalDay_(dayDate);
-  x.setHours(hh, mm || 0, 0, 0);
-  return x;
+function atLocalTime_(dayDate, hh, mm, ss) {
+  return new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), hh, mm || 0, ss || 0, 0);
+}
+
+/** Chuẩn hóa Date/string về ms local (tránh parse UTC từ chuỗi ISO). */
+function toLocalMillis_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
+  if (typeof value === 'number' && isFinite(value)) return value;
+  if (value === null || value === undefined || value === '') return NaN;
+  var s = String(value).trim();
+  var mIso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (mIso) {
+    return new Date(+mIso[1], +mIso[2] - 1, +mIso[3], +(mIso[4] || 0), +(mIso[5] || 0), +(mIso[6] || 0), 0).getTime();
+  }
+  var mVn = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (mVn) {
+    return new Date(+mVn[3], +mVn[2] - 1, +mVn[1], +(mVn[4] || 0), +(mVn[5] || 0), +(mVn[6] || 0), 0).getTime();
+  }
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? NaN : d.getTime();
 }
 
 /**
- * Timeline tổng hợp theo giờ lưu đơn:
- * - Trước 10:00 thuộc ngày giao D = hôm nay; từ 10:00 trở đi thuộc D = ngày mai
- * - Chính: (D-1) 10:00 → D 08:00 | Bổ sung: D 08:00 → D 10:00
+ * Cửa sổ ca theo ngày tổng hợp N2:
+ * - Chính:     N1 10:00:00 ≤ t < N2 08:00:00
+ * - Bổ sung:   N2 08:00:00 ≤ t < N2 10:00:00
+ * - Tổng hợp:  N1 10:00:00 ≤ t < N2 10:00:00
+ * Đúng mốc 10:00:00 N2 thuộc ngày tổng hợp hôm sau.
  */
+function getPackingWindowsForDay_(packingDay) {
+  var n2 = startOfLocalDay_(packingDay);
+  var n1 = addDaysLocal_(n2, -1);
+  var startMs = atLocalTime_(n1, 10, 0, 0).getTime();
+  var midMs = atLocalTime_(n2, 8, 0, 0).getTime();
+  var endMs = atLocalTime_(n2, 10, 0, 0).getTime();
+  return {
+    n1: n1,
+    n2: n2,
+    startMs: startMs,
+    midMs: midMs,
+    endMs: endMs,
+    mainStart: new Date(startMs),
+    mainEnd: new Date(midMs),
+    suppEnd: new Date(endMs)
+  };
+}
+
 function getPackingTimelineInfo(now) {
   now = now instanceof Date ? now : new Date();
+  var nowMs = now.getTime();
   var today = startOfLocalDay_(now);
-  var minutes = now.getHours() * 60 + now.getMinutes();
-  // Sau 10:00 → tính ngày tổng hợp hôm sau
-  var packingDay = minutes > 10 * 60 ? addDaysLocal_(today, 1) : today;
-  var prevDay = addDaysLocal_(packingDay, -1);
-  var mainStart = atLocalTime_(prevDay, 10, 0);
-  var mainEnd = atLocalTime_(packingDay, 8, 0);
-  var suppEnd = atLocalTime_(packingDay, 10, 0);
-  var isMain = now.getTime() < mainEnd.getTime();
-  var isSupp = !isMain && now.getTime() <= suppEnd.getTime();
+  // >= 10:00 → ngày tổng hợp = ngày mai
+  var packingDay = nowMs >= atLocalTime_(today, 10, 0, 0).getTime() ? addDaysLocal_(today, 1) : today;
+  var win = getPackingWindowsForDay_(packingDay);
+  var isMain = nowMs >= win.startMs && nowMs < win.midMs;
+  var isSupp = nowMs >= win.midMs && nowMs < win.endMs;
+  // Sau 10h đã chuyển packingDay=mai → luôn isMain của ca mai
   var bucket = isMain ? 'main' : 'supp';
   var packingLabel = formatDateVN_(packingDay);
   var title = isMain
     ? ('Đơn lưu lúc này thuộc ĐỢT CHÍNH — ngày giao/tổng hợp ' + packingLabel)
     : ('Đơn lưu lúc này thuộc ĐỢT BỔ SUNG — ngày giao/tổng hợp ' + packingLabel);
   var shipMsg = isMain
-    ? ('Sẽ được tổng hợp soạn trong đợt chính (trước 8h). Chi nhánh nhận hàng sau khi kho xuất soạn xong trong ngày ' + packingLabel + '.')
-    : ('Sẽ đi cùng bảng bổ sung 8h–10h ngày ' + packingLabel + ' (mã thêm mới / đơn tạo mới). Chi nhánh nhận sau khi soạn bổ sung.');
-  var windowMsg = 'Khung chính: ' + formatDateTimeVN_(mainStart) + ' → ' + formatDateTimeVN_(mainEnd) +
-    ' · Bổ sung: ' + formatDateTimeVN_(mainEnd) + ' → ' + formatDateTimeVN_(suppEnd) +
-    ' · Sau 10h tính ngày hôm sau.';
+    ? ('Sẽ được tổng hợp soạn trong đợt chính (≥10:00 hôm trước & <08:00 hôm nay). Chi nhánh nhận sau khi kho soạn xong ngày ' + packingLabel + '.')
+    : ('Sẽ đi cùng bảng bổ sung (≥08:00 & <10:00 ngày ' + packingLabel + '). Chi nhánh nhận sau khi soạn bổ sung.');
+  var windowMsg = 'Chính: ' + formatDateTimeVN_(win.mainStart) + ' → ' + formatDateTimeVN_(win.mainEnd) +
+    ' · Bổ sung: ' + formatDateTimeVN_(win.mainEnd) + ' → ' + formatDateTimeVN_(win.suppEnd) +
+    ' · ≥10:00 thuộc ngày hôm sau.';
   var confirmText = title + '\n\n' + shipMsg + '\n\n' + windowMsg + '\n\nBạn có muốn tiếp tục lưu?';
   return {
     now: now,
@@ -172,6 +202,22 @@ function getPackingTimelineInfo(now) {
     confirmText: confirmText,
     shortHtml: '<strong>' + title + '</strong>' + shipMsg + '<small>' + windowMsg + '</small>'
   };
+}
+
+function sh_getPackingMode_() {
+  var checked = document.querySelector('input[name="sh-packing-mode"]:checked');
+  if (checked && checked.value) return String(checked.value);
+  var legacy = document.getElementById('sh-only-new-items');
+  return legacy && legacy.checked ? 'supp' : 'total';
+}
+
+function sh_onPackingModeChange() {
+  var mode = sh_getPackingMode_();
+  var opts = document.getElementById('sh-only-new-items-opts');
+  if (opts) opts.style.display = mode === 'supp' ? 'block' : 'none';
+  // Reload danh sách theo mode đang chọn
+  var picker = document.getElementById('sh-order-picker');
+  if (picker && picker.style.display !== 'none') sh_taiDanhSachDonSoanChoBang();
 }
 
 function paintTimelineBanner_(el, info) {
@@ -257,6 +303,8 @@ function dbgStatusBag_(status) {
 })();
 var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
 var storeMap = {};
+var newProductsList = [];
+var newProductKeySet = {};
 var catalogLoadState = { loading: false, ready: false, version: '' };
 var CATALOG_CACHE_KEY = 'donhang_catalog_v2';
 var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v2';
@@ -425,6 +473,101 @@ function applyBootstrapData(res) {
   if (nav) nav.style.display = sessionUser.role === 'Admin' ? 'block' : 'none';
   updateDashboardHero();
   applyQuyenKho();
+  applyNewProductsData(res.newProducts || []);
+}
+
+function applyNewProductsData(list) {
+  newProductsList = Array.isArray(list) ? list : [];
+  newProductKeySet = {};
+  for (var i = 0; i < newProductsList.length; i++) {
+    var it = newProductsList[i];
+    if (!it) continue;
+    var mh = String(it.maHang || '').trim().toUpperCase();
+    var mv = String(it.maVach || '').trim().toUpperCase();
+    if (mh) newProductKeySet[mh] = true;
+    if (mv) newProductKeySet[mv] = true;
+  }
+  renderNewProductsHighlight();
+}
+
+function isNewProductItem_(item) {
+  if (!item) return false;
+  var mh = String(item.maHang || '').trim().toUpperCase();
+  var mv = String(item.maVach || '').trim().toUpperCase();
+  return !!(newProductKeySet[mh] || newProductKeySet[mv]);
+}
+
+function renderNewProductsHighlight() {
+  var strip = document.getElementById('new-products-strip');
+  var grid = document.getElementById('new-products-grid');
+  var dashHost = document.getElementById('dashboard-new-products');
+  if (!newProductsList.length) {
+    if (strip) strip.style.display = 'none';
+    if (dashHost) { dashHost.style.display = 'none'; dashHost.innerHTML = ''; }
+    return;
+  }
+
+  var cardsHtml = newProductsList.map(function(item, idx) {
+    var title = escapeHtml(item.tenHang || '(Không tên)');
+    var mh = escapeHtml(item.maHang || '-');
+    var mv = escapeHtml(item.maVach || '-');
+    var dvt = escapeHtml(item.dvt || 'Cái');
+    var ngay = escapeHtml(item.ngayTao || '');
+    var payload = encodeURIComponent(JSON.stringify({
+      maHang: item.maHang || '',
+      maVach: item.maVach || '',
+      tenHang: item.tenHang || '',
+      dvt: item.dvt || ''
+    }));
+    return '' +
+      '<button type="button" class="new-product-card" onclick="addNewProductToOrder(\'' + payload + '\')">' +
+        '<div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">' +
+          '<span class="badge-new">MỚI #' + (item.rank || (idx + 1)) + '</span>' +
+          (ngay ? '<small style="color:#9a3412;">' + ngay + '</small>' : '') +
+        '</div>' +
+        '<div class="np-title">' + title + '</div>' +
+        '<div class="np-meta">MH: ' + mh + ' · MV: ' + mv + ' · ĐVT: ' + dvt + '</div>' +
+        '<div class="np-actions"><span class="np-btn">➕ Thêm vào đơn</span></div>' +
+      '</button>';
+  }).join('');
+
+  if (grid) grid.innerHTML = cardsHtml;
+  if (strip) strip.style.display = 'block';
+
+  if (dashHost) {
+    dashHost.innerHTML =
+      '<div class="card" style="background:linear-gradient(135deg,#fff7ed 0%,#ffffff 55%); border-color:#fdba74;">' +
+        '<div class="section-title"><div><h4 style="margin:0;color:#c2410c;">✨ Sản phẩm mới trong danh mục</h4>' +
+        '<div class="section-subtitle">Bấm để chuyển sang Tạo đơn và thêm nhanh.</div></div><span class="badge-new">NEW</span></div>' +
+        '<div class="new-products-grid">' + cardsHtml + '</div>' +
+      '</div>';
+    dashHost.style.display = 'block';
+  }
+}
+
+function addNewProductToOrder(encodedItem) {
+  try {
+    var item = JSON.parse(decodeURIComponent(encodedItem));
+    switchTab('tab-tao-phieu');
+    chonSanPham(item);
+    var input = document.getElementById('input-scan');
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+    var box = document.getElementById('suggest-box');
+    if (box) box.style.display = 'none';
+  } catch (e) {
+    alert('Không thể thêm sản phẩm mới: ' + (e.message || e));
+  }
+}
+
+function loadNewProductsInBackground() {
+  apiGet('getNewProductsList', { limit: 8 }, { allowDirectFallback: true, timeoutMs: 45000 })
+    .then(function(res) {
+      if (res && res.success && Array.isArray(res.data)) applyNewProductsData(res.data);
+    })
+    .catch(function() {});
 }
 
 function readBootstrapFromLocalStorage() {
@@ -549,6 +692,7 @@ function initSystemData() {
     applyBootstrapData(res);
     saveBootstrapToLocalStorage(res);
     loadCatalogInBackground(false, res.catalogVersion || '');
+    if (!res.newProducts || !res.newProducts.length) loadNewProductsInBackground();
     openDeepLinkedOrder();
   }).catch(function(err) {
     hideLoad();
@@ -818,7 +962,8 @@ function handleSearchInput(e) {
   var html = "";
   results.slice(0, 10).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
+    var newBadge = isNewProductItem_(item) ? ' <span class="badge-new">MỚI</span>' : '';
+    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + newBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
@@ -944,7 +1089,8 @@ function renderTable() {
   arrItems.forEach((it, i) => {
     var isErr = (it.maHang === "LỖI MÃ" || isNaN(Number(it.sl))); tongSl += (Number(it.sl) || 0);
     var trClass = isErr ? 'row-error' : (it.highlight ? 'scan-highlight' : ''); it.highlight = false;
-    tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>Mã vạch: ' + it.maVach + '</b><br><small style="color:gray;">Mã hàng hóa: ' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
+    var newBadge = (!isErr && isNewProductItem_(it)) ? ' <span class="badge-new">MỚI</span>' : '';
+    tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>Mã vạch: ' + it.maVach + '</b><br><small style="color:gray;">Mã hàng hóa: ' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + newBadge + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
   });
   document.getElementById("lbl-tong-sl").innerText = tongSl;
   if (arrItems.length === 0) {
@@ -2024,11 +2170,12 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   var range = sh_getCreateDateRange_();
   var packingDay = (meta && meta.packingDay) || range.packingDay || range.to || '';
   var windowHint = '';
-  if (meta && (meta.mainWindow || meta.suppWindow)) {
-    windowHint = 'Chính: ' + (meta.mainWindow || '') + ' · Bổ sung: ' + (meta.suppWindow || '');
+  if (meta && (meta.mainWindow || meta.suppWindow || meta.totalWindow)) {
+    windowHint = 'Chính: ' + (meta.mainWindow || '') + ' · Bổ sung: ' + (meta.suppWindow || '') +
+      (meta.totalWindow ? (' · Tổng: ' + meta.totalWindow) : '');
   }
   if (!candidates || !candidates.length) {
-    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho ngày tổng hợp <b>' + escapeHtml(packingDay) + '</b>.<br><small style="color:#64748b;">Cửa sổ: hôm trước 10:00 → ngày giao 10:00. ' + escapeHtml(windowHint) + '</small></td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#b91c1c; padding:14px;">Không có đơn hợp lệ cho N2 <b>' + escapeHtml(packingDay) + '</b> / mode <b>' + escapeHtml(sh_getPackingMode_()) + '</b>.<br><small style="color:#64748b;">' + escapeHtml(windowHint || 'N1 10:00 ≤ t &lt; N2 10:00') + '</small></td></tr>';
     sh_capNhatTomTatChonDonSoan();
     return;
   }
@@ -2047,7 +2194,9 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   bodyEl.innerHTML = html;
   var summaryEl = document.getElementById('sh-order-picker-summary');
   if (summaryEl && windowHint) {
-    summaryEl.innerText = 'Ngày ' + packingDay + ' · ' + windowHint + ' · Chọn đơn rồi xuất bảng chính hoặc tick bổ sung 8h–10h.';
+    var mode = sh_getPackingMode_();
+    var modeText = mode === 'main' ? 'Đơn chính' : (mode === 'supp' ? 'Bổ sung' : 'Tổng hợp ca');
+    summaryEl.innerText = 'N2 ' + packingDay + ' · Mode: ' + modeText + ' · ' + windowHint + ' · Chọn đơn rồi xuất bảng.';
   }
   sh_capNhatTomTatChonDonSoan();
 }
@@ -2057,6 +2206,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   var range = sh_getCreateDateRange_();
   var ngay = range.from || '';
   var ngayTo = range.to || ngay;
+  var packingMode = sh_getPackingMode_();
   var pickerEl = document.getElementById('sh-order-picker');
   if (pickerEl) pickerEl.style.display = 'block';
   var bodyEl = document.getElementById('sh-order-picker-body');
@@ -2066,6 +2216,7 @@ function sh_taiDanhSachDonSoanChoBang() {
   apiGet('getDanhSachDonSoanHang', {
     ngay: ngay,
     ngayTo: ngayTo,
+    packingMode: packingMode,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
   }, { allowDirectFallback: true, timeoutMs: 120000 }).then(function(res) {
@@ -2077,7 +2228,8 @@ function sh_taiDanhSachDonSoanChoBang() {
     sh_renderDanhSachDonSoan(shOrderCandidates, {
       packingDay: res.packingDay || ngayTo,
       mainWindow: res.mainWindow || '',
-      suppWindow: res.suppWindow || ''
+      suppWindow: res.suppWindow || '',
+      totalWindow: res.totalWindow || ''
     });
     sh_warmStockInBackground_();
   }).catch(function(err) {
@@ -2148,11 +2300,7 @@ function sh_moBangChonDonSoan() {
 }
 
 function sh_toggleOnlyNewItemsUi() {
-  var cb = document.getElementById('sh-only-new-items');
-  var opts = document.getElementById('sh-only-new-items-opts');
-  if (!opts) return;
-  var on = !!(cb && cb.checked);
-  opts.style.display = on ? 'block' : 'none';
+  sh_onPackingModeChange();
 }
 
 function sh_taoBangSoanTuDonDaChon() {
@@ -2174,23 +2322,19 @@ function sh_taoBangSoanTuDonDaChon() {
     return;
   }
 
-  var onlyNewEl = document.getElementById('sh-only-new-items');
-  var onlyNewItems = !!(onlyNewEl && onlyNewEl.checked);
+  var packingMode = sh_getPackingMode_();
+  var onlyNewItems = packingMode === 'supp';
   var afterTimeEl = document.getElementById('sh-new-after-time');
   var beforeTimeEl = document.getElementById('sh-new-before-time');
   var newAfterTime = afterTimeEl && afterTimeEl.value ? afterTimeEl.value : '08:00';
   var newBeforeTime = beforeTimeEl && beforeTimeEl.value ? beforeTimeEl.value : '10:00';
-  if (onlyNewItems && !newAfterTime) {
-    alert('Vui lòng chọn giờ chốt lần 1 (mặc định 08:00).');
-    return;
-  }
 
+  var modeLabel = packingMode === 'main' ? 'đơn chính' : (packingMode === 'supp' ? 'bổ sung' : 'tổng hợp ca');
   var clientStart = Date.now();
-  showLoad(onlyNewItems ? "Bước 1/2: Kiểm tra tồn Q7 (bảng bổ sung 8h–10h)..." : "Bước 1/2: Đang kiểm tra tồn Q7 (TON_Q7)...");
+  showLoad("Bước 1/2: Kiểm tra tồn Q7 (" + modeLabel + ")...");
 
   sh_ensureStockReady_().then(function(stockOk) {
     showLoad(stockOk ? "Bước 2/2: Đang tạo bảng (đọc TON_Q7)..." : "Bước 2/2: Đang tạo bảng (rebuild TON_Q7 nếu thiếu)...");
-    // forceStock=true nếu chưa có TON_Q7 — POST text/plain thẳng GAS để rebuild
     var packingDay = range.packingDay || range.to || ngay;
     var payload = {
       ngay: range.from || ngay,
@@ -2200,6 +2344,7 @@ function sh_taoBangSoanTuDonDaChon() {
       userStore: sessionUser.store || '',
       selectedOrders: selectedOrders,
       forceStock: !stockOk,
+      packingMode: packingMode,
       onlyNewItems: onlyNewItems,
       newAfterTime: newAfterTime,
       newBeforeTime: newBeforeTime || '10:00'
@@ -2216,23 +2361,22 @@ function sh_taoBangSoanTuDonDaChon() {
       return;
     }
     if (res.stockReady) shStockWarmState.ready = true;
+    var modeRes = res.packingMode || packingMode;
+    var modeText = modeRes === 'main'
+      ? ("Đơn chính (" + (res.mainWindowLabel || "N1 10:00 → N2 08:00") + ")")
+      : (modeRes === 'supp'
+        ? ("Bổ sung ≥08:00 & <10:00 (" + (res.newAfterLabel || "") + " → " + (res.newBeforeLabel || "") + ")")
+        : ("Tổng hợp ca (" + (res.totalWindowLabel || res.mainWindowLabel || "") + ")"));
     var msg = "✅ Đã tạo tab: " + (res.sheetName || "SoanNgayMai") + "\n" +
-      "- Ngày tổng hợp: " + (res.packingDay || range.packingDay || range.to || "") + "\n" +
-      "- Chế độ: " + (res.onlyNewItems
-        ? ("Chỉ bổ sung 8h–10h (" + (res.newAfterLabel || "") + " → " + (res.newBeforeLabel || "") + ")")
-        : ("Tổng hợp chính+bổ sung (" + (res.mainWindowLabel || "hôm trước 10h → 8h") + " → " + (res.newBeforeLabel || "10h") + ")")) + "\n" +
+      "- Ngày tổng hợp N2: " + (res.packingDay || range.packingDay || range.to || "") + "\n" +
+      "- Chế độ: " + modeText + "\n" +
       "- Tổng đơn: " + (res.totalOrders || 0) + "\n" +
       "- Tổng mã: " + (res.totalItems || 0) + "\n" +
       "- Mã thiếu: " + (res.missingItems || 0) + "\n" +
       "- Tồn kho: " + (res.stockReady ? ("CÓ (" + (res.stockSource || "TON_Q7") + ")") : "KHÔNG — Admin import lại file tồn để tạo sheet TON_Q7");
-    if (res.onlyNewItems) {
-      msg += "\n- Dòng bổ sung lấy: " + (res._debugIncludedNewRows != null ? res._debugIncludedNewRows : "?");
-      msg += "\n- Bỏ qua (không phải bổ sung): " + (res._debugSkippedNotSupplement != null ? res._debugSkippedNotSupplement : "?");
-      if (res._debugSkippedByTime) msg += "\n- Bỏ qua (ngoài khung giờ): " + res._debugSkippedByTime;
-    } else if (res._debugIncludedMainRows != null) {
-      msg += "\n- Dòng chính lấy: " + res._debugIncludedMainRows;
-      if (res._debugSkippedByTime) msg += "\n- Bỏ qua (ngoài khung chính / sau 8h): " + res._debugSkippedByTime;
-    }
+    if (res._debugIncludedMainRows != null) msg += "\n- Dòng chính lấy: " + res._debugIncludedMainRows;
+    if (res._debugIncludedNewRows != null) msg += "\n- Dòng bổ sung lấy: " + res._debugIncludedNewRows;
+    if (res._debugSkippedByTime) msg += "\n- Bỏ qua (ngoài khung giờ): " + res._debugSkippedByTime;
     if (res._debugTotalMs) msg += "\n(Server tạo bảng: " + Math.round(res._debugTotalMs / 1000) + "s)";
     msg += "\n(Tổng chờ: " + Math.round(clientMs / 1000) + "s)\n[" + APP_BUILD + (res._debugRun ? (" / " + res._debugRun) : "") + "]";
     alert(msg);

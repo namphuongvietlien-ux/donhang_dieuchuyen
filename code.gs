@@ -23,8 +23,10 @@ var GUIDE_SHEET_NAME = "Hướng dẫn";
 var CACHE_STORES_KEY = "stores_registry_v1";
 var CACHE_CATALOG_PREFIX = "catalog_data_v2_";
 var CACHE_STOCK_INDEX_PREFIX = "stock_index_v1_";
+var CACHE_NEW_PRODUCTS_PREFIX = "new_products_v1_";
 var CACHE_TTL_SECONDS = 1800;
 var HISTORY_MAX_ROWS_DEFAULT = 8000;
+var NEW_PRODUCTS_DEFAULT_LIMIT = 8;
 // Kho soạn hàng chính — sheet nhẹ chỉ chứa tồn Q7 (tạo lúc import file tồn)
 var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
 var TON_Q7_SHEET_NAME = "TON_Q7";
@@ -881,6 +883,9 @@ function doGet(e) {
         case 'getCatalogData':
           res = getCatalogData();
           break;
+        case 'getNewProductsList':
+          res = getNewProductsList(e.parameter.limit || NEW_PRODUCTS_DEFAULT_LIMIT);
+          break;
         case 'layDanhSachPhieuTheoFilter':
           res = layDanhSachPhieuTheoFilter(e.parameter.khoNhan || '', e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');
           break;
@@ -907,7 +912,7 @@ function doGet(e) {
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');
           break;
         case 'getDanhSachDonSoanHang':
-          res = getDanhSachDonSoanHang(e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.ngayTo || '');
+          res = getDanhSachDonSoanHang(e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.ngayTo || '', e.parameter.packingMode || '');
           break;
         case 'getChiTietDonHangMobile':
           res = getChiTietDonHangMobile(e.parameter.soPhieu || '');
@@ -1399,21 +1404,30 @@ function getKhoNhanBySoPhieu(soPhieu) {
 }
 
 function getThongTinPhieu(soPhieu) {
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  if (!historySheet || !soPhieu) return null;
-  var selectedSet = buildOrderMatchSet_(soPhieu);
-  var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 8000);
-  var data = pack.data || [[]];
-  for (var i = 1; i < data.length; i++) {
-    if (!data[i] || !data[i][1]) continue;
-    return {
-      soPhieu: String(data[i][1]).trim(),
-      khoXuat: data[i][2] ? String(data[i][2]).trim() : "",
-      khoNhan: data[i][3] ? String(data[i][3]).trim() : ""
-    };
+  try {
+    if (!soPhieu) return null;
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) return null;
+    // Không full-scan: chunk ngược + match set, dừng khi thấy đủ số phiếu
+    var selectedSet = buildOrderMatchSet_(soPhieu);
+    var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 3000);
+    var data = pack.data || [[]];
+    for (var i = 1; i < data.length; i++) {
+      if (!data[i] || !data[i][1]) continue;
+      var sp = String(data[i][1]).trim();
+      if (!orderInMatchSet_(sp, selectedSet)) continue;
+      return {
+        soPhieu: sp,
+        khoXuat: data[i][2] ? String(data[i][2]).trim() : "",
+        khoNhan: data[i][3] ? String(data[i][3]).trim() : ""
+      };
+    }
+    return null;
+  } catch (e) {
+    Logger.log("getThongTinPhieu error: " + (e.message || e));
+    return null;
   }
-  return null;
 }
 
 // --- API TÀI KHOẢN & ĐĂNG NHẬP ---
@@ -1636,26 +1650,35 @@ function getOrCreateCatalogSheet(ss) {
   var sheet = ss.getSheetByName("Data_Excel");
   if (!sheet) {
     sheet = ss.insertSheet("Data_Excel");
-    sheet.getRange(1, 1, 1, 8).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT"]]);
-    sheet.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#d9ead3");
+    sheet.getRange(1, 1, 1, 9).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo"]]);
+    sheet.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#d9ead3");
+  } else {
+    // Bổ sung header Ngày tạo nếu sheet cũ chưa có
+    try {
+      var h9 = String(sheet.getRange(1, 9).getValue() || "").trim();
+      if (!h9) {
+        sheet.getRange(1, 9).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
+      }
+    } catch (e) {}
   }
   return sheet;
 }
 
-/** Ghi catalog từ entries gọn {mh,mv,th,d} — layout Data_Excel cố định */
+/** Ghi catalog từ entries gọn {mh,mv,th,d} — layout Data_Excel cố định + cột Ngày tạo */
 function writeCatalogEntriesToSheet_(ss, entries, reset) {
   ss = ss || getSS();
   var sh = getOrCreateCatalogSheet(ss);
   var t0 = Date.now();
   if (reset) {
     var oldLastRow = sh.getLastRow();
-    var oldLastCol = Math.max(sh.getLastColumn(), 8);
+    var oldLastCol = Math.max(sh.getLastColumn(), 9);
     if (oldLastRow > 0) sh.getRange(1, 1, oldLastRow, oldLastCol).clearContent();
-    sh.getRange(1, 1, 1, 8).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT"]]);
-    sh.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#d9ead3");
+    sh.getRange(1, 1, 1, 9).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo"]]);
+    sh.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#d9ead3");
   }
   var rows = [];
   var withDvt = 0;
+  var now = new Date();
   for (var i = 0; i < (entries || []).length; i++) {
     var e = entries[i];
     if (!e) continue;
@@ -1665,11 +1688,11 @@ function writeCatalogEntriesToSheet_(ss, entries, reset) {
     var d = String(e.d || "").trim();
     if (!mh && !mv) continue;
     if (d) withDvt++;
-    rows.push([mh, "", mv, "", "", th, "", d]);
+    rows.push([mh, "", mv, "", "", th, "", d, now]);
   }
   if (rows.length) {
     var startRow = Math.max(sh.getLastRow() + 1, 2);
-    sh.getRange(startRow, 1, rows.length, 8).setValues(rows);
+    sh.getRange(startRow, 1, rows.length, 9).setValues(rows);
   }
   try { SpreadsheetApp.flush(); } catch (e) {}
   return {
@@ -2220,16 +2243,19 @@ function nhapKhauCapNhatThongTin(payload) {
 // --- API: LẤY DATA BAN ĐẦU ---
 function getBootstrapData() {
   try {
-    var registry = getStoreRegistry();
+    var ss = getSS();
+    var registry = getStoreRegistry(ss);
+    var newProductsRes = getNewProductsList(NEW_PRODUCTS_DEFAULT_LIMIT);
     return {
       success: true,
       stores: registry.stores,
       storeMap: registry.storeMap,
       storeDetails: registry.storeDetails || [],
-      catalogVersion: getCatalogVersion_()
+      catalogVersion: getCatalogVersion_(),
+      newProducts: (newProductsRes && newProductsRes.success && newProductsRes.data) ? newProductsRes.data : []
     };
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: e.message || String(e) };
   }
 }
 
@@ -2238,20 +2264,151 @@ function getCatalogData() {
     var version = getCatalogVersion_();
     var cacheKey = CACHE_CATALOG_PREFIX + version;
     var cache = getScriptCache_();
-    var cached = cache.get(cacheKey);
-    if (cached) {
-      try { return JSON.parse(cached); } catch (e) {}
-    }
+    // Cache chunked — hỗ trợ catalog > 90KB (tránh miss cache khiến đọc sheet mỗi lần)
+    var cached = getCacheJson_(cache, cacheKey);
+    if (cached && cached.success && cached.danhMuc) return cached;
 
     var danhMuc = buildCatalogFromSheet_(getSS());
     var result = { success: true, danhMuc: danhMuc, version: version };
     try {
-      var json = JSON.stringify(result);
-      if (json.length < 90000) cache.put(cacheKey, json, CACHE_TTL_SECONDS);
+      putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS);
     } catch (e) {}
     return result;
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+/**
+ * Đọc Data_Excel 1 lần (getValues), lấy Top N sản phẩm mới nhất.
+ * Ưu tiên cột Ngày tạo / CreatedAt / IsNew nếu có; fallback = thứ tự dòng sheet (cuối = mới hơn).
+ */
+function buildNewProductsList_(ss, limit) {
+  limit = Math.max(1, Math.min(Number(limit) || NEW_PRODUCTS_DEFAULT_LIMIT, 20));
+  ss = ss || getSS();
+  var dataSheet = ss.getSheetByName("Data_Excel");
+  if (!dataSheet) return [];
+
+  var rawData = dataSheet.getDataRange().getValues();
+  if (!rawData || rawData.length < 2) return [];
+
+  var headerRowIndex = -1;
+  var headerRow = null;
+  for (var hdr = 0; hdr < Math.min(rawData.length, 6); hdr++) {
+    if (!rawData[hdr]) continue;
+    var hit = false;
+    for (var c = 0; c < rawData[hdr].length; c++) {
+      var cellText = normalizeHeaderText(rawData[hdr][c]);
+      if (cellText.indexOf("mahang") !== -1 || cellText.indexOf("mavach") !== -1 || cellText.indexOf("tenhang") !== -1) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) {
+      headerRowIndex = hdr;
+      headerRow = rawData[hdr];
+      break;
+    }
+  }
+
+  var maHangIdx = findColumnIndexByAliases(headerRow, ["mahang", "sku", "article", "code"]);
+  var maVachIdx = findColumnIndexByAliases(headerRow, ["mavach", "barcode", "barcodeid"]);
+  var tenHangIdx = findColumnIndexByAliases(headerRow, ["tenhang", "name", "tênhang", "description"]);
+  var dvtIdx = findColumnIndexByAliases(headerRow, ["dvt", "donvitinh", "donvi", "unit", "uom"]);
+  var ngayTaoIdx = findColumnIndexByAliases(headerRow, ["ngaytao", "createdat", "created", "ngaythem", "importedat", "timestamp"]);
+  var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "moi", "hangmoi", "newflag"]);
+  var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+
+  var byKey = {};
+  for (var i = startRow; i < rawData.length; i++) {
+    if (!rawData[i]) continue;
+    var maHang = getCellValue(rawData[i], maHangIdx !== -1 ? maHangIdx : 0, "");
+    var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
+    var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
+    var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
+    if (!maHang && !maVach) continue;
+    if (!tenHang && !maHang && !maVach) continue;
+
+    var key = String(maHang || maVach).trim().toUpperCase();
+    if (!key) continue;
+
+    var ngayMs = 0;
+    var ngayLabel = "";
+    if (ngayTaoIdx !== -1) {
+      var rawNgay = rawData[i][ngayTaoIdx];
+      if (rawNgay instanceof Date && !isNaN(rawNgay.getTime())) {
+        ngayMs = rawNgay.getTime();
+        ngayLabel = Utilities.formatDate(rawNgay, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
+      } else if (rawNgay) {
+        var parsedMs = Date.parse(String(rawNgay));
+        if (!isNaN(parsedMs)) {
+          ngayMs = parsedMs;
+          ngayLabel = String(rawNgay);
+        }
+      }
+    }
+
+    var flaggedNew = false;
+    if (isNewIdx !== -1) {
+      var flagVal = String(rawData[i][isNewIdx] == null ? "" : rawData[i][isNewIdx]).trim().toLowerCase();
+      flaggedNew = flagVal === "1" || flagVal === "true" || flagVal === "yes" || flagVal === "x" || flagVal === "moi" || flagVal === "new";
+    }
+
+    var sheetRow = i + 1;
+    var prev = byKey[key];
+    if (!prev || sheetRow > prev.sheetRow || (ngayMs && ngayMs > (prev.ngayMs || 0))) {
+      byKey[key] = {
+        maHang: maHang,
+        maVach: maVach,
+        tenHang: tenHang,
+        dvt: dvt || "",
+        sheetRow: sheetRow,
+        ngayMs: ngayMs,
+        ngayTao: ngayLabel,
+        isNew: flaggedNew
+      };
+    }
+  }
+
+  var list = [];
+  for (var k in byKey) {
+    if (Object.prototype.hasOwnProperty.call(byKey, k)) list.push(byKey[k]);
+  }
+
+  list.sort(function(a, b) {
+    if ((b.ngayMs || 0) !== (a.ngayMs || 0)) return (b.ngayMs || 0) - (a.ngayMs || 0);
+    return (b.sheetRow || 0) - (a.sheetRow || 0);
+  });
+
+  var top = list.slice(0, limit);
+  for (var t = 0; t < top.length; t++) {
+    top[t].rank = t + 1;
+    top[t].isNew = true;
+  }
+  return top;
+}
+
+function getNewProductsList(limit) {
+  try {
+    var lim = Math.max(1, Math.min(Number(limit) || NEW_PRODUCTS_DEFAULT_LIMIT, 20));
+    var version = getCatalogVersion_();
+    var cache = getScriptCache_();
+    var cacheKey = CACHE_NEW_PRODUCTS_PREFIX + version + "_" + lim;
+    var cached = getCacheJson_(cache, cacheKey);
+    if (cached && cached.success && cached.data) return cached;
+
+    var data = buildNewProductsList_(getSS(), lim);
+    var result = {
+      success: true,
+      data: data,
+      limit: lim,
+      source: "Data_Excel",
+      strategy: "ngayTao_or_sheetRow_desc"
+    };
+    try { putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS); } catch (e) {}
+    return result;
+  } catch (e) {
+    return { success: false, error: e.message || String(e), data: [] };
   }
 }
 
@@ -2395,30 +2552,40 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     var ss = getSS();
     var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
     if (!historySheet) {
-      return { data: [], _debugTotalMs: Date.now() - t0, _debugRun: "ql-fast-v3", _debugRole: String(userRole || "") };
+      return { data: [], _debugTotalMs: Date.now() - t0, _debugRun: "ql-fast-v4", _debugRole: String(userRole || "") };
     }
 
     filterKhoNhan = normalizeStoreName(khoNhan || "");
     filterUserStore = normalizeStoreName(userStore || "");
+    var isAdmin = String(userRole || "") === "Admin";
     var bounds = getNgayFilterBounds_(ngayYYYYMMDD);
     boundsFilter = bounds.filter || "";
     var lastRow = historySheet.getLastRow();
     if (lastRow < 2) {
-      return { data: [], _debugTotalMs: Date.now() - t0, _debugRun: "ql-fast-v3", _debugRole: String(userRole || "") };
+      return { data: [], _debugTotalMs: Date.now() - t0, _debugRun: "ql-fast-v4", _debugRole: String(userRole || "") };
     }
 
+    // Memo store-match — tránh gọi normalize/so khớp lặp trên cùng cặp tên kho
+    var storeMemo = {};
     function matchStoreCounted_(rowStore, targetStore) {
+      if (!targetStore) return true;
       storeCalls++;
-      return storeMatchesFast_(rowStore, targetStore);
+      var left = String(rowStore || "");
+      var key = left + "\0" + targetStore;
+      if (Object.prototype.hasOwnProperty.call(storeMemo, key)) return storeMemo[key];
+      var ok = storeMatchesFast_(left, targetStore);
+      storeMemo[key] = ok;
+      return ok;
     }
 
     var lastCol = Math.min(Math.max(historySheet.getLastColumn(), 16), 16);
-    var chunkSize = 500;
+    var chunkSize = 600;
     var maxScan = Math.min(bounds.maxScan || 4000, lastRow - 1);
     var map = {};
     var endRow = lastRow;
     var olderChunkStreak = 0;
     var tz = Session.getScriptTimeZone();
+    var needKhoNhanFilter = !!(filterKhoNhan && filterKhoNhan !== "all");
 
     while (endRow >= 2 && scanned < maxScan) {
       var startRow = Math.max(2, endRow - chunkSize + 1);
@@ -2442,7 +2609,8 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
         var rowMs = null;
         if (rowNgay instanceof Date && !isNaN(rowNgay.getTime())) {
           rowMs = rowNgay.getTime();
-          rowDateStr = Utilities.formatDate(rowNgay, tz, "yyyy-MM-dd");
+          // Chỉ format chuỗi ngày khi cần exactDate
+          if (bounds.exactDate) rowDateStr = Utilities.formatDate(rowNgay, tz, "yyyy-MM-dd");
         } else {
           rowDateStr = formatSheetDateYYYYMMDD(rowNgay);
           if (rowDateStr) {
@@ -2453,7 +2621,7 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
 
         if (bounds.exactDate) {
           if (rowDateStr !== bounds.exactDate) {
-            if (rowMs != null && rowMs < bounds.startMs) { /* older */ }
+            if (rowMs != null && bounds.startMs != null && rowMs < bounds.startMs) { /* older */ }
             else chunkAllOlder = false;
             continue;
           }
@@ -2473,24 +2641,27 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
 
         var rowKhoXuat = row[2] ? String(row[2]).trim() : "";
         var rowKhoNhan = row[3] ? String(row[3]).trim() : "";
-        if (filterKhoNhan && filterKhoNhan !== "all" && !matchStoreCounted_(rowKhoNhan, filterKhoNhan)) continue;
-        if (userRole !== "Admin") {
+        if (needKhoNhanFilter && !matchStoreCounted_(rowKhoNhan, filterKhoNhan)) continue;
+        if (!isAdmin) {
           if (!matchStoreCounted_(rowKhoXuat, filterUserStore) && !matchStoreCounted_(rowKhoNhan, filterUserStore)) continue;
         }
 
-        var slThucTe = row[8];
-        var slSoanCol = row[15];
-        var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
-        var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe, slSoanCol);
-        var thoiGian = rowMs != null ? rowMs : "";
-
-        if (!map[rowSoPhieu]) {
-          map[rowSoPhieu] = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: thoiGian, trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus };
+        var displayStatus = getDisplayOrderStatus(row[12] ? String(row[12]).trim() : "Mới", row[8], row[15]);
+        var thoiGian = rowMs != null ? rowMs : 0;
+        var entry = map[rowSoPhieu];
+        if (!entry) {
+          map[rowSoPhieu] = {
+            soPhieu: rowSoPhieu,
+            khoXuat: rowKhoXuat,
+            khoNhan: rowKhoNhan,
+            thoiGian: thoiGian,
+            trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus
+          };
         } else {
-          if (displayStatus === "Đã hủy") map[rowSoPhieu].trangThai = "Đã hủy";
-          else if (displayStatus === "Đã xác nhận" && map[rowSoPhieu].trangThai !== "Đã hủy") map[rowSoPhieu].trangThai = "Đã xác nhận";
-          else if (displayStatus === "Đã soạn" && map[rowSoPhieu].trangThai !== "Đã hủy" && map[rowSoPhieu].trangThai !== "Đã xác nhận") map[rowSoPhieu].trangThai = "Đã soạn";
-          if (thoiGian && (!map[rowSoPhieu].thoiGian || thoiGian > map[rowSoPhieu].thoiGian)) map[rowSoPhieu].thoiGian = thoiGian;
+          if (displayStatus === "Đã hủy") entry.trangThai = "Đã hủy";
+          else if (displayStatus === "Đã xác nhận" && entry.trangThai !== "Đã hủy") entry.trangThai = "Đã xác nhận";
+          else if (displayStatus === "Đã soạn" && entry.trangThai !== "Đã hủy" && entry.trangThai !== "Đã xác nhận") entry.trangThai = "Đã soạn";
+          if (thoiGian && thoiGian > (entry.thoiGian || 0)) entry.thoiGian = thoiGian;
         }
       }
 
@@ -2507,10 +2678,12 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
       endRow = startRow - 1;
     }
 
+    // Gom kết quả bằng vòng for (nhanh hơn map/filter trên GAS với dataset lớn)
     var res = [];
-    for (var key in map) res.push(map[key]);
+    for (var key in map) {
+      if (Object.prototype.hasOwnProperty.call(map, key)) res.push(map[key]);
+    }
     res.sort(function(a, b) { return (b.thoiGian || 0) - (a.thoiGian || 0); });
-    // Object wrapper giữ meta debug qua JSON (array custom props bị mất khi stringify).
     return {
       data: res,
       _debugTotalMs: Date.now() - t0,
@@ -2520,7 +2693,7 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
       _debugRole: String(userRole || ""),
       _debugKhoNhan: filterKhoNhan,
       _debugUserStore: filterUserStore,
-      _debugRun: "ql-fast-v3"
+      _debugRun: "ql-fast-v4"
     };
   } catch (listErr) {
     return {
@@ -2532,58 +2705,193 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
       _debugRole: String(userRole || ""),
       _debugKhoNhan: filterKhoNhan,
       _debugUserStore: filterUserStore,
-      _debugRun: "ql-fast-v3-err"
+      _debugRun: "ql-fast-v4-err"
     };
   }
 }
 
+function getDashboardTimelineBounds_(timeline, fromDate, toDate) {
+  var today = getScriptTodayStart_();
+  if (!today) return { startMs: null, endMs: null, maxScan: 5000 };
+  var dayMs = 24 * 60 * 60 * 1000;
+  var endMs = today.getTime() + dayMs - 1;
+  var selected = String(timeline || "2days").trim();
+  if (selected === "all") return { startMs: null, endMs: null, maxScan: 7000 };
+  if (selected === "today") {
+    return { startMs: today.getTime(), endMs: endMs, maxScan: 2500, exactDate: formatSheetDateYYYYMMDD(today) };
+  }
+  if (selected === "custom") {
+    var start = fromDate ? parseDateInputYYYYMMDD(fromDate) : null;
+    var end = toDate ? parseDateInputYYYYMMDD(toDate) : null;
+    if (start && end && start.getTime() > end.getTime()) {
+      var swap = start; start = end; end = swap;
+    }
+    return {
+      startMs: start ? start.getTime() : null,
+      endMs: end ? (end.getTime() + dayMs - 1) : endMs,
+      maxScan: 5000
+    };
+  }
+  var days = 2;
+  if (selected === "7days") days = 7;
+  else if (selected === "30days") days = 30;
+  var rangeStart = new Date(today);
+  rangeStart.setDate(today.getDate() - (days - 1));
+  return {
+    startMs: rangeStart.getTime(),
+    endMs: endMs,
+    maxScan: days <= 2 ? 3000 : (days <= 7 ? 4500 : 6000)
+  };
+}
+
 function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
   try {
+    var role = String(userRole || "");
+    var store = String(userStore || "");
+    var tl = String(timeline || "2days");
+    var from = String(fromDate || "");
+    var to = String(toDate || "");
+    var cache = getScriptCache_();
+    var cacheKey = "dash_sum_v2_" + [role, store, tl, from, to].join("|");
+    try {
+      var cachedRaw = cache.get(cacheKey);
+      if (cachedRaw) {
+        var cachedObj = JSON.parse(cachedRaw);
+        if (cachedObj && cachedObj.success) return cachedObj;
+      }
+    } catch (cacheReadErr) {}
+
     var ss = getSS();
     var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-    if (!historySheet) {
-      return { success: true, data: { totalOrders: 0, pendingOrders: 0, processedOrders: 0, canceledOrders: 0, recentOrders: [] } };
+    var empty = { success: true, data: { totalOrders: 0, pendingOrders: 0, processedOrders: 0, canceledOrders: 0, recentOrders: [] } };
+    if (!historySheet) return empty;
+
+    var lastRow = historySheet.getLastRow();
+    if (lastRow < 2) return empty;
+
+    var bounds = getDashboardTimelineBounds_(tl, from, to);
+    var isAdmin = role === "Admin";
+    var filterStore = normalizeStoreName(store);
+    var storeMemo = {};
+    function matchDashStore_(rowStore) {
+      if (isAdmin || !filterStore) return true;
+      var left = String(rowStore || "");
+      var key = left + "\0" + filterStore;
+      if (Object.prototype.hasOwnProperty.call(storeMemo, key)) return storeMemo[key];
+      // Giữ tương thích exact-match cũ, bổ sung storeMatchesFast_ khi tên lệch nhẹ
+      var ok = left === filterStore || storeMatchesFast_(left, filterStore);
+      storeMemo[key] = ok;
+      return ok;
     }
 
-    var data = readHistoryDataPack_(historySheet).data;
+    var lastCol = Math.min(Math.max(historySheet.getLastColumn(), 16), 16);
+    var chunkSize = 600;
+    var maxScan = Math.min(bounds.maxScan || 5000, lastRow - 1);
     var orderMap = {};
-    for (var i = 1; i < data.length; i++) {
-      var rowSoPhieu = data[i][1] ? data[i][1].toString().trim() : "";
-      if (!rowSoPhieu) continue;
-      if (!isDateInTimeline(data[i][0], timeline || '2days', fromDate || '', toDate || '')) continue;
-      var rowKhoXuat = data[i][2] ? data[i][2].toString().trim() : "";
-      var rowKhoNhan = data[i][3] ? data[i][3].toString().trim() : "";
-      if (userRole !== "Admin") {
-        if (rowKhoXuat !== userStore && rowKhoNhan !== userStore) continue;
+    var scanned = 0;
+    var endRow = lastRow;
+    var olderChunkStreak = 0;
+    var tz = Session.getScriptTimeZone();
+
+    while (endRow >= 2 && scanned < maxScan) {
+      var startRow = Math.max(2, endRow - chunkSize + 1);
+      if (scanned + (endRow - startRow + 1) > maxScan) {
+        startRow = Math.max(2, endRow - (maxScan - scanned) + 1);
+      }
+      var numRows = endRow - startRow + 1;
+      var body = historySheet.getRange(startRow, 1, numRows, lastCol).getValues();
+      scanned += numRows;
+
+      var chunkHasInRange = false;
+      var chunkAllOlder = bounds.startMs != null;
+      for (var i = 0; i < body.length; i++) {
+        var row = body[i];
+        if (!row) continue;
+        var rowSoPhieu = row[1] ? String(row[1]).trim() : "";
+        if (!rowSoPhieu) continue;
+
+        var rowNgay = row[0];
+        var rowMs = null;
+        var rowDateStr = "";
+        if (rowNgay instanceof Date && !isNaN(rowNgay.getTime())) {
+          rowMs = rowNgay.getTime();
+          if (bounds.exactDate) rowDateStr = Utilities.formatDate(rowNgay, tz, "yyyy-MM-dd");
+        } else {
+          rowDateStr = formatSheetDateYYYYMMDD(rowNgay);
+          if (rowDateStr) {
+            var parsed = parseDateInputYYYYMMDD(rowDateStr);
+            if (parsed) rowMs = parsed.getTime();
+          }
+        }
+
+        if (bounds.exactDate) {
+          if (rowDateStr !== bounds.exactDate) {
+            if (rowMs != null && bounds.startMs != null && rowMs < bounds.startMs) { /* older */ }
+            else chunkAllOlder = false;
+            continue;
+          }
+          chunkHasInRange = true;
+          chunkAllOlder = false;
+        } else if (bounds.startMs != null) {
+          if (rowMs == null || rowMs < bounds.startMs || rowMs > bounds.endMs) {
+            if (!(rowMs != null && rowMs < bounds.startMs)) chunkAllOlder = false;
+            continue;
+          }
+          chunkHasInRange = true;
+          chunkAllOlder = false;
+        } else if (!isDateInTimeline(rowNgay, tl, from, to)) {
+          chunkAllOlder = false;
+          continue;
+        }
+
+        var rowKhoXuat = row[2] ? String(row[2]).trim() : "";
+        var rowKhoNhan = row[3] ? String(row[3]).trim() : "";
+        if (!matchDashStore_(rowKhoXuat) && !matchDashStore_(rowKhoNhan)) continue;
+
+        var displayStatus = getDisplayOrderStatus(row[12] ? String(row[12]).trim() : "Mới", row[8], row[15]);
+        var entry = orderMap[rowSoPhieu];
+        if (!entry) {
+          entry = {
+            soPhieu: rowSoPhieu,
+            khoXuat: rowKhoXuat,
+            khoNhan: rowKhoNhan,
+            thoiGian: rowNgay,
+            thoiGianMs: rowMs || 0,
+            status: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus,
+            count: 0
+          };
+          orderMap[rowSoPhieu] = entry;
+        }
+
+        if (displayStatus === "Đã hủy") entry.status = "Đã hủy";
+        else if (displayStatus === "Đã xác nhận") entry.status = "Đã xác nhận";
+        else if (displayStatus === "Đã soạn" && entry.status !== "Đã hủy" && entry.status !== "Đã xác nhận") entry.status = "Đã soạn";
+        else if (entry.status !== "Đã hủy" && entry.status !== "Đã soạn" && entry.status !== "Đã xác nhận") entry.status = "Mới";
+
+        entry.count += 1;
+        if (rowMs && rowMs > (entry.thoiGianMs || 0)) {
+          entry.thoiGian = rowNgay;
+          entry.thoiGianMs = rowMs;
+        }
       }
 
-      var status = data[i][12] ? String(data[i][12]).trim() : "Mới";
-      var slThucTe = data[i][8];
-      var displayStatus = getDisplayOrderStatus(status, slThucTe, data[i][15]);
-      var entry = orderMap[rowSoPhieu];
-      if (!entry) {
-        entry = { soPhieu: rowSoPhieu, khoXuat: rowKhoXuat, khoNhan: rowKhoNhan, thoiGian: data[i][0], status: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus, count: 0 };
-        orderMap[rowSoPhieu] = entry;
+      if (bounds.startMs != null) {
+        if (chunkHasInRange) olderChunkStreak = 0;
+        else if (chunkAllOlder) {
+          olderChunkStreak++;
+          if (olderChunkStreak >= 2) break;
+        } else {
+          olderChunkStreak = 0;
+        }
       }
-
-      if (displayStatus === "Đã hủy") entry.status = "Đã hủy";
-      else if (displayStatus === "Đã xác nhận") entry.status = "Đã xác nhận";
-      else if (displayStatus === "Đã soạn" && entry.status !== "Đã hủy" && entry.status !== "Đã xác nhận") entry.status = "Đã soạn";
-      else if (entry.status !== "Đã hủy" && entry.status !== "Đã soạn" && entry.status !== "Đã xác nhận") entry.status = "Mới";
-
-      entry.count += 1;
-      if (!entry.thoiGian || (data[i][0] instanceof Date && entry.thoiGian instanceof Date && data[i][0].getTime() > entry.thoiGian.getTime())) {
-        entry.thoiGian = data[i][0];
-      }
+      endRow = startRow - 1;
     }
 
     var orders = [];
-    for (var key in orderMap) orders.push(orderMap[key]);
-    orders.sort(function(a, b) {
-      var aTime = a.thoiGian instanceof Date ? a.thoiGian.getTime() : 0;
-      var bTime = b.thoiGian instanceof Date ? b.thoiGian.getTime() : 0;
-      return bTime - aTime;
-    });
+    for (var key in orderMap) {
+      if (Object.prototype.hasOwnProperty.call(orderMap, key)) orders.push(orderMap[key]);
+    }
+    orders.sort(function(a, b) { return (b.thoiGianMs || 0) - (a.thoiGianMs || 0); });
 
     var totalOrders = orders.length;
     var pendingOrders = 0;
@@ -2596,19 +2904,36 @@ function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
       else pendingOrders++;
     }
 
-    var recentOrders = orders.slice(0, 8).map(function(order) {
-      return {
+    var recentOrders = [];
+    var recentLimit = Math.min(8, orders.length);
+    for (var r = 0; r < recentLimit; r++) {
+      var order = orders[r];
+      recentOrders.push({
         soPhieu: order.soPhieu,
         khoXuat: order.khoXuat,
         khoNhan: order.khoNhan,
         status: order.status,
         thoiGian: formatDateTime(order.thoiGian)
-      };
-    });
+      });
+    }
 
-    return { success: true, data: { totalOrders: totalOrders, pendingOrders: pendingOrders, processedOrders: processedOrders, canceledOrders: canceledOrders, recentOrders: recentOrders } };
+    var result = {
+      success: true,
+      data: {
+        totalOrders: totalOrders,
+        pendingOrders: pendingOrders,
+        processedOrders: processedOrders,
+        canceledOrders: canceledOrders,
+        recentOrders: recentOrders
+      }
+    };
+    try {
+      var json = JSON.stringify(result);
+      if (json.length < 90000) cache.put(cacheKey, json, 90);
+    } catch (cacheWriteErr) {}
+    return result;
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: e.message || String(e) };
   }
 }
 
@@ -2657,68 +2982,74 @@ function isDateInTimeline(value, timeline, fromDate, toDate) {
 
 function getChiTietPhieu(soPhieu, storeName, includeStock) {
   var t0 = Date.now();
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  if (!historySheet || !soPhieu) return [];
-  var wantStock = !(includeStock === false || includeStock === 0 || includeStock === "0" || includeStock === "false");
-  var selectedSet = buildOrderMatchSet_(soPhieu);
-  var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 6000);
-  var data = pack.data || [[]];
-  var sheetOrders = pack.orders || [];
-
-  // Không load full catalog ở đây (rất chậm) — dùng ĐVT đã lưu trên lịch sử
-  var matchedRows = [];
-  for (var i = 1; i < data.length; i++) {
-    if (!data[i]) continue;
-    var slGoc = Number(data[i][7]) || 0;
-    var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
-    var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
-    var isReceived = rowStatus === "Đã xác nhận nhận hàng";
-    // Cột 16 (index 15): SL Giao (Soạn) — giữ số đã soạn sau khi chi nhánh xác nhận nhận
-    var rawSlGiao = data[i][15];
-    var hasSlGiao = rawSlGiao !== "" && rawSlGiao !== null && rawSlGiao !== undefined;
-    var slSoan = "";
-    if (hasSlGiao) {
-      slSoan = Number(rawSlGiao) || 0;
-    } else if (hasActualQty && !isReceived) {
-      // Dữ liệu cũ: cột 9 đang là số soạn
-      slSoan = Number(data[i][8]) || 0;
-    }
-    // slThucTe: số thực nhận (sau xác nhận); trước đó để trống để UI không nhầm với SL soạn
-    var slThucTe = "";
-    if (isReceived && hasActualQty) slThucTe = Number(data[i][8]);
-    else if (!isReceived && hasActualQty && !hasSlGiao) slThucTe = Number(data[i][8]); // tương thích cũ
-    matchedRows.push({
-      rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
-      maHang: data[i][4],
-      maVach: data[i][5],
-      tenHang: data[i][6],
-      slGoc: slGoc,
-      slSoan: slSoan,
-      slThucTe: slThucTe,
-      dvt: data[i][9] || "",
-      ghiChu: data[i][11] || "",
-      trangThai: rowStatus || "Mới",
-      nguoiSoanHang: data[i][13] || "",
-      stock: ""
-    });
-  }
-
-  if (wantStock && matchedRows.length && isPackingQ7Store_(storeName)) {
-    var tonKhoMap = getStockMapForStore(ss, storeName) || {};
-    for (var j = 0; j < matchedRows.length; j++) {
-      matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach, matchedRows[j].dvt);
-    }
-  }
-
-  // Trả mảng thuần — tương thích FE cũ (rows.forEach / rows.filter)
   try {
-    matchedRows._debugTotalMs = Date.now() - t0;
-    matchedRows._debugScanned = pack.scannedRows || 0;
-    matchedRows._debugStock = wantStock;
-    matchedRows._debugRun = "ql-fast-v2";
-  } catch (metaErr2) {}
-  return matchedRows;
+    if (!soPhieu) return [];
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) return [];
+    var wantStock = !(includeStock === false || includeStock === 0 || includeStock === "0" || includeStock === "false");
+    var selectedSet = buildOrderMatchSet_(soPhieu);
+    // Chunk ngược theo match set — không full-scan lịch sử
+    var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 4000);
+    var data = pack.data || [[]];
+    var sheetOrders = pack.orders || [];
+
+    var matchedRows = [];
+    for (var i = 1; i < data.length; i++) {
+      if (!data[i]) continue;
+      var rowSoPhieu = data[i][1] ? String(data[i][1]).trim() : "";
+      if (!rowSoPhieu || !orderInMatchSet_(rowSoPhieu, selectedSet)) continue;
+
+      var slGoc = Number(data[i][7]) || 0;
+      var hasActualQty = (data[i][8] !== "" && data[i][8] !== undefined && data[i][8] !== null);
+      var rowStatus = data[i][12] ? String(data[i][12]).trim() : "Mới";
+      var isReceived = rowStatus === "Đã xác nhận nhận hàng";
+      var rawSlGiao = data[i][15];
+      var hasSlGiao = rawSlGiao !== "" && rawSlGiao !== null && rawSlGiao !== undefined;
+      var slSoan = "";
+      if (hasSlGiao) {
+        slSoan = Number(rawSlGiao) || 0;
+      } else if (hasActualQty && !isReceived) {
+        slSoan = Number(data[i][8]) || 0;
+      }
+      var slThucTe = "";
+      if (isReceived && hasActualQty) slThucTe = Number(data[i][8]);
+      else if (!isReceived && hasActualQty && !hasSlGiao) slThucTe = Number(data[i][8]);
+
+      matchedRows.push({
+        rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
+        maHang: data[i][4],
+        maVach: data[i][5],
+        tenHang: data[i][6],
+        slGoc: slGoc,
+        slSoan: slSoan,
+        slThucTe: slThucTe,
+        dvt: data[i][9] || "",
+        ghiChu: data[i][11] || "",
+        trangThai: rowStatus || "Mới",
+        nguoiSoanHang: data[i][13] || "",
+        stock: ""
+      });
+    }
+
+    if (wantStock && matchedRows.length && isPackingQ7Store_(storeName)) {
+      var tonKhoMap = getStockMapForStore(ss, storeName) || {};
+      for (var j = 0; j < matchedRows.length; j++) {
+        matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach, matchedRows[j].dvt);
+      }
+    }
+
+    try {
+      matchedRows._debugTotalMs = Date.now() - t0;
+      matchedRows._debugScanned = pack.scannedRows || 0;
+      matchedRows._debugStock = wantStock;
+      matchedRows._debugRun = "ql-fast-v3";
+    } catch (metaErr2) {}
+    return matchedRows;
+  } catch (err) {
+    Logger.log("getChiTietPhieu error: " + (err.message || err));
+    return [];
+  }
 }
 
 function getStockMapForStore(ss, storeName) {
@@ -3011,8 +3342,15 @@ function getReceiveSheet(ss) {
   return sheet;
 }
 
+function logOrderChangesBatch_(ss, rows) {
+  if (!rows || !rows.length) return;
+  var sheet = getAuditSheet(ss);
+  var start = Math.max(sheet.getLastRow() + 1, 2);
+  sheet.getRange(start, 1, rows.length, 9).setValues(rows);
+}
+
 function logOrderChange(ss, soPhieu, action, actor, maHang, maVach, oldValue, newValue, note) {
-  getAuditSheet(ss).appendRow([new Date(), soPhieu, action, actor, maHang || "", maVach || "", oldValue || "", newValue || "", note || ""]);
+  logOrderChangesBatch_(ss, [[new Date(), soPhieu, action, actor || "", maHang || "", maVach || "", oldValue || "", newValue || "", note || ""]]);
 }
 
 function getAccountByActor(actor) {
@@ -3079,140 +3417,211 @@ function isOrderConfirmedForEditing(soPhieu, historySheet, dataRows) {
 }
 
 function luuChinhSuaPhieu(payload) {
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  ensureHistoryStatusColumn(historySheet);
-  var lock = LockService.getDocumentLock();
   try {
-    lock.waitLock(10000);
-    var historyData = historySheet.getDataRange().getValues();
-    var changeCount = 0;
-    var modifiedCount = 0;
-    var cancelledCount = 0;
-    var shouldNotify = false;
-    var orderInfo = null;
-    var soPhieu = payload && payload.soPhieu ? String(payload.soPhieu).trim() : "";
-    var permission = assertActorCanManageOrder(payload.actor, soPhieu, historySheet, historyData);
-    var actorRole = String(permission.account.role || "").trim();
-    var wasPacked = permission.state.isPacked;
-    var orderBaseRow = null;
-    for (var i = 1; i < historyData.length; i++) {
-      if (String(historyData[i][1]).trim().toLowerCase() === soPhieu.toLowerCase()) {
-        orderBaseRow = historyData[i];
-        break;
-      }
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { success: false, error: "Không tìm thấy sheet Lịch Sử Xuất Kho", msg: "Không tìm thấy sheet Lịch Sử Xuất Kho" };
     }
-    if (wasPacked && actorRole === "Admin") {
-      for (var r = 1; r < historyData.length; r++) {
-        if (String(historyData[r][1]).trim().toLowerCase() !== soPhieu.toLowerCase()) continue;
-        var rowStatus = String(historyData[r][12] || "").trim();
-        if (rowStatus === "Đã hủy đơn" || rowStatus === "Đã hủy dòng") continue;
-        historySheet.getRange(r + 1, 9).clearContent();
-        historySheet.getRange(r + 1, 12, 1, 4).setValues([["Cần soạn lại sau khi chỉnh sửa", "Mới", payload.actor || "", "Quản lý"]]);
+    ensureHistoryStatusColumn(historySheet);
+    var lock = LockService.getDocumentLock();
+    try {
+      lock.waitLock(10000);
+      var historyData = historySheet.getDataRange().getValues();
+      var changeCount = 0;
+      var modifiedCount = 0;
+      var cancelledCount = 0;
+      var shouldNotify = false;
+      var orderInfo = null;
+      var soPhieu = payload && payload.soPhieu ? String(payload.soPhieu).trim() : "";
+      var actor = (payload && payload.actor) ? payload.actor : "";
+      var updates = (payload && payload.updates) ? payload.updates : [];
+      var newItems = (payload && payload.newItems) ? payload.newItems : [];
+      var auditRows = [];
+      var nowAudit = new Date();
+
+      var permission = assertActorCanManageOrder(actor, soPhieu, historySheet, historyData);
+      var actorRole = String(permission.account.role || "").trim();
+      var wasPacked = permission.state.isPacked;
+      var orderBaseRow = null;
+      var i;
+      for (i = 1; i < historyData.length; i++) {
+        if (String(historyData[i][1]).trim().toLowerCase() === soPhieu.toLowerCase()) {
+          orderBaseRow = historyData[i];
+          break;
+        }
       }
-    }
-    var newRows = [];
-    if (payload.newItems && payload.newItems.length) {
-      for (var n = 0; n < payload.newItems.length; n++) {
-        var newItem = payload.newItems[n];
+
+      // rowPatches[sheetRow] = fields to write on cols 6-15 (batch)
+      var rowPatches = {};
+      function getPatch_(sheetRow) {
+        if (!rowPatches[sheetRow]) rowPatches[sheetRow] = {};
+        return rowPatches[sheetRow];
+      }
+
+      if (wasPacked && actorRole === "Admin") {
+        for (var r = 1; r < historyData.length; r++) {
+          if (String(historyData[r][1]).trim().toLowerCase() !== soPhieu.toLowerCase()) continue;
+          var rowStatus = String(historyData[r][12] || "").trim();
+          if (rowStatus === "Đã hủy đơn" || rowStatus === "Đã hủy dòng") continue;
+          var resetPatch = getPatch_(r + 1);
+          resetPatch.actualQty = "";
+          resetPatch.note = "Cần soạn lại sau khi chỉnh sửa";
+          resetPatch.status = "Mới";
+          resetPatch.actor = actor;
+          resetPatch.source = "Quản lý";
+        }
+      }
+
+      var newRows = [];
+      for (var n = 0; n < newItems.length; n++) {
+        var newItem = newItems[n];
         if (hasDuplicateItemInOrder(historySheet, soPhieu, newItem, historyData)) {
           throw new Error("Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
         }
         var itemQty = Number(newItem.sl);
         if (!itemQty || itemQty < 1) continue;
-        newRows.push([new Date(), soPhieu, orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "", orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "", newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "", itemQty, "", newItem.dvt || "", "", "Thêm mới vào đơn", "Mới", payload.actor || "", "Quản lý"]);
-        logOrderChange(ss, soPhieu, "Thêm mã vào đơn", payload.actor, newItem.maHang, newItem.maVach, "", itemQty, newItem.tenHang || "");
+        newRows.push([
+          new Date(), soPhieu,
+          orderBaseRow && orderBaseRow[2] ? orderBaseRow[2] : "",
+          orderBaseRow && orderBaseRow[3] ? orderBaseRow[3] : "",
+          newItem.maHang || "", newItem.maVach || "", newItem.tenHang || "",
+          itemQty, "", newItem.dvt || "", "",
+          "Thêm mới vào đơn", "Mới", actor, "Quản lý"
+        ]);
+        auditRows.push([nowAudit, soPhieu, "Thêm mã vào đơn", actor, newItem.maHang || "", newItem.maVach || "", "", itemQty, newItem.tenHang || ""]);
         changeCount += 1;
         shouldNotify = true;
       }
-    }
-    var pendingUpdates = [];
-    for (var i = 0; i < payload.updates.length; i++) {
-      var u = payload.updates[i];
-      var rowIndex = Number(u.row);
-      if (!rowIndex || rowIndex < 2) continue;
-      var currentRow = historyData[rowIndex - 1];
-      if (!currentRow) continue;
-      var oldSl = Number(currentRow[7]) || 0;
-      var soPhieuValue = currentRow[1] ? String(currentRow[1]).trim() : soPhieu;
-      var oldTenHang = currentRow[6] ? String(currentRow[6]).trim() : "";
-      var maHang = currentRow[4] ? String(currentRow[4]).trim() : "";
-      var maVach = currentRow[5] ? String(currentRow[5]).trim() : "";
-      var oldDvt = currentRow[9] ? String(currentRow[9]).trim() : "";
-      var newMaVach = u.valMaVach !== undefined && u.valMaVach !== null && String(u.valMaVach).trim() !== "" ? String(u.valMaVach).trim() : maVach;
-      var newDvt = u.valDvt !== undefined && u.valDvt !== null && String(u.valDvt).trim() !== "" ? String(u.valDvt).trim() : oldDvt;
-      var newTenHang = u.valTenHang !== undefined && u.valTenHang !== null && String(u.valTenHang).trim() !== "" ? String(u.valTenHang).trim() : oldTenHang;
-      if (!orderInfo) orderInfo = getThongTinPhieu(soPhieuValue);
-      if (u.valSl !== "" && Number(u.valSl) === 0) {
-        pendingUpdates.push({row: rowIndex, requestedQty: 0, actualQty: 0, note: "Đã hủy dòng", status: "Đã hủy dòng", actor: payload.actor || "", source: "Quản lý", maVach: newMaVach, dvt: newDvt, tenHang: newTenHang});
-        logOrderChange(ss, soPhieuValue, "Hủy mã khỏi đơn", payload.actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng");
-        changeCount += 1;
-        cancelledCount += 1;
-        shouldNotify = true;
-      } else if (u.valSl !== "") {
-        var newVal = Number(u.valSl);
-        pendingUpdates.push({row: rowIndex, requestedQty: newVal, actualQty: wasPacked ? "" : currentRow[8], note: wasPacked ? "Cần soạn lại sau khi chỉnh sửa" : "", status: "Mới", actor: payload.actor || "", source: "Quản lý", maVach: newMaVach, dvt: newDvt, tenHang: newTenHang});
-        if (Number(oldSl) !== newVal) {
-          logOrderChange(ss, soPhieuValue, "Sửa số lượng", payload.actor, maHang, maVach, oldSl, newVal, "");
+
+      for (i = 0; i < updates.length; i++) {
+        var u = updates[i];
+        var rowIndex = Number(u.row);
+        if (!rowIndex || rowIndex < 2) continue;
+        var currentRow = historyData[rowIndex - 1];
+        if (!currentRow) continue;
+        var oldSl = Number(currentRow[7]) || 0;
+        var soPhieuValue = currentRow[1] ? String(currentRow[1]).trim() : soPhieu;
+        var oldTenHang = currentRow[6] ? String(currentRow[6]).trim() : "";
+        var maHang = currentRow[4] ? String(currentRow[4]).trim() : "";
+        var maVach = currentRow[5] ? String(currentRow[5]).trim() : "";
+        var oldDvt = currentRow[9] ? String(currentRow[9]).trim() : "";
+        var newMaVach = u.valMaVach !== undefined && u.valMaVach !== null && String(u.valMaVach).trim() !== "" ? String(u.valMaVach).trim() : maVach;
+        var newDvt = u.valDvt !== undefined && u.valDvt !== null && String(u.valDvt).trim() !== "" ? String(u.valDvt).trim() : oldDvt;
+        var newTenHang = u.valTenHang !== undefined && u.valTenHang !== null && String(u.valTenHang).trim() !== "" ? String(u.valTenHang).trim() : oldTenHang;
+        if (!orderInfo) orderInfo = getThongTinPhieu(soPhieuValue);
+
+        if (u.valSl !== "" && Number(u.valSl) === 0) {
+          var cancelPatch = getPatch_(rowIndex);
+          cancelPatch.requestedQty = 0;
+          cancelPatch.actualQty = 0;
+          cancelPatch.note = "Đã hủy dòng";
+          cancelPatch.status = "Đã hủy dòng";
+          cancelPatch.actor = actor;
+          cancelPatch.source = "Quản lý";
+          if (newMaVach) cancelPatch.maVach = newMaVach;
+          if (newDvt) cancelPatch.dvt = newDvt;
+          if (newTenHang) cancelPatch.tenHang = newTenHang;
+          auditRows.push([nowAudit, soPhieuValue, "Hủy mã khỏi đơn", actor, maHang, maVach, oldSl, 0, "Hủy bằng cập nhật số lượng"]);
           changeCount += 1;
-          modifiedCount += 1;
+          cancelledCount += 1;
           shouldNotify = true;
-        }
-        if (String(newMaVach || "").trim() !== String(maVach || "").trim()) {
-          logOrderChange(ss, soPhieuValue, "Đổi mã vạch", payload.actor, maHang, maVach, maVach, newMaVach, "Đổi giữa mã lẻ/mã thùng");
-          changeCount += 1;
-          shouldNotify = true;
-        }
-        if (String(newDvt || "").trim() !== String(oldDvt || "").trim()) {
-          logOrderChange(ss, soPhieuValue, "Đổi đơn vị tính", payload.actor, maHang, newMaVach || maVach, oldDvt, newDvt, "Đổi ĐVT theo mã vạch");
-          changeCount += 1;
-          shouldNotify = true;
-        }
-        if (String(newTenHang || "").trim() !== String(oldTenHang || "").trim()) {
-          logOrderChange(ss, soPhieuValue, "Cập nhật tên hàng", payload.actor, maHang, newMaVach || maVach, oldTenHang, newTenHang, "Đồng bộ theo mã vạch mới");
-          changeCount += 1;
-          shouldNotify = true;
+        } else if (u.valSl !== "") {
+          var newVal = Number(u.valSl);
+          var editPatch = getPatch_(rowIndex);
+          editPatch.requestedQty = newVal;
+          editPatch.actualQty = wasPacked ? "" : currentRow[8];
+          editPatch.note = wasPacked ? "Cần soạn lại sau khi chỉnh sửa" : "";
+          editPatch.status = "Mới";
+          editPatch.actor = actor;
+          editPatch.source = "Quản lý";
+          if (newMaVach) editPatch.maVach = newMaVach;
+          if (newDvt) editPatch.dvt = newDvt;
+          if (newTenHang) editPatch.tenHang = newTenHang;
+
+          if (Number(oldSl) !== newVal) {
+            auditRows.push([nowAudit, soPhieuValue, "Sửa số lượng", actor, maHang, maVach, oldSl, newVal, ""]);
+            changeCount += 1;
+            modifiedCount += 1;
+            shouldNotify = true;
+          }
+          if (String(newMaVach || "").trim() !== String(maVach || "").trim()) {
+            auditRows.push([nowAudit, soPhieuValue, "Đổi mã vạch", actor, maHang, maVach, maVach, newMaVach, "Đổi giữa mã lẻ/mã thùng"]);
+            changeCount += 1;
+            shouldNotify = true;
+          }
+          if (String(newDvt || "").trim() !== String(oldDvt || "").trim()) {
+            auditRows.push([nowAudit, soPhieuValue, "Đổi đơn vị tính", actor, maHang, newMaVach || maVach, oldDvt, newDvt, "Đổi ĐVT theo mã vạch"]);
+            changeCount += 1;
+            shouldNotify = true;
+          }
+          if (String(newTenHang || "").trim() !== String(oldTenHang || "").trim()) {
+            auditRows.push([nowAudit, soPhieuValue, "Cập nhật tên hàng", actor, maHang, newMaVach || maVach, oldTenHang, newTenHang, "Đồng bộ theo mã vạch mới"]);
+            changeCount += 1;
+            shouldNotify = true;
+          }
         }
       }
-    }
-    if (newRows.length) {
-      var startRow = historySheet.getLastRow() + 1;
-      historySheet.getRange(startRow, 1, newRows.length, 15).setValues(newRows);
-    }
-    if (pendingUpdates.length) {
-      pendingUpdates.sort(function(a, b) { return a.row - b.row; });
-      for (var g = 0; g < pendingUpdates.length; g++) {
-        var itemUpdate = pendingUpdates[g];
-        historySheet.getRange(itemUpdate.row, 8).setValue(itemUpdate.requestedQty);
-        if (itemUpdate.actualQty === "") historySheet.getRange(itemUpdate.row, 9).clearContent();
-        else historySheet.getRange(itemUpdate.row, 9).setValue(itemUpdate.actualQty);
-        if (itemUpdate.maVach !== undefined && itemUpdate.maVach !== null && String(itemUpdate.maVach).trim() !== "") {
-          historySheet.getRange(itemUpdate.row, 6).setValue(itemUpdate.maVach);
-        }
-        if (itemUpdate.tenHang !== undefined && itemUpdate.tenHang !== null && String(itemUpdate.tenHang).trim() !== "") {
-          historySheet.getRange(itemUpdate.row, 7).setValue(itemUpdate.tenHang);
-        }
-        if (itemUpdate.dvt !== undefined && itemUpdate.dvt !== null && String(itemUpdate.dvt).trim() !== "") {
-          historySheet.getRange(itemUpdate.row, 10).setValue(itemUpdate.dvt);
-        }
-        historySheet.getRange(itemUpdate.row, 12, 1, 4).setValues([[itemUpdate.note, itemUpdate.status, itemUpdate.actor, itemUpdate.source]]);
+
+      if (newRows.length) {
+        var startRow = historySheet.getLastRow() + 1;
+        historySheet.getRange(startRow, 1, newRows.length, 15).setValues(newRows);
       }
-    }
-    SpreadsheetApp.flush();
-    if (orderInfo && shouldNotify && changeCount > 0) {
-      var detailText = [];
-      if (modifiedCount > 0) detailText.push("Mã sửa số lượng: " + modifiedCount);
-      if (cancelledCount > 0) detailText.push("Mã hủy: " + cancelledCount);
-      var actionLabel = wasPacked && actorRole === "Admin" ? "Mở lại đơn đã soạn để chỉnh sửa" : "Chỉnh sửa số lượng / hủy mã";
-      var extraSummary = detailText.join("; ") || ("Đơn đã thay đổi " + changeCount + " mã.");
-      if (wasPacked && actorRole === "Admin") {
-        extraSummary = "Trạng thái mới: Mới, cần soạn lại. " + extraSummary;
+
+      var patchRowNums = [];
+      for (var pk in rowPatches) {
+        if (rowPatches.hasOwnProperty(pk)) patchRowNums.push(Number(pk));
       }
-      var editPdfUrl = taoPdfDonHangVaLayLink(orderInfo.soPhieu);
-      sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, actionLabel, changeCount, payload.actor, extraSummary, editPdfUrl);
+      if (patchRowNums.length) {
+        patchRowNums.sort(function(a, b) { return a - b; });
+        var minR = patchRowNums[0];
+        var maxR = patchRowNums[patchRowNums.length - 1];
+        var numRows = maxR - minR + 1;
+        // cols 6-15: MaVach, Ten, SL, SLTT, (skip img at 11), Note, Status, Actor, Source — index 0..9 in block; col10=DVT at index 4; col11 at index 5
+        var mat = historySheet.getRange(minR, 6, numRows, 10).getValues();
+        for (var pi = 0; pi < patchRowNums.length; pi++) {
+          var sheetRow = patchRowNums[pi];
+          var p = rowPatches[sheetRow];
+          var off = sheetRow - minR;
+          if (p.maVach !== undefined) mat[off][0] = p.maVach;
+          if (p.tenHang !== undefined) mat[off][1] = p.tenHang;
+          if (p.requestedQty !== undefined) mat[off][2] = p.requestedQty;
+          if (p.actualQty !== undefined) mat[off][3] = p.actualQty;
+          if (p.dvt !== undefined) mat[off][4] = p.dvt;
+          if (p.note !== undefined) mat[off][6] = p.note;
+          if (p.status !== undefined) mat[off][7] = p.status;
+          if (p.actor !== undefined) mat[off][8] = p.actor;
+          if (p.source !== undefined) mat[off][9] = p.source;
+        }
+        historySheet.getRange(minR, 6, numRows, 10).setValues(mat);
+      }
+
+      logOrderChangesBatch_(ss, auditRows);
+      SpreadsheetApp.flush();
+
+      if (orderInfo && shouldNotify && changeCount > 0) {
+        var detailText = [];
+        if (modifiedCount > 0) detailText.push("Mã sửa số lượng: " + modifiedCount);
+        if (cancelledCount > 0) detailText.push("Mã hủy: " + cancelledCount);
+        var actionLabel = wasPacked && actorRole === "Admin" ? "Mở lại đơn đã soạn để chỉnh sửa" : "Chỉnh sửa số lượng / hủy mã";
+        var extraSummary = detailText.join("; ") || ("Đơn đã thay đổi " + changeCount + " mã.");
+        if (wasPacked && actorRole === "Admin") {
+          extraSummary = "Trạng thái mới: Mới, cần soạn lại. " + extraSummary;
+        }
+        var editPdfUrl = taoPdfDonHangVaLayLink(orderInfo.soPhieu);
+        sendTelegramOrderChangeSummary(orderInfo.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, actionLabel, changeCount, actor, extraSummary, editPdfUrl);
+      }
+    } finally {
+      try { lock.releaseLock(); } catch (lockErr) {}
     }
-  } finally { lock.releaseLock(); }
-  return { success: true };
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message || String(err),
+      msg: err.message || String(err)
+    };
+  }
 }
 
 function themChiTietPhieu(payload) {
@@ -3238,171 +3647,261 @@ function themChiTietPhieu(payload) {
 }
 
 function huyDongChiTietPhieu(payload) {
-  requireAuthenticatedAction(payload);
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  ensureHistoryStatusColumn(historySheet);
-  var soPhieu = payload && payload.soPhieu ? payload.soPhieu : "";
-  var dataRows = historySheet.getDataRange().getValues();
-  if (!soPhieu) {
-    var lookupRow = Number(payload.row);
-    if (lookupRow >= 2 && dataRows[lookupRow - 1]) soPhieu = String(dataRows[lookupRow - 1][1] || "").trim();
+  try {
+    requireAuthenticatedAction(payload);
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { success: false, error: "Không tìm thấy sheet Lịch Sử Xuất Kho", msg: "Không tìm thấy sheet Lịch Sử Xuất Kho" };
+    }
+    ensureHistoryStatusColumn(historySheet);
+    var soPhieu = payload && payload.soPhieu ? payload.soPhieu : "";
+    var dataRows = historySheet.getDataRange().getValues();
+    if (!soPhieu) {
+      var lookupRow = Number(payload.row);
+      if (lookupRow >= 2 && dataRows[lookupRow - 1]) soPhieu = String(dataRows[lookupRow - 1][1] || "").trim();
+    }
+    assertActorCanManageOrder(payload.actor, soPhieu, historySheet, dataRows);
+    var row = Number(payload.row);
+    if (!row || row < 2) throw new Error("Dòng đơn hàng không hợp lệ.");
+    var values = dataRows[row - 1];
+    if (!values) throw new Error("Dòng đơn hàng không hợp lệ.");
+
+    // Batch 1 lần: cột 8-15 (giữ nguyên ĐVT/ảnh ở cột 10-11)
+    var block = historySheet.getRange(row, 8, 1, 8).getValues()[0];
+    block[0] = 0;                         // cột 8 — SL đặt
+    block[1] = 0;                         // cột 9 — SL thực tế
+    block[4] = "Đã hủy dòng";             // cột 12
+    block[5] = "Đã hủy dòng";             // cột 13
+    block[6] = (payload && payload.actor) ? payload.actor : "";
+    block[7] = "Quản lý";                 // cột 15
+    historySheet.getRange(row, 8, 1, 8).setValues([block]);
+
+    logOrderChange(ss, values[1], "Hủy mã khỏi đơn", payload.actor, values[4], values[5], values[7], 0, "Hủy từng dòng");
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message || String(err),
+      msg: err.message || String(err)
+    };
   }
-  assertActorCanManageOrder(payload.actor, soPhieu, historySheet, dataRows);
-  var row = Number(payload.row);
-  if (!row || row < 2) throw new Error("Dòng đơn hàng không hợp lệ.");
-  var values = historySheet.getRange(row, 1, 1, 13).getValues()[0];
-  historySheet.getRange(row, 8).setValue(0);
-  historySheet.getRange(row, 9).setValue(0);
-  historySheet.getRange(row, 12).setValue("Đã hủy dòng");
-  historySheet.getRange(row, 13).setValue("Đã hủy dòng");
-  historySheet.getRange(row, 14).setValue(payload.actor || "");
-  historySheet.getRange(row, 15).setValue("Quản lý");
-  logOrderChange(ss, values[1], "Hủy mã khỏi đơn", payload.actor, values[4], values[5], values[7], 0, "Hủy từng dòng");
-  return { success: true };
 }
 
 function huyPhieu(payload) {
-  requireAdmin(payload.actor);
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  ensureHistoryStatusColumn(historySheet);
-  if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet)) {
-    throw new Error("Đơn đã được xác nhận nhận hàng nên không thể hủy hoặc chỉnh sửa nữa.");
-  }
-  var data = historySheet.getDataRange().getValues();
-  var found = false;
-  var orderInfo = getThongTinPhieu(payload.soPhieu);
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1]).trim() === String(payload.soPhieu).trim()) {
-      historySheet.getRange(i + 1, 13).setValue("Đã hủy đơn");
-      historySheet.getRange(i + 1, 12).setValue("Đã hủy đơn");
-      found = true;
+  try {
+    requireAdmin(payload.actor);
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { success: false, error: "Không tìm thấy sheet Lịch Sử Xuất Kho", msg: "Không tìm thấy sheet Lịch Sử Xuất Kho" };
     }
+    ensureHistoryStatusColumn(historySheet);
+
+    var data = historySheet.getDataRange().getValues();
+    if (payload && payload.soPhieu && isOrderConfirmedForEditing(payload.soPhieu, historySheet, data)) {
+      throw new Error("Đơn đã được xác nhận nhận hàng nên không thể hủy hoặc chỉnh sửa nữa.");
+    }
+
+    var target = String(payload && payload.soPhieu ? payload.soPhieu : "").trim();
+    var matchRows = [];
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][1]).trim() === target) matchRows.push(i + 1);
+    }
+    if (!matchRows.length) throw new Error("Không tìm thấy đơn hàng.");
+
+    var minR = matchRows[0];
+    var maxR = matchRows[0];
+    for (var m = 1; m < matchRows.length; m++) {
+      if (matchRows[m] < minR) minR = matchRows[m];
+      if (matchRows[m] > maxR) maxR = matchRows[m];
+    }
+    var numRows = maxR - minR + 1;
+    var statusMat = historySheet.getRange(minR, 12, numRows, 2).getValues(); // cột 12-13
+    for (var k = 0; k < matchRows.length; k++) {
+      var off = matchRows[k] - minR;
+      statusMat[off][0] = "Đã hủy đơn";
+      statusMat[off][1] = "Đã hủy đơn";
+    }
+    historySheet.getRange(minR, 12, numRows, 2).setValues(statusMat);
+
+    logOrderChange(ss, payload.soPhieu, "Hủy đơn", payload.actor, "", "", "Đang xử lý", "Đã hủy đơn", (payload && payload.reason) ? payload.reason : "");
+
+    var orderInfo = getThongTinPhieu(payload.soPhieu);
+    if (orderInfo) {
+      sendTelegramOrderCancelled(payload.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, payload.actor, (payload && payload.reason) ? payload.reason : "");
+    }
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message || String(err),
+      msg: err.message || String(err)
+    };
   }
-  if (!found) throw new Error("Không tìm thấy đơn hàng.");
-  logOrderChange(ss, payload.soPhieu, "Hủy đơn", payload.actor, "", "", "Đang xử lý", "Đã hủy đơn", payload.reason || "");
-  if (orderInfo) {
-    sendTelegramOrderCancelled(payload.soPhieu, orderInfo.khoXuat, orderInfo.khoNhan, payload.actor, payload.reason || "");
-  }
-  return { success: true };
 }
 
 function xacNhanNhanHang(payload) {
   var t0 = Date.now();
-  requireAuthenticatedAction(payload);
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  var receiveSheet = getReceiveSheet(ss);
-  if (!historySheet) throw new Error("Không tìm thấy dữ liệu đơn hàng.");
-  ensureHistoryStatusColumn(historySheet);
-  var actorAccount = getAccountByActor(payload.actor);
-  var expectedStore = payload.store || (actorAccount ? actorAccount.store : "");
-  if (actorAccount && String(actorAccount.role).trim() !== "Admin") {
-    if (!expectedStore || (String(actorAccount.store).trim() !== "Tất cả" && String(actorAccount.store).trim() !== String(expectedStore).trim())) {
-      throw new Error("Bạn chỉ có thể xác nhận cho chi nhánh của mình.");
+  try {
+    requireAuthenticatedAction(payload);
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { success: false, error: "Không tìm thấy dữ liệu đơn hàng.", msg: "Không tìm thấy dữ liệu đơn hàng." };
     }
-  }
-  var confirmations = payload.confirmations || [];
-  if (!confirmations.length) throw new Error("Không có dữ liệu xác nhận.");
+    var receiveSheet = getReceiveSheet(ss);
+    ensureHistoryStatusColumn(historySheet);
 
-  // --- Validate + cache dòng (1 lần đọc / dòng) ---
-  var invalidRows = [];
-  var rowCache = {};
-  var soPhieuTarget = String(payload.soPhieu || "").trim();
-  for (var c = 0; c < confirmations.length; c++) {
-    var confCheck = confirmations[c];
-    var rowCheck = Number(confCheck.row);
-    if (!rowCheck || rowCheck < 2) continue;
-    var checkValues = historySheet.getRange(rowCheck, 1, 1, 16).getValues()[0];
-    rowCache[rowCheck] = checkValues;
-    var rowSoPhieu = checkValues[1] ? String(checkValues[1]).trim() : "";
-    var rowStatus = checkValues[12] ? String(checkValues[12]).trim() : "Mới";
-    var hasCol9 = checkValues[8] !== "" && checkValues[8] !== null && checkValues[8] !== undefined;
-    var hasCol16 = checkValues[15] !== "" && checkValues[15] !== null && checkValues[15] !== undefined;
-    var hasPackedQty = hasCol9 || hasCol16;
-    if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieuTarget)) {
-      invalidRows.push(rowCheck + " (sai số phiếu)");
-      continue;
+    var actorAccount = getAccountByActor(payload.actor);
+    var expectedStore = payload.store || (actorAccount ? actorAccount.store : "");
+    if (actorAccount && String(actorAccount.role).trim() !== "Admin") {
+      if (!expectedStore || (String(actorAccount.store).trim() !== "Tất cả" && String(actorAccount.store).trim() !== String(expectedStore).trim())) {
+        throw new Error("Bạn chỉ có thể xác nhận cho chi nhánh của mình.");
+      }
     }
-    if (rowStatus === "Đã hủy dòng" || rowStatus === "Đã hủy đơn") {
-      invalidRows.push(rowCheck + " (đã hủy)");
-      continue;
-    }
-    if (rowStatus === "Đã xác nhận nhận hàng") {
-      invalidRows.push(rowCheck + " (đã xác nhận)");
-      continue;
-    }
-    if (!hasPackedQty && rowStatus !== "Đã soạn hàng") {
-      invalidRows.push(rowCheck + " (chưa soạn)");
-    }
-  }
-  if (invalidRows.length) {
-    throw new Error("Không thể xác nhận đơn chưa soạn xong. Dòng lỗi: " + invalidRows.join(", "));
-  }
 
-  // --- Ghi trạng thái nhanh: giữ logic cột 9 nhận / 13–15 trạng thái; cột 16 (SL soạn) không đụng ---
-  var confirmedTotal = 0;
-  var changedCount = 0;
-  var changedQtyTotal = 0;
-  var receiveRows = [];
-  var auditRows = [];
-  var now = new Date();
-  var actor = payload.actor || "";
-  var khoXuatHint = "";
-  var khoNhanHint = "";
+    var confirmations = (payload && payload.confirmations) ? payload.confirmations : [];
+    if (!confirmations.length) throw new Error("Không có dữ liệu xác nhận.");
+    var soPhieuTarget = String(payload.soPhieu || "").trim();
+    var actor = (payload && payload.actor) ? payload.actor : "";
 
-  for (var i = 0; i < confirmations.length; i++) {
-    var conf = confirmations[i];
-    var row = Number(conf.row);
-    var qty = Number(conf.receivedQty);
-    if (!row || row < 2 || isNaN(qty) || qty < 0) continue;
-    var values = rowCache[row] || historySheet.getRange(row, 1, 1, 16).getValues()[0];
-    historySheet.getRange(row, 9).setValue(qty);
-    historySheet.getRange(row, 13, 1, 3).setValues([["Đã xác nhận nhận hàng", actor, "Xác nhận nhận hàng"]]);
-    if (!khoXuatHint && values[2]) khoXuatHint = String(values[2]).trim();
-    if (!khoNhanHint && values[3]) khoNhanHint = String(values[3]).trim();
-    var previousQty = Number(conf.previousQty) || 0;
-    if (qty !== previousQty) {
-      changedCount += 1;
-      changedQtyTotal += Math.abs(qty - previousQty);
+    var lock = LockService.getDocumentLock();
+    try {
+      lock.waitLock(20000);
+
+      // --- Batch đọc các dòng confirm (1 lần getValues) ---
+      var minRow = null;
+      var maxRow = null;
+      var c;
+      for (c = 0; c < confirmations.length; c++) {
+        var rowScan = Number(confirmations[c].row);
+        if (!rowScan || rowScan < 2 || isNaN(rowScan)) continue;
+        if (minRow === null || rowScan < minRow) minRow = rowScan;
+        if (maxRow === null || rowScan > maxRow) maxRow = rowScan;
+      }
+      if (minRow === null) throw new Error("Không có dữ liệu xác nhận.");
+
+      var numHistRows = maxRow - minRow + 1;
+      var histMatrix = historySheet.getRange(minRow, 1, numHistRows, 16).getValues();
+      var rowCache = {};
+      for (c = 0; c < confirmations.length; c++) {
+        var rowCheck = Number(confirmations[c].row);
+        if (!rowCheck || rowCheck < 2 || rowCheck < minRow || rowCheck > maxRow) continue;
+        rowCache[rowCheck] = histMatrix[rowCheck - minRow];
+      }
+
+      // --- Validate từ cache ---
+      var invalidRows = [];
+      for (c = 0; c < confirmations.length; c++) {
+        var confCheck = confirmations[c];
+        var rowV = Number(confCheck.row);
+        if (!rowV || rowV < 2) continue;
+        var checkValues = rowCache[rowV];
+        if (!checkValues) {
+          invalidRows.push(rowV + " (không đọc được dòng)");
+          continue;
+        }
+        var rowSoPhieu = checkValues[1] ? String(checkValues[1]).trim() : "";
+        var rowStatus = checkValues[12] ? String(checkValues[12]).trim() : "Mới";
+        var hasCol9 = checkValues[8] !== "" && checkValues[8] !== null && checkValues[8] !== undefined;
+        var hasCol16 = checkValues[15] !== "" && checkValues[15] !== null && checkValues[15] !== undefined;
+        var hasPackedQty = hasCol9 || hasCol16;
+        if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieuTarget)) {
+          invalidRows.push(rowV + " (sai số phiếu)");
+          continue;
+        }
+        if (rowStatus === "Đã hủy dòng" || rowStatus === "Đã hủy đơn") {
+          invalidRows.push(rowV + " (đã hủy)");
+          continue;
+        }
+        if (rowStatus === "Đã xác nhận nhận hàng") {
+          invalidRows.push(rowV + " (đã xác nhận)");
+          continue;
+        }
+        if (!hasPackedQty && rowStatus !== "Đã soạn hàng") {
+          invalidRows.push(rowV + " (chưa soạn)");
+        }
+      }
+      if (invalidRows.length) {
+        throw new Error("Không thể xác nhận đơn chưa soạn xong. Dòng lỗi: " + invalidRows.join(", "));
+      }
+
+      // --- Ghi lịch sử batch: cột 9 (SL nhận) + 13–15; cột 16 không đụng ---
+      var confirmedTotal = 0;
+      var changedCount = 0;
+      var changedQtyTotal = 0;
+      var receiveRows = [];
+      var auditRows = [];
+      var now = new Date();
+      var khoXuatHint = "";
+      var khoNhanHint = "";
+
+      for (var i = 0; i < confirmations.length; i++) {
+        var conf = confirmations[i];
+        var row = Number(conf.row);
+        var qty = Number(conf.receivedQty);
+        if (!row || row < 2 || isNaN(qty) || qty < 0) continue;
+        var values = rowCache[row];
+        if (!values) continue;
+        var off = row - minRow;
+        histMatrix[off][8] = qty;                            // cột 9
+        histMatrix[off][12] = "Đã xác nhận nhận hàng";       // cột 13
+        histMatrix[off][13] = actor;                         // cột 14
+        histMatrix[off][14] = "Xác nhận nhận hàng";          // cột 15
+        if (!khoXuatHint && values[2]) khoXuatHint = String(values[2]).trim();
+        if (!khoNhanHint && values[3]) khoNhanHint = String(values[3]).trim();
+        var previousQty = Number(conf.previousQty) || 0;
+        if (qty !== previousQty) {
+          changedCount += 1;
+          changedQtyTotal += Math.abs(qty - previousQty);
+        }
+        receiveRows.push([now, soPhieuTarget, expectedStore, actor, values[4] || "", values[5] || "", values[6] || "", qty, values[7] || 0, "Đã xác nhận nhận hàng"]);
+        auditRows.push([now, soPhieuTarget, "Xác nhận nhận hàng", actor, values[4] || "", values[5] || "", values[7] || "", qty, "Xác nhận bởi chi nhánh"]);
+        confirmedTotal += qty;
+      }
+
+      historySheet.getRange(minRow, 1, numHistRows, 16).setValues(histMatrix);
+
+      if (receiveRows.length) {
+        var rStart = Math.max(receiveSheet.getLastRow() + 1, 2);
+        receiveSheet.getRange(rStart, 1, receiveRows.length, 10).setValues(receiveRows);
+      }
+      if (auditRows.length) {
+        logOrderChangesBatch_(ss, auditRows);
+      }
+
+      applyStockDeductionAfterReceive(historySheet, confirmations, soPhieuTarget, rowCache, ss);
+      SpreadsheetApp.flush();
+
+      return {
+        success: true,
+        count: confirmations.length,
+        _debugTotalMs: Date.now() - t0,
+        _debugRun: "confirm-batch-v2",
+        notify: {
+          soPhieu: soPhieuTarget,
+          khoXuat: khoXuatHint,
+          khoNhan: khoNhanHint || expectedStore,
+          actor: actor,
+          count: confirmations.length,
+          confirmedTotal: confirmedTotal,
+          changedCount: changedCount,
+          changedQtyTotal: changedQtyTotal
+        }
+      };
+    } finally {
+      try { lock.releaseLock(); } catch (lockErr) {}
     }
-    receiveRows.push([now, soPhieuTarget, expectedStore, actor, values[4] || "", values[5] || "", values[6] || "", qty, values[7] || 0, "Đã xác nhận nhận hàng"]);
-    auditRows.push([now, soPhieuTarget, "Xác nhận nhận hàng", actor, values[4] || "", values[5] || "", values[7] || "", qty, "Xác nhận bởi chi nhánh"]);
-    confirmedTotal += qty;
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message || String(err),
+      msg: err.message || String(err),
+      _debugTotalMs: Date.now() - t0,
+      _debugRun: "confirm-batch-v2-catch"
+    };
   }
-
-  if (receiveRows.length) {
-    var rStart = Math.max(receiveSheet.getLastRow() + 1, 2);
-    receiveSheet.getRange(rStart, 1, receiveRows.length, 10).setValues(receiveRows);
-  }
-  if (auditRows.length) {
-    var auditSheet = getAuditSheet(ss);
-    var aStart = Math.max(auditSheet.getLastRow() + 1, 2);
-    auditSheet.getRange(aStart, 1, auditRows.length, 9).setValues(auditRows);
-  }
-
-  // Trừ tồn ngay (logic giữ nguyên) — tối ưu ghi tồn 1 lần flush
-  applyStockDeductionAfterReceive(historySheet, confirmations, soPhieuTarget, rowCache);
-  SpreadsheetApp.flush();
-
-  // PDF + Telegram chuyển sang postProcess (tránh timeout/502 HTML)
-  return {
-    success: true,
-    count: confirmations.length,
-    _debugTotalMs: Date.now() - t0,
-    _debugRun: "confirm-fast-v1",
-    notify: {
-      soPhieu: soPhieuTarget,
-      khoXuat: khoXuatHint,
-      khoNhan: khoNhanHint || expectedStore,
-      actor: actor,
-      count: confirmations.length,
-      confirmedTotal: confirmedTotal,
-      changedCount: changedCount,
-      changedQtyTotal: changedQtyTotal
-    }
-  };
 }
 
 /** PDF + Telegram sau khi đã lưu xác nhận (không chặn bước lưu) */
@@ -3428,30 +3927,19 @@ function postProcessReceiveOrder(payload) {
   }
 }
 
-function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu, rowCache) {
-  var ss = getSS();
-  var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
-  if (!stockSheet) return;
+function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu, rowCache, ssOpt) {
+  try {
+    var ss = ssOpt || getSS();
+    var stockSheet = ss.getSheetByName("TỔNG HỢP TỒN KHO");
+    if (!stockSheet) return;
 
-  var stockData = stockSheet.getDataRange().getValues();
-  var stockConfig = getStockSheetConfig(stockData);
-  var stockWrites = []; // {sheetRow, value}
+    var stockData = stockSheet.getDataRange().getValues();
+    var stockConfig = getStockSheetConfig(stockData);
+    var tonIdx = stockConfig.tonKhoIdx;
 
-  for (var i = 0; i < confirmations.length; i++) {
-    var conf = confirmations[i];
-    var row = Number(conf.row);
-    var qty = Number(conf.receivedQty);
-    if (!row || row < 2 || isNaN(qty) || qty <= 0) continue;
-
-    var orderRow = (rowCache && rowCache[row]) ? rowCache[row] : historySheet.getRange(row, 1, 1, 9).getValues()[0];
-    var rowSoPhieu = orderRow[1] ? String(orderRow[1]).trim() : "";
-    if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieu || "")) continue;
-
-    var khoXuat = orderRow[2] ? String(orderRow[2]).trim() : "";
-    var maHang = orderRow[4] ? normalizeProductCode(orderRow[4]) : "";
-    var maVach = orderRow[5] ? normalizeProductCode(orderRow[5]) : "";
-    if (!khoXuat || (!maHang && !maVach)) continue;
-
+    // Index tồn 1 lần: mã hàng / mã vạch → danh sách dòng (kèm kho), tránh O(confirm × stockRows) quét sheet
+    var byMaHang = {};
+    var byMaVach = {};
     var currentMaHang = "";
     var currentMaVach = "";
     for (var k = stockConfig.startRow; k < stockData.length; k++) {
@@ -3465,29 +3953,118 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu, r
         currentMaVach = rowMaVachRaw;
       }
       var rowStores = getRowStoreNames(rowStock, stockConfig);
-      var isSameStore = false;
-      for (var s = 0; s < rowStores.length; s++) {
-        if (isStoreNameMatch(rowStores[s], khoXuat)) {
-          isSameStore = true;
-          break;
+      if (!rowStores.length) continue;
+
+      var resolvedMaHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
+      var resolvedMaVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
+      if (!resolvedMaHang && !resolvedMaVach) continue;
+
+      var entry = {
+        dataIndex: k,
+        sheetRow: k + 1,
+        maHang: resolvedMaHang,
+        maVach: resolvedMaVach,
+        stores: rowStores
+      };
+      if (resolvedMaHang) {
+        if (!byMaHang[resolvedMaHang]) byMaHang[resolvedMaHang] = [];
+        byMaHang[resolvedMaHang].push(entry);
+      }
+      if (resolvedMaVach) {
+        if (!byMaVach[resolvedMaVach]) byMaVach[resolvedMaVach] = [];
+        byMaVach[resolvedMaVach].push(entry);
+      }
+    }
+
+    function findStockEntry_(khoXuat, maHang, maVach) {
+      var candidates = [];
+      var seen = {};
+      function addPool_(list) {
+        if (!list) return;
+        for (var li = 0; li < list.length; li++) {
+          var ent = list[li];
+          if (seen[ent.sheetRow]) continue;
+          seen[ent.sheetRow] = true;
+          candidates.push(ent);
         }
       }
-      if (!isSameStore) continue;
-
-      var rowMaHang = normalizeProductCode((hasOwnCode ? rowMaHangRaw : currentMaHang) || "");
-      var rowMaVach = normalizeProductCode((hasOwnCode ? rowMaVachRaw : currentMaVach) || "");
-      var codeMatch = (maHang && rowMaHang && areCodesEquivalent(maHang, rowMaHang)) || (maVach && rowMaVach && areCodesEquivalent(maVach, rowMaVach));
-      if (!codeMatch) continue;
-
-      var oldStock = parseQuantityValue(rowStock[stockConfig.tonKhoIdx]);
-      var newStock = oldStock - qty;
-      stockData[k][stockConfig.tonKhoIdx] = newStock;
-      stockWrites.push({ sheetRow: k + 1, value: newStock });
-      break;
+      if (maHang) {
+        if (byMaHang[maHang]) addPool_(byMaHang[maHang]);
+        for (var hk in byMaHang) {
+          if (!byMaHang.hasOwnProperty(hk) || hk === maHang) continue;
+          if (areCodesEquivalent(maHang, hk)) addPool_(byMaHang[hk]);
+        }
+      }
+      if (maVach) {
+        if (byMaVach[maVach]) addPool_(byMaVach[maVach]);
+        for (var vk in byMaVach) {
+          if (!byMaVach.hasOwnProperty(vk) || vk === maVach) continue;
+          if (areCodesEquivalent(maVach, vk)) addPool_(byMaVach[vk]);
+        }
+      }
+      candidates.sort(function(a, b) { return a.sheetRow - b.sheetRow; });
+      for (var ci = 0; ci < candidates.length; ci++) {
+        var hit = candidates[ci];
+        var codeMatch =
+          (maHang && hit.maHang && areCodesEquivalent(maHang, hit.maHang)) ||
+          (maVach && hit.maVach && areCodesEquivalent(maVach, hit.maVach));
+        if (!codeMatch) continue;
+        for (var s = 0; s < hit.stores.length; s++) {
+          if (isStoreNameMatch(hit.stores[s], khoXuat)) return hit;
+        }
+      }
+      return null;
     }
-  }
-  for (var w = 0; w < stockWrites.length; w++) {
-    stockSheet.getRange(stockWrites[w].sheetRow, stockConfig.tonKhoIdx + 1).setValue(stockWrites[w].value);
+
+    var stockUpdates = {}; // sheetRow -> newQty
+    for (var i = 0; i < confirmations.length; i++) {
+      var conf = confirmations[i];
+      var row = Number(conf.row);
+      var qty = Number(conf.receivedQty);
+      if (!row || row < 2 || isNaN(qty) || qty <= 0) continue;
+
+      var orderRow = (rowCache && rowCache[row]) ? rowCache[row] : null;
+      if (!orderRow && historySheet) {
+        orderRow = historySheet.getRange(row, 1, 1, 9).getValues()[0];
+      }
+      if (!orderRow) continue;
+
+      var rowSoPhieu = orderRow[1] ? String(orderRow[1]).trim() : "";
+      if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieu || "")) continue;
+
+      var khoXuat = orderRow[2] ? String(orderRow[2]).trim() : "";
+      var maHang = orderRow[4] ? normalizeProductCode(orderRow[4]) : "";
+      var maVach = orderRow[5] ? normalizeProductCode(orderRow[5]) : "";
+      if (!khoXuat || (!maHang && !maVach)) continue;
+
+      var hit = findStockEntry_(khoXuat, maHang, maVach);
+      if (!hit) continue;
+
+      var oldStock = parseQuantityValue(stockData[hit.dataIndex][tonIdx]);
+      var newStock = oldStock - qty;
+      stockData[hit.dataIndex][tonIdx] = newStock;
+      stockUpdates[hit.sheetRow] = newStock;
+    }
+
+    var updateRows = [];
+    for (var ur in stockUpdates) {
+      if (stockUpdates.hasOwnProperty(ur)) updateRows.push(Number(ur));
+    }
+    if (!updateRows.length) return;
+
+    updateRows.sort(function(a, b) { return a - b; });
+    var minR = updateRows[0];
+    var maxR = updateRows[updateRows.length - 1];
+    var numRows = maxR - minR + 1;
+    var tonCol = tonIdx + 1;
+    var tonMat = stockSheet.getRange(minR, tonCol, numRows, 1).getValues();
+    for (var w = 0; w < updateRows.length; w++) {
+      tonMat[updateRows[w] - minR][0] = stockUpdates[updateRows[w]];
+    }
+    stockSheet.getRange(minR, tonCol, numRows, 1).setValues(tonMat);
+  } catch (err) {
+    Logger.log("applyStockDeductionAfterReceive error: " + (err.message || err));
+    throw err;
   }
 }
 
@@ -3785,102 +4362,185 @@ function debugOrderInfo_(key) {
 }
 
 function luuSoSoanHangVaAnh(payload) {
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  ensureHistoryStatusColumn(historySheet);
-  var updates = payload.updates || [];
-  var images = payload.images || {}; 
-  var lock = LockService.getDocumentLock();
   try {
-    lock.waitLock(20000);
-    var actor = payload.actor || "";
-    if (updates.length) {
-      var minRow = updates[0].row;
-      var maxRow = updates[0].row;
-      var rowMap = {};
-      for (var ui = 0; ui < updates.length; ui++) {
-        minRow = Math.min(minRow, updates[ui].row);
-        maxRow = Math.max(maxRow, updates[ui].row);
-        rowMap[updates[ui].row] = updates[ui];
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) {
+      return { success: false, error: "Không tìm thấy sheet Lịch Sử Xuất Kho", msg: "Không tìm thấy sheet Lịch Sử Xuất Kho" };
+    }
+    ensureHistoryStatusColumn(historySheet);
+
+    var updates = (payload && payload.updates) ? payload.updates : [];
+    var images = (payload && payload.images) ? payload.images : {};
+    var actor = (payload && payload.actor) ? payload.actor : "";
+
+    var lock = LockService.getDocumentLock();
+    try {
+      lock.waitLock(20000);
+
+      var minRow = null;
+      var maxRow = null;
+      var i;
+
+      for (i = 0; i < updates.length; i++) {
+        var uRow = Number(updates[i].row);
+        if (!uRow || uRow < 2 || isNaN(uRow)) continue;
+        if (minRow === null || uRow < minRow) minRow = uRow;
+        if (maxRow === null || uRow > maxRow) maxRow = uRow;
       }
-      // Ghi từng dòng bằng A1 (tránh nhầm getRange numRows/endRow) — cột 9 + 13–16
-      for (var wr = 0; wr < updates.length; wr++) {
-        var wRow = Number(updates[wr].row);
-        if (!wRow || wRow < 2 || isNaN(wRow)) continue;
-        var wVal = updates[wr].val;
-        if (wVal !== "" && wVal !== null && wVal !== undefined) {
-          var parsedVal = Number(wVal);
-          historySheet.getRange(wRow, 9).setValue(parsedVal);
-          historySheet.getRange(wRow, 13).setValue("Đã soạn hàng");
-          historySheet.getRange(wRow, 14).setValue(actor);
-          historySheet.getRange(wRow, 15).setValue("Soạn hàng");
-          historySheet.getRange(wRow, 16).setValue(parsedVal); // SL Giao (Soạn)
-        } else {
-          historySheet.getRange(wRow, 9).clearContent();
-          historySheet.getRange(wRow, 16).clearContent();
-          historySheet.getRange(wRow, 13).setValue("Mới");
+
+      for (var imgKeyScan in images) {
+        if (!images.hasOwnProperty(imgKeyScan)) continue;
+        if (!images[imgKeyScan] || String(images[imgKeyScan]).indexOf("base64,") === -1) continue;
+        var imgRowScan = parseInt(imgKeyScan, 10);
+        if (!imgRowScan || imgRowScan < 2 || isNaN(imgRowScan)) continue;
+        if (minRow === null || imgRowScan < minRow) minRow = imgRowScan;
+        if (maxRow === null || imgRowScan > maxRow) maxRow = imgRowScan;
+      }
+
+      var matrix = null;
+      var numRows = 0;
+      if (minRow !== null) {
+        numRows = maxRow - minRow + 1;
+        // getRange(row, column, numRows, numColumns) — đọc A..P một lần
+        matrix = historySheet.getRange(minRow, 1, numRows, 16).getValues();
+
+        for (i = 0; i < updates.length; i++) {
+          var wRow = Number(updates[i].row);
+          if (!wRow || wRow < 2 || isNaN(wRow) || wRow < minRow || wRow > maxRow) continue;
+          var offset = wRow - minRow;
+          var wVal = updates[i].val;
+          if (wVal !== "" && wVal !== null && wVal !== undefined) {
+            var parsedVal = Number(wVal);
+            matrix[offset][8] = parsedVal;       // cột 9 — SL thực tế
+            matrix[offset][12] = "Đã soạn hàng"; // cột 13
+            matrix[offset][13] = actor;          // cột 14
+            matrix[offset][14] = "Soạn hàng";    // cột 15
+            matrix[offset][15] = parsedVal;      // cột 16 — SL Giao (Soạn)
+          } else {
+            matrix[offset][8] = "";
+            matrix[offset][15] = "";
+            matrix[offset][12] = "Mới";
+          }
         }
       }
-    }
-    var targetFolder;
-    try {
-      var folders = DriveApp.getFoldersByName("dieuchuyenhanghoa");
-      if (folders.hasNext()) targetFolder = folders.next();
-      else targetFolder = DriveApp.createFolder("dieuchuyenhanghoa");
-    } catch (e) { throw new Error("Chưa cấp quyền Drive"); }
-    
-    var anhDaLuu = 0;
-    for (var rIdx in images) {
-      if (images[rIdx] && images[rIdx].indexOf("base64,") !== -1) {
-        var splitBase = images[rIdx].split('base64,');
-        var file = targetFolder.createFile(Utilities.newBlob(Utilities.base64Decode(splitBase[1]), "image/jpeg", 'XacNhan_' + new Date().getTime() + '.jpg'));
-        try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
-        historySheet.getRange(parseInt(rIdx), 11).setValue(file.getUrl());
-        anhDaLuu++;
+
+      var anhDaLuu = 0;
+      var hasImages = false;
+      for (var imgCheck in images) {
+        if (!images.hasOwnProperty(imgCheck)) continue;
+        if (images[imgCheck] && String(images[imgCheck]).indexOf("base64,") !== -1) {
+          hasImages = true;
+          break;
+        }
       }
-    }
-    SpreadsheetApp.flush();
 
-    var soPhieu = "";
-    var khoXuat = "";
-    var khoNhan = "";
-    var totalRows = 0;
-    var missingCount = 0;
-    var extraCount = 0;
-    for (var u = 0; u < updates.length; u++) {
-      var notifyRow = updates[u].row;
-      var currentSoPhieu = historySheet.getRange(notifyRow, 2).getValue();
-      if (currentSoPhieu) { soPhieu = String(currentSoPhieu).trim(); break; }
-    }
-    var historyData = readHistoryDataPack_(historySheet, 12000).data;
-    for (var j = 1; j < historyData.length; j++) {
-      var statRow = historyData[j];
-      var rowSoPhieu = statRow[1] ? String(statRow[1]).trim() : "";
-      if (!rowSoPhieu || rowSoPhieu !== soPhieu) continue;
-      totalRows += 1;
-      var requestedQty = Number(statRow[7]) || 0;
-      var actualQty = (statRow[8] !== "" && statRow[8] !== undefined) ? Number(statRow[8]) : requestedQty;
-      if (actualQty < requestedQty) missingCount += 1;
-      if (actualQty > requestedQty) extraCount += 1;
-      if (!khoXuat && statRow[2]) khoXuat = String(statRow[2]).trim();
-      if (!khoNhan && statRow[3]) khoNhan = String(statRow[3]).trim();
-    }
+      if (hasImages) {
+        var targetFolder;
+        try {
+          var folders = DriveApp.getFoldersByName("dieuchuyenhanghoa");
+          if (folders.hasNext()) targetFolder = folders.next();
+          else targetFolder = DriveApp.createFolder("dieuchuyenhanghoa");
+        } catch (driveErr) {
+          throw new Error("Chưa cấp quyền Drive");
+        }
 
+        for (var rIdx in images) {
+          if (!images.hasOwnProperty(rIdx)) continue;
+          if (!images[rIdx] || String(images[rIdx]).indexOf("base64,") === -1) continue;
+          var imgRow = parseInt(rIdx, 10);
+          if (!imgRow || imgRow < 2 || isNaN(imgRow)) continue;
+
+          var splitBase = String(images[rIdx]).split("base64,");
+          var file = targetFolder.createFile(
+            Utilities.newBlob(
+              Utilities.base64Decode(splitBase[1]),
+              "image/jpeg",
+              "XacNhan_" + new Date().getTime() + ".jpg"
+            )
+          );
+          try {
+            file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          } catch (shareErr) {}
+
+          var fileUrl = file.getUrl();
+          if (matrix && imgRow >= minRow && imgRow <= maxRow) {
+            matrix[imgRow - minRow][10] = fileUrl; // cột 11
+          } else {
+            historySheet.getRange(imgRow, 11).setValue(fileUrl);
+          }
+          anhDaLuu++;
+        }
+      }
+
+      if (matrix) {
+        historySheet.getRange(minRow, 1, numRows, 16).setValues(matrix);
+      }
+      SpreadsheetApp.flush();
+
+      var soPhieu = "";
+      if (matrix) {
+        for (i = 0; i < updates.length; i++) {
+          var notifyRow = Number(updates[i].row);
+          if (!notifyRow || notifyRow < minRow || notifyRow > maxRow) continue;
+          var cellSp = matrix[notifyRow - minRow][1];
+          if (cellSp) {
+            soPhieu = String(cellSp).trim();
+            break;
+          }
+        }
+      }
+
+      var khoXuat = "";
+      var khoNhan = "";
+      var totalRows = 0;
+      var missingCount = 0;
+      var extraCount = 0;
+
+      if (soPhieu) {
+        var matchSet = buildOrderMatchSet_(soPhieu);
+        var pack = readHistoryForSelectedOrders_(historySheet, matchSet, "", 4000);
+        var historyData = pack.data;
+        for (var j = 1; j < historyData.length; j++) {
+          var statRow = historyData[j];
+          var rowSoPhieu = statRow[1] ? String(statRow[1]).trim() : "";
+          if (!rowSoPhieu || !orderKeysMatch_(rowSoPhieu, soPhieu)) continue;
+          totalRows += 1;
+          var requestedQty = Number(statRow[7]) || 0;
+          var actualQty = (statRow[8] !== "" && statRow[8] !== undefined && statRow[8] !== null)
+            ? Number(statRow[8])
+            : requestedQty;
+          if (actualQty < requestedQty) missingCount += 1;
+          if (actualQty > requestedQty) extraCount += 1;
+          if (!khoXuat && statRow[2]) khoXuat = String(statRow[2]).trim();
+          if (!khoNhan && statRow[3]) khoNhan = String(statRow[3]).trim();
+        }
+      }
+
+      return {
+        success: true,
+        message: "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!",
+        notify: {
+          soPhieu: soPhieu,
+          khoXuat: khoXuat,
+          khoNhan: khoNhan,
+          updatesCount: updates.length,
+          totalRows: totalRows,
+          missingCount: missingCount,
+          extraCount: extraCount,
+          actor: (payload && payload.actor) ? payload.actor : "Chi nhánh"
+        }
+      };
+    } finally {
+      try { lock.releaseLock(); } catch (lockErr) {}
+    }
+  } catch (err) {
     return {
-      success: true,
-      message: "✅ Đã lưu " + updates.length + " món và " + anhDaLuu + " ảnh!",
-      notify: {
-        soPhieu: soPhieu,
-        khoXuat: khoXuat,
-        khoNhan: khoNhan,
-        updatesCount: updates.length,
-        totalRows: totalRows,
-        missingCount: missingCount,
-        extraCount: extraCount,
-        actor: payload.actor || "Chi nhánh"
-      }
+      success: false,
+      error: err.message || String(err),
+      msg: err.message || String(err)
     };
-  } finally { lock.releaseLock(); }
+  }
 }
 
 function parseDateInputYYYYMMDD(value) {
@@ -3897,7 +4557,7 @@ function parseDateInputYYYYMMDD(value) {
   return date;
 }
 
-/** Ghép ngày + "HH:mm" → Date (timezone script) */
+/** Ghép ngày + "HH:mm" → Date (local components — tránh lệch UTC) */
 function combineDateAndTime_(dateObj, timeHHmm) {
   if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj.getTime())) return null;
   var raw = String(timeHHmm || "").trim();
@@ -3906,25 +4566,80 @@ function combineDateAndTime_(dateObj, timeHHmm) {
   var hh = Number(m[1]);
   var mm = Number(m[2]);
   if (isNaN(hh) || isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-  var out = new Date(dateObj.getTime());
-  out.setHours(hh, mm, 0, 0);
-  return out;
+  return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), hh, mm, 0, 0);
 }
 
 /**
- * Cửa sổ ngày tổng hợp / giao (packing day D):
- * - Đơn chính (tổng hợp): (D-1) 10:00 → D 08:00 (không gồm 08:00)
- * - Bổ sung / đơn mới: D 08:00 → D 10:00 (gồm 10:00)
- * - Sau D 10:00 → thuộc ngày tổng hợp D+1
+ * Chuẩn hóa mọi giá trị ngày/giờ về Unix ms theo lịch local (Asia/Ho_Chi_Minh khi script TZ đúng).
+ * Tránh so sánh chuỗi và tránh `new Date("yyyy-MM-dd...")` parse UTC.
+ */
+function toHoChiMinhMillis_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
+  if (value === null || value === undefined || value === "") return NaN;
+  if (typeof value === "number" && isFinite(value)) return value;
+
+  var s = String(value).trim();
+  if (!s) return NaN;
+
+  var mIso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?/);
+  if (mIso) {
+    return new Date(
+      Number(mIso[1]), Number(mIso[2]) - 1, Number(mIso[3]),
+      Number(mIso[4] || 0), Number(mIso[5] || 0), Number(mIso[6] || 0), 0
+    ).getTime();
+  }
+
+  var mVn = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (mVn) {
+    return new Date(
+      Number(mVn[3]), Number(mVn[2]) - 1, Number(mVn[1]),
+      Number(mVn[4] || 0), Number(mVn[5] || 0), Number(mVn[6] || 0), 0
+    ).getTime();
+  }
+
+  try {
+    var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+    var formats = [
+      "dd/MM/yyyy HH:mm:ss",
+      "dd/MM/yyyy HH:mm",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd HH:mm",
+      "yyyy/MM/dd HH:mm:ss",
+      "yyyy/MM/dd HH:mm"
+    ];
+    for (var fi = 0; fi < formats.length; fi++) {
+      try {
+        var parsed = Utilities.parseDate(s, tz, formats[fi]);
+        if (parsed && !isNaN(parsed.getTime())) return parsed.getTime();
+      } catch (parseErr) {}
+    }
+  } catch (tzErr) {}
+
+  var fallback = new Date(s);
+  return isNaN(fallback.getTime()) ? NaN : fallback.getTime();
+}
+
+function toMillisSafe_(value) {
+  return toHoChiMinhMillis_(value);
+}
+
+/**
+ * Cửa sổ ngày tổng hợp / giao N2 (packing day):
+ * - startTime = N1 10:00:00
+ * - midTime   = N2 08:00:00
+ * - endTime   = N2 10:00:00
+ * Chính:     >= start && < mid
+ * Bổ sung:   >= mid   && < end
+ * Tổng hợp:  >= start && < end
+ * Đúng mốc 10:00:00 N2 thuộc ngày tổng hợp N2+1 (không vào ca N2).
  */
 function getPackingDayWindows_(packingDayDate, opts) {
   opts = opts || {};
   var packingDay = packingDayDate instanceof Date && !isNaN(packingDayDate.getTime())
-    ? new Date(packingDayDate.getTime())
+    ? new Date(packingDayDate.getFullYear(), packingDayDate.getMonth(), packingDayDate.getDate(), 0, 0, 0, 0)
     : (getScriptTodayStart_() || new Date());
-  packingDay.setHours(0, 0, 0, 0);
-  var prevDay = new Date(packingDay.getTime());
-  prevDay.setDate(prevDay.getDate() - 1);
+  packingDay = new Date(packingDay.getFullYear(), packingDay.getMonth(), packingDay.getDate(), 0, 0, 0, 0);
+  var prevDay = new Date(packingDay.getFullYear(), packingDay.getMonth(), packingDay.getDate() - 1, 0, 0, 0, 0);
 
   var mainStartTime = opts.mainStartTime || "10:00";
   var mainEndTime = opts.mainEndTime || opts.suppStartTime || "08:00";
@@ -3933,7 +4648,25 @@ function getPackingDayWindows_(packingDayDate, opts) {
   var mainStart = combineDateAndTime_(prevDay, mainStartTime);
   var mainEnd = combineDateAndTime_(packingDay, mainEndTime);
   var suppEnd = combineDateAndTime_(packingDay, suppEndTime);
-  var tz = Session.getScriptTimeZone();
+  if (!mainStart || !mainEnd || !suppEnd) {
+    return {
+      packingDay: packingDay,
+      prevDay: prevDay,
+      mainStart: null,
+      mainEnd: null,
+      suppStart: null,
+      suppEnd: null,
+      startMs: NaN,
+      midMs: NaN,
+      endMs: NaN
+    };
+  }
+
+  var startMs = mainStart.getTime();
+  var midMs = mainEnd.getTime();
+  var endMs = suppEnd.getTime();
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+
   return {
     packingDay: packingDay,
     prevDay: prevDay,
@@ -3941,37 +4674,46 @@ function getPackingDayWindows_(packingDayDate, opts) {
     mainEnd: mainEnd,
     suppStart: mainEnd,
     suppEnd: suppEnd,
+    startMs: startMs,
+    midMs: midMs,
+    endMs: endMs,
     packingDayStr: Utilities.formatDate(packingDay, tz, "yyyy-MM-dd"),
     prevDayStr: Utilities.formatDate(prevDay, tz, "yyyy-MM-dd"),
-    mainLabel: mainStart && mainEnd
-      ? (Utilities.formatDate(mainStart, tz, "dd/MM HH:mm") + " → " + Utilities.formatDate(mainEnd, tz, "dd/MM HH:mm"))
-      : "",
-    suppLabel: mainEnd && suppEnd
-      ? (Utilities.formatDate(mainEnd, tz, "dd/MM HH:mm") + " → " + Utilities.formatDate(suppEnd, tz, "dd/MM HH:mm"))
-      : ""
+    mainLabel: Utilities.formatDate(mainStart, tz, "dd/MM HH:mm") + " → " + Utilities.formatDate(mainEnd, tz, "dd/MM HH:mm") + " (không gồm " + Utilities.formatDate(mainEnd, tz, "HH:mm") + ")",
+    suppLabel: Utilities.formatDate(mainEnd, tz, "dd/MM HH:mm") + " → " + Utilities.formatDate(suppEnd, tz, "dd/MM HH:mm") + " (không gồm " + Utilities.formatDate(suppEnd, tz, "HH:mm") + ")",
+    totalLabel: Utilities.formatDate(mainStart, tz, "dd/MM HH:mm") + " → " + Utilities.formatDate(suppEnd, tz, "dd/MM HH:mm") + " (không gồm " + Utilities.formatDate(suppEnd, tz, "HH:mm") + ")"
   };
 }
 
 function isInPackingMainWindow_(createdMs, win) {
-  if (!win || !win.mainStart || !win.mainEnd || isNaN(createdMs)) return false;
-  return createdMs >= win.mainStart.getTime() && createdMs < win.mainEnd.getTime();
+  if (!win || isNaN(createdMs) || isNaN(win.startMs) || isNaN(win.midMs)) return false;
+  return createdMs >= win.startMs && createdMs < win.midMs;
 }
 
 function isInPackingSuppWindow_(createdMs, win) {
-  if (!win || !win.suppStart || !win.suppEnd || isNaN(createdMs)) return false;
-  return createdMs >= win.suppStart.getTime() && createdMs <= win.suppEnd.getTime();
+  if (!win || isNaN(createdMs) || isNaN(win.midMs) || isNaN(win.endMs)) return false;
+  return createdMs >= win.midMs && createdMs < win.endMs;
 }
 
 function isInPackingDayWindow_(createdMs, win) {
-  if (!win || !win.mainStart || !win.suppEnd || isNaN(createdMs)) return false;
-  return createdMs >= win.mainStart.getTime() && createdMs <= win.suppEnd.getTime();
+  if (!win || isNaN(createdMs) || isNaN(win.startMs) || isNaN(win.endMs)) return false;
+  return createdMs >= win.startMs && createdMs < win.endMs;
 }
 
-function toMillisSafe_(value) {
-  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
-  if (value === null || value === undefined || value === "") return NaN;
-  var d = new Date(value);
-  return isNaN(d.getTime()) ? NaN : d.getTime();
+/** packingMode: main | supp | total */
+function normalizePackingMode_(mode, onlyNewItems) {
+  var m = String(mode || "").trim().toLowerCase();
+  if (m === "main" || m === "chinh" || m === "chính") return "main";
+  if (m === "supp" || m === "supplement" || m === "bosung" || m === "bổ sung" || m === "bo sung") return "supp";
+  if (m === "total" || m === "tong" || m === "tổng" || m === "tonghop" || m === "tổng hợp") return "total";
+  return onlyNewItems ? "supp" : "total";
+}
+
+function isInPackingModeWindow_(createdMs, win, packingMode) {
+  var mode = normalizePackingMode_(packingMode, false);
+  if (mode === "main") return isInPackingMainWindow_(createdMs, win);
+  if (mode === "supp") return isInPackingSuppWindow_(createdMs, win);
+  return isInPackingDayWindow_(createdMs, win);
 }
 
 function getScriptTodayStart_() {
@@ -4351,15 +5093,16 @@ function getPartialStockIndexForItems_(ss, itemMap, keys) {
   return index;
 }
 
-function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMDD) {
+function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMDD, packingMode) {
   // #region agent log
   var _dbgT0 = Date.now();
   // #endregion
-  // ngayTo = ngày tổng hợp/giao (packing day). Fallback: ngay hoặc hôm nay.
+  // ngayTo = ngày tổng hợp/giao N2. Fallback: ngay hoặc hôm nay.
   var packingDay = parseDateInputYYYYMMDD(ngayToYYYYMMDD) || parseDateInputYYYYMMDD(ngayYYYYMMDD) || getScriptTodayStart_() || new Date();
-  packingDay.setHours(0, 0, 0, 0);
+  packingDay = new Date(packingDay.getFullYear(), packingDay.getMonth(), packingDay.getDate(), 0, 0, 0, 0);
   var win = getPackingDayWindows_(packingDay);
-  var orders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, null, packingDay, win);
+  var mode = normalizePackingMode_(packingMode, false);
+  var orders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, null, packingDay, win, mode);
   // #region agent log
   var _dbgMs = Date.now() - _dbgT0;
   // #endregion
@@ -4368,16 +5111,18 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
     date: win.prevDayStr,
     dateTo: win.packingDayStr,
     packingDay: win.packingDayStr,
+    packingMode: mode,
     mainWindow: win.mainLabel,
     suppWindow: win.suppLabel,
+    totalWindow: win.totalLabel,
     total: orders.length,
     orders: orders,
     _debugTotalMs: _dbgMs,
-    _debugRun: "packing-window-v1"
+    _debugRun: "packing-window-v2"
   };
 }
 
-function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack, endDate, packingWin) {
+function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack, endDate, packingWin, packingMode) {
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) return [];
@@ -4387,6 +5132,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
 
   var packingDay = endDate || baseDate;
   var win = packingWin || getPackingDayWindows_(packingDay);
+  var mode = normalizePackingMode_(packingMode, false);
   var map = {};
 
   for (var i = 1; i < data.length; i++) {
@@ -4396,8 +5142,8 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     if (!soPhieu) continue;
 
     var ngayTao = row[0];
-    var createdMs = toMillisSafe_(ngayTao);
-    // Chỉ lấy đơn có dòng trong cửa sổ ngày tổng hợp (prev 10h → D 10h)
+    var createdMs = toHoChiMinhMillis_(ngayTao);
+    // Tổng khung ca: N1 10:00 ≤ t < N2 10:00
     if (!isInPackingDayWindow_(createdMs, win)) continue;
 
     var khoXuat = row[2] ? String(row[2]).trim() : "";
@@ -4413,7 +5159,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
         soPhieu: soPhieu,
         khoXuat: khoXuat,
         khoNhan: khoNhan,
-        createdAt: ngayTao instanceof Date ? ngayTao : new Date(createdMs),
+        createdAtMs: createdMs,
         hasPacked: false,
         hasConfirmed: false,
         hasCancelled: false,
@@ -4430,25 +5176,24 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     if (!isNaN(createdMs)) {
       if (isInPackingMainWindow_(createdMs, win)) entry.inMain = true;
       if (isInPackingSuppWindow_(createdMs, win)) entry.inSupp = true;
-      var createdDate = ngayTao instanceof Date ? ngayTao : new Date(createdMs);
-      if (entry.createdAt instanceof Date && createdDate.getTime() < entry.createdAt.getTime()) {
-        entry.createdAt = createdDate;
-      }
+      if (isNaN(entry.createdAtMs) || createdMs < entry.createdAtMs) entry.createdAtMs = createdMs;
     }
   }
 
   var orders = [];
-  var tz = Session.getScriptTimeZone();
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
   for (var key in map) {
     var item = map[key];
     if (item.hasPacked || item.hasConfirmed || item.hasCancelled) continue;
+    if (mode === "main" && !item.inMain) continue;
+    if (mode === "supp" && !item.inSupp) continue;
     var bucket = item.inMain && item.inSupp ? "cả hai" : (item.inSupp ? "bổ sung" : "chính");
     orders.push({
       soPhieu: item.soPhieu,
       khoXuat: item.khoXuat,
       khoNhan: item.khoNhan,
-      thoiGianDat: Utilities.formatDate(item.createdAt, tz, "dd/MM/yyyy HH:mm"),
-      thoiGianDatMillis: item.createdAt.getTime(),
+      thoiGianDat: Utilities.formatDate(new Date(item.createdAtMs), tz, "dd/MM/yyyy HH:mm"),
+      thoiGianDatMillis: item.createdAtMs,
       packingBucket: bucket
     });
   }
@@ -4473,11 +5218,13 @@ function taoBangSoanHangNgayMai(payload) {
     _dbgSteps.push(entry);
   }
   var onlyNewItems = !!(payload && payload.onlyNewItems);
+  var packingMode = normalizePackingMode_(payload && payload.packingMode, onlyNewItems);
   var newAfterTime = payload && payload.newAfterTime ? String(payload.newAfterTime).trim() : "08:00";
   var newBeforeTime = payload && payload.newBeforeTime ? String(payload.newBeforeTime).trim() : "10:00";
   _dbgMark("start", {
     selectedCount: payload && payload.selectedOrders ? payload.selectedOrders.length : 0,
     algo: "ton-q7",
+    packingMode: packingMode,
     onlyNewItems: onlyNewItems,
     newAfterTime: newAfterTime,
     newBeforeTime: newBeforeTime
@@ -4488,32 +5235,34 @@ function taoBangSoanHangNgayMai(payload) {
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
   if (!historySheet) throw new Error("Không tìm thấy sheet Lịch Sử Xuất Kho.");
 
-  // Ngày tổng hợp/giao = ngayTo (ưu tiên) hoặc ngay
+  // Ngày tổng hợp/giao N2 = ngayTo (ưu tiên) hoặc ngay
   var packingDayInput = parseDateInputYYYYMMDD(payload && payload.ngayTo ? payload.ngayTo : "")
     || parseDateInputYYYYMMDD(payload && payload.ngay ? payload.ngay : "")
     || getScriptTodayStart_()
     || new Date();
-  packingDayInput.setHours(0, 0, 0, 0);
+  packingDayInput = new Date(packingDayInput.getFullYear(), packingDayInput.getMonth(), packingDayInput.getDate(), 0, 0, 0, 0);
   var win = getPackingDayWindows_(packingDayInput, {
     mainEndTime: newAfterTime || "08:00",
     suppEndTime: newBeforeTime || "10:00"
   });
-  if (!win.mainStart || !win.mainEnd || !win.suppEnd) {
+  if (!win.mainStart || !win.mainEnd || !win.suppEnd || isNaN(win.startMs)) {
     return {
       success: false,
       msg: "Giờ chốt không hợp lệ. Dùng 08:00 / 10:00.",
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "packing-window-v1"
+      _debugRun: "packing-window-v2"
     };
   }
   var baseDate = win.prevDay;
   var endDate = win.packingDay;
   var packingDay = win.packingDay;
   var baseDateStr = win.packingDayStr;
-  var newAfterLabel = Utilities.formatDate(win.suppStart, Session.getScriptTimeZone(), "dd/MM HH:mm");
-  var newBeforeLabel = Utilities.formatDate(win.suppEnd, Session.getScriptTimeZone(), "dd/MM HH:mm");
+  var tzPack = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+  var newAfterLabel = Utilities.formatDate(win.suppStart, tzPack, "dd/MM HH:mm");
+  var newBeforeLabel = Utilities.formatDate(win.suppEnd, tzPack, "dd/MM HH:mm");
   var mainWindowLabel = win.mainLabel;
+  var totalWindowLabel = win.totalLabel;
 
   var userRole = payload && payload.userRole ? payload.userRole : "";
   var userStore = payload && payload.userStore ? payload.userStore : "";
@@ -4529,7 +5278,7 @@ function taoBangSoanHangNgayMai(payload) {
     historyPack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 2500);
   } else {
     historyPack = readHistoryDataPack_(historySheet, 3000);
-    var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win);
+    var eligibleOrders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, historyPack, packingDay, win, packingMode);
     for (var eo = 0; eo < eligibleOrders.length; eo++) {
       selectedSet[String(eligibleOrders[eo].soPhieu).trim()] = true;
     }
@@ -4625,30 +5374,19 @@ function taoBangSoanHangNgayMai(payload) {
     if (status === "Đã hủy đơn" || status === "Đã hủy dòng") continue;
     if (soLuong <= 0) continue;
 
-    var createdMs = toMillisSafe_(row[0]);
+    var createdMs = toHoChiMinhMillis_(row[0]);
     if (isNaN(createdMs)) {
       skippedByTime++;
       continue;
     }
 
-    if (onlyNewItems) {
-      // Tick "Bảng bổ sung": lấy TẤT CẢ dòng trong khung 8h–10h (đơn mới + mã thêm + đơn chưa soạn trong khung).
-      // Không bỏ qua chỉ vì thiếu ghi chú "Thêm mới vào đơn".
-      if (!isInPackingSuppWindow_(createdMs, win)) {
-        skippedByTime++;
-        continue;
-      }
-      includedNewRows++;
-    } else {
-      // Tổng hợp đầy đủ: cả đợt chính + bổ sung trong ngày D
-      // (D-1) 10:00 → D 10:00 — đơn chưa soạn đều vào bảng, không cắt ở 8h.
-      if (!isInPackingDayWindow_(createdMs, win)) {
-        skippedByTime++;
-        continue;
-      }
-      if (isInPackingMainWindow_(createdMs, win)) includedMainRows++;
-      else includedNewRows++;
+    // main: N1 10:00 ≤ t < N2 08:00 | supp: N2 08:00 ≤ t < N2 10:00 | total: N1 10:00 ≤ t < N2 10:00
+    if (!isInPackingModeWindow_(createdMs, win, packingMode)) {
+      skippedByTime++;
+      continue;
     }
+    if (isInPackingMainWindow_(createdMs, win)) includedMainRows++;
+    if (isInPackingSuppWindow_(createdMs, win)) includedNewRows++;
 
     // Tách theo mã + ĐVT (cùng mã có thể có Thùng / Túi ...)
     var codeKey = (maHang ? maHang.toUpperCase() : "") || (maVach ? maVach.toUpperCase() : "");
@@ -4705,23 +5443,24 @@ function taoBangSoanHangNgayMai(payload) {
   });
   // #endregion
   if (!keys.length) {
+    var emptyMsg = packingMode === "supp"
+      ? ("Không có dòng trong khung BỔ SUNG " + (newAfterLabel || "N2 08:00") + " → " + (newBeforeLabel || "N2 10:00") + " (không gồm mốc 10:00).")
+      : (packingMode === "main"
+        ? ("Không có dòng trong khung CHÍNH " + (mainWindowLabel || "N1 10:00 → N2 08:00") + ".")
+        : ("Không có dòng trong khung TỔNG HỢP " + (totalWindowLabel || "N1 10:00 → N2 10:00") + "."));
     return {
       success: false,
-      msg: onlyNewItems
-        ? ("Không có dòng hàng trong khung bổ sung " +
-          (newAfterLabel || "?") + " → " + (newBeforeLabel || "?") +
-          ".\nĐã bỏ qua " + skippedByTime + " dòng ngoài khung 8h–10h.")
-        : ("Không gom được mã hàng trong cửa sổ tổng hợp " +
-          (mainWindowLabel || "(D-1) 10:00") + " → " + (newBeforeLabel || "D 10:00") +
-          " (gồm cả đợt chính + bổ sung).\nĐã bỏ qua " + skippedByTime + " dòng ngoài khung / sau 10h."),
-      onlyNewItems: onlyNewItems,
+      msg: emptyMsg + "\nĐã bỏ qua " + skippedByTime + " dòng ngoài khung / biên giờ.",
+      onlyNewItems: packingMode === "supp",
+      packingMode: packingMode,
       newAfterLabel: newAfterLabel,
       newBeforeLabel: newBeforeLabel,
       mainWindowLabel: mainWindowLabel,
+      totalWindowLabel: totalWindowLabel,
       packingDay: baseDateStr,
       _debugTimings: _dbgSteps,
       _debugTotalMs: Date.now() - _dbgT0,
-      _debugRun: "packing-window-v1",
+      _debugRun: "packing-window-v2",
       _debugInfo: {
         baseDateStr: baseDateStr,
         selectedList: Object.keys(selectedSet),
@@ -4729,7 +5468,11 @@ function taoBangSoanHangNgayMai(payload) {
         skippedByTime: skippedByTime,
         skippedNotSupplement: skippedNotSupplement,
         includedNewRows: includedNewRows,
-        includedMainRows: includedMainRows
+        includedMainRows: includedMainRows,
+        packingMode: packingMode,
+        startMs: win.startMs,
+        midMs: win.midMs,
+        endMs: win.endMs
       }
     };
   }
@@ -4756,14 +5499,16 @@ function taoBangSoanHangNgayMai(payload) {
   _dbgMark("stockIndex", { via: "TON_Q7", stockReady: stockReady, q7Keys: Object.keys(q7Map).length, forceStock: forceStock, itemCount: keys.length });
   // #endregion
 
-  var sheetName = onlyNewItems ? "__TMP_SOAN_BO_SUNG" : "__TMP_SOAN_NGAY_MAI";
+  var sheetName = packingMode === "supp"
+    ? "__TMP_SOAN_BO_SUNG"
+    : (packingMode === "main" ? "__TMP_SOAN_CHINH" : "__TMP_SOAN_NGAY_MAI");
   var reportSheet = recreateTempSheetFast_(ss, sheetName);
-  var packingDayTitle = Utilities.formatDate(packingDay, Session.getScriptTimeZone(), "dd/MM/yyyy");
-  var title = onlyNewItems
-    ? ("BẢNG BỔ SUNG (toàn bộ đơn/dòng 8h–10h chưa soạn) — ngày " + packingDayTitle +
-      " | " + newAfterLabel + " → " + newBeforeLabel)
-    : ("BẢNG TỔNG HỢP SOẠN HÀNG NGÀY " + packingDayTitle +
-      " | Chính+Bổ sung: " + mainWindowLabel + " → " + newBeforeLabel);
+  var packingDayTitle = Utilities.formatDate(packingDay, tzPack, "dd/MM/yyyy");
+  var title = packingMode === "supp"
+    ? ("BẢNG BỔ SUNG — N2 " + packingDayTitle + " | ≥08:00 & <10:00 | " + newAfterLabel + " → " + newBeforeLabel)
+    : (packingMode === "main"
+      ? ("BẢNG ĐƠN CHÍNH — N2 " + packingDayTitle + " | ≥N1 10:00 & <N2 08:00 | " + mainWindowLabel)
+      : ("BẢNG TỔNG HỢP CA — N2 " + packingDayTitle + " | ≥N1 10:00 & <N2 10:00 | " + (totalWindowLabel || "")));
   // Hàng 5 = số đơn theo cột kho; hàng 6 = header tên cột (Q4_178 / Q4_275 / Q8…)
   var headerRow = 6;
   var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
@@ -4838,19 +5583,22 @@ function taoBangSoanHangNgayMai(payload) {
     return out;
   }
   var colCount = headers.length;
+  var modeLabelSheet = packingMode === "main"
+    ? ("Chính: " + includedMainRows + " dòng | " + mainWindowLabel)
+    : (packingMode === "supp"
+      ? ("Bổ sung: " + includedNewRows + " dòng | " + newAfterLabel + " → " + newBeforeLabel + " (không gồm mốc 10:00)")
+      : ("Tổng: Chính " + includedMainRows + " + Bổ sung " + includedNewRows + " dòng | " + (totalWindowLabel || (mainWindowLabel + " → " + newBeforeLabel))));
   var summaryLine = "Tổng đơn: " + Object.keys(orderSeen).length + " | Tổng mã: " + rows.length +
     (stockReady ? (" | Mã thiếu: " + missingLines + " | Tồn: TON_Q7") : " | Tồn: chưa có sheet TON_Q7 — Admin import lại file tồn") +
-    (onlyNewItems
-      ? (" | Bổ sung: " + includedNewRows + " dòng | " + newAfterLabel + " → " + newBeforeLabel)
-      : (" | Chính: " + includedMainRows + " + Bổ sung: " + includedNewRows + " dòng | " + mainWindowLabel + " → " + newBeforeLabel));
+    " | " + modeLabelSheet;
   var sheetBlock = [
     padRow_([title], colCount),
     padRow_([
-      "Ngày tổng hợp: " + packingDayTitle +
-      " | Chính: " + mainWindowLabel +
-      " | Bổ sung: " + newAfterLabel + " → " + newBeforeLabel +
-      " | Sau 10h → ngày hôm sau" +
-      " | Gom theo mã" + (onlyNewItems ? " (chỉ 8h–10h)" : " (chính + bổ sung)") + " | Stock từ " + TON_Q7_SHEET_NAME
+      "Ngày tổng hợp N2: " + packingDayTitle +
+      " | Chính: N1 10:00 → N2 08:00 (≥10:00 & <08:00)" +
+      " | Bổ sung: N2 08:00 → N2 10:00 (≥08:00 & <10:00)" +
+      " | Tổng: N1 10:00 → N2 10:00 | Mode: " + packingMode +
+      " | Stock từ " + TON_Q7_SHEET_NAME
     ], colCount),
     padRow_([""], colCount),
     padRow_([summaryLine], colCount),
@@ -4893,15 +5641,17 @@ function taoBangSoanHangNgayMai(payload) {
     missingItems: missingLines,
     stockReady: stockReady,
     stockSource: TON_Q7_SHEET_NAME,
-    onlyNewItems: onlyNewItems,
+    onlyNewItems: packingMode === "supp",
+    packingMode: packingMode,
     packingDay: baseDateStr,
     mainWindowLabel: mainWindowLabel,
+    totalWindowLabel: totalWindowLabel,
     newAfterLabel: newAfterLabel,
     newBeforeLabel: newBeforeLabel,
     url: "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit#gid=" + reportSheet.getSheetId(),
     _debugTimings: _dbgSteps,
     _debugTotalMs: _dbgTotalMs,
-    _debugRun: "packing-window-v1",
+    _debugRun: "packing-window-v2",
     _debugIncludedMainRows: includedMainRows,
     _debugIncludedNewRows: includedNewRows,
     _debugSkippedByTime: skippedByTime,
