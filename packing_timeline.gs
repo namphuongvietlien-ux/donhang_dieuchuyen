@@ -655,12 +655,15 @@ function taoBangSoanHangNgayMai(payload) {
   if (!q7Map) q7Map = {};
   var variantMapPack = {};
   try { variantMapPack = readTonVariantMap_(ss) || {}; } catch (eVar) { variantMapPack = {}; }
+  var parentByChildPack = {};
+  try { parentByChildPack = buildTonVariantParentLookup_(ss) || {}; } catch (ePar) { parentByChildPack = {}; }
   // #region agent log
   _dbgMark("stockIndex", {
     via: "TON_Q7+TON_VARIANT",
     stockReady: stockReady,
     q7Keys: Object.keys(q7Map).length,
     variantKeys: Object.keys(variantMapPack).length,
+    parentLookupKeys: Object.keys(parentByChildPack).length,
     forceStock: forceStock,
     itemCount: keys.length
   });
@@ -678,7 +681,7 @@ function taoBangSoanHangNgayMai(payload) {
       : ("BẢNG TỔNG HỢP CA — N2 " + packingDayTitle + " | ≥N1 10:00 & <N2 10:00 | " + (totalWindowLabel || "")));
   // Hàng 5 = số đơn theo cột kho; hàng 6 = header tên cột (Q4_178 / Q4_275 / Q8…)
   var headerRow = 6;
-  var headers = ["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "Stock Q7", "Tổng đặt"];
+  var headers = ["STT", "Mã hàng (Parent)", "Mã vạch", "Tên hàng / Phân loại", "ĐVT", "Stock Q7", "Tổng đặt"];
   var storeOrderCountRow = ["", "", "", "", "", "", "Số đơn"];
   for (var h = 0; h < storeList.length; h++) {
     headers.push(formatShortStoreLabel(storeList[h]));
@@ -736,10 +739,12 @@ function taoBangSoanHangNgayMai(payload) {
       canhBao = thieu > 0 ? ("THIẾU " + thieu) : (stockSource === "TON_VARIANT" ? "OK (variant)" : "OK");
       if (thieu > 0) missingLines += 1;
     }
-    // MH/MV giữ đúng mã con; tên = "MH - tên chi tiết" để nhặt hàng
-    var tenPack = formatVariantDisplayName_(it.maHang, it.tenHang);
+    // Mã cột = Parent_SKU (mã trên bao bì/kệ); tên = Cha - Biến thể (Mã con: …)
+    var metaPack = resolveVariantDisplayMeta_(catalogLookup, it.maHang, it.maVach, it.tenHang, parentByChildPack);
+    var maPack = metaPack.maHangDisplay || it.maHang || "";
+    var tenPack = metaPack.tenHangDisplay || formatVariantDisplayName_(it.maHang, it.tenHang);
 
-    var rowOut = [0, it.maHang || "", it.maVach || "", tenPack || "", dvtOut || "", rowHasStock ? stock : "", it.totalQty];
+    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", rowHasStock ? stock : "", it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
     rowOut.push(canhBao);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));

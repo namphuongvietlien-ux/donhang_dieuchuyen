@@ -10,9 +10,13 @@ var TON_Q7_SHEET_NAME = "TON_Q7";
 var CACHE_TON_Q7_KEY = "ton_q7_map_v2";
 
 // Tồn riêng theo biến thể đồ chơi — đối soát: Ton_Ban_Dau - Da_Xuat + Da_Nhan_Nhap = Ton_Hien_Tai
+// MASTER Cha–Con + stock biến thể: KHÔNG được sheet.clear() khi import MISA / tồn
 var TON_VARIANT_SHEET_NAME = "TON_VARIANT";
 
 var CACHE_TON_VARIANT_KEY = "ton_variant_map_v2";
+
+/** Staging thô từ MISA — được phép ghi đè mỗi lần import */
+var MISA_IMPORT_SHEET_NAME = "MISA_IMPORT";
 
 var TON_VARIANT_COL_COUNT = 10;
 
@@ -182,9 +186,107 @@ function ensureTonVariantSchema_(sh) {
 
 
 /**
- * Import tồn biến thể: ghi Ton_Ban_Dau, reset Da_Xuat=0, Ton_Hien_Tai = Ton_Ban_Dau (+ Da_Nhan_Nhap nếu giữ).
- * entries: {k|maHang, q|qty, p|parentSku, th|tenHang, mv|maVach, d|dvt}
- * Batch: 1 getValues + 1 setValues.
+ * Ghi TON_VARIANT theo map dirtyByKey — KHÔNG clear sheet.
+ * Chỉ cập nhật/append các Key trong dirtyByKey; mọi dòng khác giữ nguyên trên sheet.
+ */
+function persistTonVariantByKeyNoClear_(ss, dirtyByKey) {
+  ss = ss || getSS();
+  var sh = getOrCreateTonVariantSheet_(ss);
+  ensureTonVariantSchema_(sh);
+  var lastRow = sh.getLastRow();
+  var rowIndexByKey = {};
+  if (lastRow >= 2) {
+    var existingKeys = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < existingKeys.length; i++) {
+      var ek = String(existingKeys[i][0] || "").trim();
+      if (ek) rowIndexByKey[ek] = i + 2;
+    }
+  }
+
+  var now = new Date();
+  var appendRows = [];
+  var updated = 0;
+  for (var k in dirtyByKey) {
+    if (!Object.prototype.hasOwnProperty.call(dirtyByKey, k)) continue;
+    var row = dirtyByKey[k];
+    if (!row || !row.k) continue;
+    row.tonHienTai = calcTonHienTaiVariant_(row.tonBanDau, row.daXuat, row.daNhanNhap);
+    var vals = [
+      row.k,
+      row.p || "",
+      Number(row.tonBanDau) || 0,
+      Number(row.daXuat) || 0,
+      Number(row.tonHienTai) || 0,
+      Number(row.daNhanNhap) || 0,
+      row.th || "",
+      row.mv || "",
+      row.d || "",
+      now
+    ];
+    var sheetRow = rowIndexByKey[row.k];
+    if (sheetRow) {
+      sh.getRange(sheetRow, 1, 1, TON_VARIANT_COL_COUNT).setValues([vals]);
+      updated++;
+    } else {
+      appendRows.push(vals);
+    }
+  }
+  if (appendRows.length) {
+    var start = Math.max(sh.getLastRow() + 1, 2);
+    sh.getRange(start, 1, appendRows.length, TON_VARIANT_COL_COUNT).setValues(appendRows);
+  }
+  try { SpreadsheetApp.flush(); } catch (eF) {}
+
+  var mapRows = [];
+  var lr2 = sh.getLastRow();
+  if (lr2 >= 2) {
+    mapRows = sh.getRange(2, 1, lr2 - 1, TON_VARIANT_COL_COUNT).getValues();
+  }
+  var map = buildTonVariantStockMapFromRows_(mapRows);
+  try { putCacheJson_(getScriptCache_(), CACHE_TON_VARIANT_KEY, map, CACHE_TTL_SECONDS); } catch (e3) {}
+  return {
+    success: true,
+    rows: mapRows.length,
+    updated: updated,
+    appended: appendRows.length,
+    sheetName: TON_VARIANT_SHEET_NAME
+  };
+}
+
+
+/**
+ * Đọc toàn bộ TON_VARIANT → map byKey (giữ Da_Xuat / Da_Nhan).
+ */
+function readTonVariantByKeyMap_(ss) {
+  ss = ss || getSS();
+  var byKey = {};
+  var sh = getOrCreateTonVariantSheet_(ss);
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return byKey;
+  ensureTonVariantSchema_(sh);
+  var existing = sh.getRange(2, 1, lastRow - 1, TON_VARIANT_COL_COUNT).getValues();
+  for (var r = 0; r < existing.length; r++) {
+    var ek = String(existing[r][0] || "").trim();
+    if (!ek) continue;
+    byKey[ek] = {
+      k: ek,
+      p: String(existing[r][1] || "").trim(),
+      tonBanDau: Number(existing[r][2]) || 0,
+      daXuat: Number(existing[r][3]) || 0,
+      tonHienTai: Number(existing[r][4]) || 0,
+      daNhanNhap: Number(existing[r][5]) || 0,
+      th: String(existing[r][6] || "").trim(),
+      mv: String(existing[r][7] || "").trim(),
+      d: String(existing[r][8] || "").trim()
+    };
+  }
+  return byKey;
+}
+
+
+/**
+ * Import / merge tồn biến thể — UPSERT, KHÔNG clear, MẶC ĐỊNH GIỮ Da_Xuat.
+ * entries: {k|maHang, q|qty, p|parentSku, th|tenHang, mv|maVach, d|dvt, resetExport?:bool}
  */
 function writeTonVariantEntriesToSheet_(ss, entries) {
   ss = ss || getSS();
@@ -192,27 +294,8 @@ function writeTonVariantEntriesToSheet_(ss, entries) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
   try {
-    var sh = getOrCreateTonVariantSheet_(ss);
-    var byKey = {};
-    var lastRow = sh.getLastRow();
-    if (lastRow >= 2) {
-      var existing = sh.getRange(2, 1, lastRow - 1, TON_VARIANT_COL_COUNT).getValues();
-      for (var r = 0; r < existing.length; r++) {
-        var ek = String(existing[r][0] || "").trim();
-        if (!ek) continue;
-        byKey[ek] = {
-          k: ek,
-          p: String(existing[r][1] || "").trim(),
-          tonBanDau: Number(existing[r][2]) || 0,
-          daXuat: Number(existing[r][3]) || 0,
-          tonHienTai: Number(existing[r][4]) || 0,
-          daNhanNhap: Number(existing[r][5]) || 0,
-          th: String(existing[r][6] || "").trim(),
-          mv: String(existing[r][7] || "").trim(),
-          d: String(existing[r][8] || "").trim()
-        };
-      }
-    }
+    var byKey = readTonVariantByKeyMap_(ss);
+    var dirty = {};
 
     for (var i = 0; i < (entries || []).length; i++) {
       var ent = entries[i];
@@ -223,18 +306,21 @@ function writeTonVariantEntriesToSheet_(ss, entries) {
         key = buildTonVariantKey_(ent.maHang || ent.mh || "", ent.d || ent.dvt || "");
       }
       if (!key) continue;
-      var qty = Number(ent.q != null ? ent.q : ent.qty);
-      if (isNaN(qty)) qty = 0;
+      var qtyRaw = ent.q != null ? ent.q : ent.qty;
+      var hasQty = qtyRaw !== "" && qtyRaw !== null && qtyRaw !== undefined;
+      var qty = hasQty ? Number(qtyRaw) : NaN;
+      if (hasQty && isNaN(qty)) qty = 0;
+
       var prev = byKey[key] || {
         k: key, p: "", tonBanDau: 0, daXuat: 0, tonHienTai: 0, daNhanNhap: 0, th: "", mv: "", d: ""
       };
-      // Import mới: Ton_Ban_Dau = qty, reset Da_Xuat, Ton_Hien_Tai = Ton_Ban_Dau (+ nhập bổ sung nếu có)
-      prev.tonBanDau = qty;
-      prev.daXuat = 0;
-      if (ent.keepNhap === true) {
-        /* giữ Da_Nhan_Nhap */
-      } else {
-        prev.daNhanNhap = Number(ent.daNhanNhap != null ? ent.daNhanNhap : 0) || 0;
+      // Chỉ cập nhật Ton_Ban_Dau khi payload có qty — GIỮ Da_Xuat trừ khi resetExport=true
+      if (hasQty) prev.tonBanDau = qty;
+      if (ent.resetExport === true) {
+        prev.daXuat = 0;
+        if (ent.keepNhap !== true) {
+          prev.daNhanNhap = Number(ent.daNhanNhap != null ? ent.daNhanNhap : 0) || 0;
+        }
       }
       prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
       var p = String(ent.p || ent.parentSku || "").trim();
@@ -246,53 +332,23 @@ function writeTonVariantEntriesToSheet_(ss, entries) {
       if (mv) prev.mv = mv;
       if (d) prev.d = d;
       byKey[key] = prev;
+      dirty[key] = prev;
     }
 
-    var rows = [];
-    var now = new Date();
-    for (var k in byKey) {
-      if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
-      var row = byKey[k];
-      row.tonHienTai = calcTonHienTaiVariant_(row.tonBanDau, row.daXuat, row.daNhanNhap);
-      rows.push([
-        row.k,
-        row.p || "",
-        Number(row.tonBanDau) || 0,
-        Number(row.daXuat) || 0,
-        Number(row.tonHienTai) || 0,
-        Number(row.daNhanNhap) || 0,
-        row.th || "",
-        row.mv || "",
-        row.d || "",
-        now
-      ]);
-    }
-    rows.sort(function(a, b) {
-      var ap = String(a[1] || "");
-      var bp = String(b[1] || "");
-      if (ap !== bp) return ap < bp ? -1 : 1;
-      return String(a[0] || "") < String(b[0] || "") ? -1 : 1;
-    });
-
-    sh.clear();
-    sh.getRange(1, 1, 1, TON_VARIANT_COL_COUNT).setValues([TON_VARIANT_HEADERS])
-      .setFontWeight("bold").setBackground("#cfe2f3");
-    if (rows.length) sh.getRange(2, 1, rows.length, TON_VARIANT_COL_COUNT).setValues(rows);
-    try { SpreadsheetApp.flush(); } catch (e2) {}
-
-    var map = buildTonVariantStockMapFromRows_(rows);
-    try { putCacheJson_(getScriptCache_(), CACHE_TON_VARIANT_KEY, map, CACHE_TTL_SECONDS); } catch (e3) {}
-
-    // Đồng bộ tổng Parent → TON_Q7
-    try { syncParentVariantTotalsToTonQ7_(ss, rows); } catch (eSync) { Logger.log(eSync); }
-
+    var written = persistTonVariantByKeyNoClear_(ss, dirty);
+    try {
+      var shSync = getOrCreateTonVariantSheet_(ss);
+      var lrSync = shSync.getLastRow();
+      var syncRows = lrSync >= 2 ? shSync.getRange(2, 1, lrSync - 1, TON_VARIANT_COL_COUNT).getValues() : [];
+      syncParentVariantTotalsToTonQ7_(ss, syncRows);
+    } catch (eSync) {}
     return {
       success: true,
-      sheetName: TON_VARIANT_SHEET_NAME,
-      rows: rows.length,
-      keyCount: rows.length,
+      rows: written.rows || 0,
+      updated: written.updated || 0,
+      appended: written.appended || 0,
       ms: Date.now() - t0,
-      _debugRun: "ton-variant-v2-import"
+      _debugRun: "ton-variant-upsert-noclear-v1"
     };
   } finally {
     try { lock.releaseLock(); } catch (eL) {}
@@ -535,6 +591,94 @@ function formatVariantDisplayName_(maHang, tenHang) {
   if (!th) return mh;
   if (th.toUpperCase().indexOf(mh.toUpperCase()) === 0) return th;
   return mh + " - " + th;
+}
+
+
+/**
+ * Map MH_Con / MV → Parent_SKU từ sheet TON_VARIANT (fallback khi Data_Excel thiếu Parent).
+ * @returns {Object.<string,string>}
+ */
+function buildTonVariantParentLookup_(ss) {
+  var out = {};
+  try {
+    ss = ss || getSS();
+    var sh = ss.getSheetByName(TON_VARIANT_SHEET_NAME);
+    if (!sh || sh.getLastRow() < 2) return out;
+    ensureTonVariantSchema_(sh);
+    var data = sh.getRange(2, 1, sh.getLastRow() - 1, TON_VARIANT_COL_COUNT).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var key = String(data[i][0] || "").trim();
+      var parent = String(data[i][1] || "").trim();
+      if (!parent) continue;
+      var mh = key ? String(key.split("|")[0] || "").trim() : "";
+      var mv = String(data[i][7] || "").trim();
+      if (mh) out[mh.toUpperCase()] = parent;
+      if (mv) out["MV:" + normalizeProductCode(mv)] = parent;
+    }
+  } catch (e) {}
+  return out;
+}
+
+
+/**
+ * Map Parent/Variant để kho nhặt theo mã cha trên bao bì.
+ * @returns {{parentSku:string,variantSku:string,variantName:string,parentName:string,maHangDisplay:string,tenHangDisplay:string,maVach:string}}
+ */
+function resolveVariantDisplayMeta_(lookup, maHang, maVach, tenHang, parentByChild) {
+  var mh = String(maHang || "").trim();
+  var mv = String(maVach || "").trim();
+  var th = String(tenHang || "").trim();
+  var cat = resolveCatalogProduct(lookup, mh, mv);
+  var parentSku = "";
+  var variantName = th;
+  var parentName = "";
+  if (cat) {
+    parentSku = String(cat.parentSku || "").trim();
+    if (cat.tenHang) variantName = String(cat.tenHang).trim();
+  }
+  if (!parentSku && parentByChild) {
+    parentSku = parentByChild[mh.toUpperCase()] ||
+      (mv ? parentByChild["MV:" + normalizeProductCode(mv)] : "") ||
+      "";
+  }
+  if (parentSku && lookup && lookup.byMaHang) {
+    var parentCat = lookup.byMaHang[String(parentSku).trim().toUpperCase()];
+    if (parentCat && parentCat.tenHang) parentName = String(parentCat.tenHang).trim();
+  }
+
+  var isVariant = !!(parentSku && parentSku.toUpperCase() !== mh.toUpperCase());
+  var maHangDisplay = isVariant ? parentSku : mh;
+  var tenHangDisplay;
+  if (isVariant) {
+    var baseName = parentName ? (parentName + " - " + variantName) : variantName;
+    tenHangDisplay = baseName + " (Mã con: " + mh + ")";
+  } else {
+    tenHangDisplay = formatVariantDisplayName_(mh, th || variantName);
+  }
+
+  return {
+    parentSku: parentSku || "",
+    variantSku: mh,
+    variantName: variantName || th,
+    parentName: parentName,
+    maHangDisplay: maHangDisplay || mh || mv,
+    tenHangDisplay: tenHangDisplay,
+    maVach: mv
+  };
+}
+
+
+/** Gắn parentSku / variantSku / variantName vào object dòng đơn */
+function attachVariantMetaToItem_(item, lookup, parentByChild) {
+  if (!item) return item;
+  var meta = resolveVariantDisplayMeta_(lookup, item.maHang, item.maVach, item.tenHang, parentByChild);
+  item.parentSku = meta.parentSku;
+  item.variantSku = meta.variantSku || String(item.maHang || "").trim();
+  item.variantName = meta.variantName;
+  item.parentName = meta.parentName;
+  item.maHangDisplay = meta.maHangDisplay;
+  item.tenHangDisplay = meta.tenHangDisplay;
+  return item;
 }
 
 
@@ -1037,73 +1181,234 @@ function readCatalogIsNewFlagMap_(ss) {
 }
 
 
-/** Ghi catalog từ entries gọn {mh,mv,th,d,p,n} — layout Data_Excel + Parent_SKU + IsNew.
- *  Khi reset/import: GIỮ IsNew Admin đã tick (không tự gắn mới theo ngày/file).
- */
-function writeCatalogEntriesToSheet_(ss, entries, reset) {
+/** Ghi staging MISA_IMPORT (được phép clear/ghi đè). */
+function writeMisaImportSheet_(ss, entries, reset) {
   ss = ss || getSS();
-  var sh = getOrCreateCatalogSheet(ss);
-  var t0 = Date.now();
-  // Snapshot IsNew trước khi xóa — import danh mục không được làm mất tick Admin
-  var preservedIsNew = readCatalogIsNewFlagMap_(ss);
+  var sh = ss.getSheetByName(MISA_IMPORT_SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(MISA_IMPORT_SHEET_NAME);
+  var headers = [["Mã hàng", "Mã vạch", "Tên hàng hóa", "ĐVT", "Parent_SKU", "ImportedAt"]];
   if (reset) {
     var oldLastRow = sh.getLastRow();
-    var oldLastCol = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
+    var oldLastCol = Math.max(sh.getLastColumn(), 6);
     if (oldLastRow > 0) sh.getRange(1, 1, oldLastRow, oldLastCol).clearContent();
-    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo", CATALOG_PARENT_HEADER, CATALOG_ISNEW_HEADER]]);
-    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setFontWeight("bold").setBackground("#d9ead3");
+    sh.getRange(1, 1, 1, 6).setValues(headers).setFontWeight("bold").setBackground("#fff2cc");
+  } else if (sh.getLastRow() < 1) {
+    sh.getRange(1, 1, 1, 6).setValues(headers).setFontWeight("bold").setBackground("#fff2cc");
   }
-  // Đảm bảo header cột I = Ngày tạo (kể cả sheet cũ)
-  try {
-    var h9 = String(sh.getRange(1, 9).getValue() || "").trim();
-    if (!h9) sh.getRange(1, 9).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
-  } catch (eH) {}
-
-  var rows = [];
-  var withDvt = 0;
-  var withParent = 0;
-  var preservedCount = 0;
   var stamp = catalogNowStamp_();
+  var rows = [];
   for (var i = 0; i < (entries || []).length; i++) {
     var e = entries[i];
     if (!e) continue;
-    var mh = String(e.mh || "").trim();
-    var mv = String(e.mv || "").trim();
-    var th = String(e.th || "").trim();
-    var d = String(e.d || "").trim();
+    var mh = String(e.mh || e.maHang || "").trim();
+    var mv = String(e.mv || e.maVach || "").trim();
+    var th = String(e.th || e.tenHang || "").trim();
+    var d = String(e.d || e.dvt || "").trim();
     var p = String(e.p || e.parentSku || "").trim();
-    // Chỉ ghi IsNew khi payload chủ động gửi — hoặc khôi phục tick Admin cũ
-    var nFlag = "";
-    if (e.n === true || e.isNew === true || e.n === 1 || e.n === "1") {
-      nFlag = "TRUE";
-    } else if (preservedIsNew["MH:" + mh.toUpperCase()] || preservedIsNew["MV:" + mv.toUpperCase()]) {
-      nFlag = "TRUE";
-      preservedCount++;
-    }
     if (!mh && !mv) continue;
-    if (d) withDvt++;
-    if (p) withParent++;
-    // Cột I (Ngày tạo): stamp thời điểm import — KHÔNG dùng để auto gắn Hàng mới
-    rows.push([mh, "", mv, "", "", th, "", d, stamp.date, p, nFlag]);
+    rows.push([mh, mv, th, d, p, stamp.date]);
   }
   if (rows.length) {
-    var startRow = Math.max(sh.getLastRow() + 1, 2);
-    // getRange(row, column, numRows, numColumns)
-    sh.getRange(startRow, 1, rows.length, CATALOG_COL_COUNT).setValues(rows);
+    var start = Math.max(sh.getLastRow() + 1, 2);
+    sh.getRange(start, 1, rows.length, 6).setValues(rows);
+  }
+  try { SpreadsheetApp.flush(); } catch (e) {}
+  return { rows: rows.length, sheetName: MISA_IMPORT_SHEET_NAME, totalRows: Math.max(sh.getLastRow() - 1, 0) };
+}
+
+
+/**
+ * UPSERT Data_Excel từ MISA: cập nhật tên/ĐVT/MV; GIỮ Parent_SKU + IsNew + mã con không có trong file.
+ * Không xóa dòng hiện có — chỉ setValues từng dòng / append.
+ */
+function mergeCatalogEntriesUpsert_(ss, entries) {
+  ss = ss || getSS();
+  var sh = getOrCreateCatalogSheet(ss);
+  var t0 = Date.now();
+  var width = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
+  var lastRow = sh.getLastRow();
+  if (lastRow < 1) {
+    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo", CATALOG_PARENT_HEADER, CATALOG_ISNEW_HEADER]]);
+    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setFontWeight("bold").setBackground("#d9ead3");
+    lastRow = 1;
+    width = CATALOG_COL_COUNT;
+  }
+  var values = sh.getRange(1, 1, lastRow, width).getValues();
+  var header = values[0] || [];
+  var parentIdx = findCatalogParentColIdx_(header);
+  if (parentIdx === -1) parentIdx = 9;
+  var mhIdx = findCatalogMaHangColIdx_(header, parentIdx);
+  if (mhIdx === -1) mhIdx = 0;
+  var mvIdx = findColumnIndexByAliases(header, ["mavach", "barcode", "barcodeid"]);
+  if (mvIdx === -1) mvIdx = 2;
+  var thIdx = findColumnIndexByAliases(header, ["tenhang", "name", "description"]);
+  if (thIdx === -1) thIdx = 5;
+  var dvtIdx = findColumnIndexByAliases(header, ["dvt", "donvitinh", "donvi", "unit"]);
+  if (dvtIdx === -1) dvtIdx = 7;
+  var ngayIdx = findColumnIndexByAliases(header, ["ngaytao", "createdat", "created"]);
+  if (ngayIdx === -1) ngayIdx = 8;
+  var isNewIdx = findColumnIndexByAliases(header, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
+  if (isNewIdx === -1) isNewIdx = 10;
+
+  width = Math.max(width, CATALOG_COL_COUNT, parentIdx + 1, isNewIdx + 1);
+  try {
+    if (!String(sh.getRange(1, parentIdx + 1).getValue() || "").trim()) {
+      sh.getRange(1, parentIdx + 1).setValue(CATALOG_PARENT_HEADER).setFontWeight("bold").setBackground("#d9ead3");
+    }
+    if (!String(sh.getRange(1, isNewIdx + 1).getValue() || "").trim()) {
+      sh.getRange(1, isNewIdx + 1).setValue(CATALOG_ISNEW_HEADER).setFontWeight("bold").setBackground("#d9ead3");
+    }
+    if (!String(sh.getRange(1, ngayIdx + 1).getValue() || "").trim()) {
+      sh.getRange(1, ngayIdx + 1).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
+    }
+  } catch (eH) {}
+
+  var byMh = {};
+  var byMv = {};
+  for (var r = 1; r < values.length; r++) {
+    var mh0 = String(values[r][mhIdx] == null ? "" : values[r][mhIdx]).trim().toUpperCase();
+    var mv0 = String(values[r][mvIdx] == null ? "" : values[r][mvIdx]).trim().toUpperCase();
+    if (mh0 && byMh[mh0] === undefined) byMh[mh0] = r + 1; // sheet row
+    if (mv0 && byMv[mv0] === undefined) byMv[mv0] = r + 1;
+  }
+
+  var stamp = catalogNowStamp_();
+  var updated = 0;
+  var appended = 0;
+  var preservedParent = 0;
+  var withDvt = 0;
+  var withParent = 0;
+  var appendRows = [];
+
+  for (var i = 0; i < (entries || []).length; i++) {
+    var e = entries[i];
+    if (!e) continue;
+    var mh = String(e.mh || e.maHang || "").trim();
+    var mv = String(e.mv || e.maVach || "").trim();
+    var th = String(e.th || e.tenHang || "").trim();
+    var d = String(e.d || e.dvt || "").trim();
+    var pIn = String(e.p || e.parentSku || "").trim();
+    if (!mh && !mv) continue;
+    if (d) withDvt++;
+
+    var mhU = mh.toUpperCase();
+    var mvU = mv.toUpperCase();
+    var sheetRow = (mhU && byMh[mhU]) ? byMh[mhU] : ((mvU && byMv[mvU]) ? byMv[mvU] : 0);
+
+    if (sheetRow > 1) {
+      var memIdx = sheetRow - 1;
+      var row = values[memIdx] ? values[memIdx].slice() : [];
+      while (row.length < width) row.push("");
+      var oldParent = String(row[parentIdx] == null ? "" : row[parentIdx]).trim();
+      if (mh) row[mhIdx] = mh;
+      if (mv) row[mvIdx] = mv;
+      if (th) row[thIdx] = th;
+      if (d) row[dvtIdx] = d;
+      row[ngayIdx] = stamp.date;
+      if (pIn) {
+        row[parentIdx] = pIn;
+        withParent++;
+      } else if (oldParent) {
+        row[parentIdx] = oldParent;
+        preservedParent++;
+      }
+      // Giữ IsNew nguyên
+      sh.getRange(sheetRow, 1, 1, width).setValues([row]);
+      if (mhU) byMh[mhU] = sheetRow;
+      if (mvU) byMv[mvU] = sheetRow;
+      updated++;
+    } else {
+      var newRow = [];
+      for (var c = 0; c < width; c++) newRow.push("");
+      newRow[mhIdx] = mh;
+      newRow[mvIdx] = mv;
+      newRow[thIdx] = th;
+      newRow[dvtIdx] = d;
+      newRow[ngayIdx] = stamp.date;
+      if (pIn) {
+        newRow[parentIdx] = pIn;
+        withParent++;
+      }
+      appendRows.push(newRow);
+      appended++;
+    }
+  }
+
+  if (appendRows.length) {
+    var start = Math.max(sh.getLastRow() + 1, 2);
+    sh.getRange(start, 1, appendRows.length, width).setValues(appendRows);
     try {
-      sh.getRange(startRow, 9, rows.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
+      sh.getRange(start, ngayIdx + 1, appendRows.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
     } catch (eFmt) {}
   }
   try { SpreadsheetApp.flush(); } catch (e) {}
+
   return {
-    rows: rows.length,
+    rows: (entries || []).length,
+    updated: updated,
+    appended: appended,
+    preservedParent: preservedParent,
     withDvt: withDvt,
     withParent: withParent,
-    preservedIsNew: preservedCount,
     totalRows: Math.max(sh.getLastRow() - 1, 0),
     ms: Date.now() - t0,
-    ngayTaoStamp: stamp.text
+    ngayTaoStamp: stamp.text,
+    mode: "upsert-merge-noclear"
   };
+}
+
+
+/** Ghi catalog từ entries — luôn UPSERT/MERGE (tham số reset chỉ còn ý nghĩa staging MISA). */
+function writeCatalogEntriesToSheet_(ss, entries, reset) {
+  // reset=true: ghi đè staging MISA_IMPORT; Data_Excel luôn merge
+  try { writeMisaImportSheet_(ss, entries, !!reset); } catch (eM) { Logger.log(eM); }
+  return mergeCatalogEntriesUpsert_(ss, entries);
+}
+
+
+/**
+ * Gộp mã con từ TON_VARIANT (master Cha–Con) vào danhMuc nếu Data_Excel thiếu.
+ */
+function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
+  danhMuc = danhMuc || {};
+  try {
+    ss = ss || getSS();
+    var byKey = readTonVariantByKeyMap_(ss);
+    var added = 0;
+    for (var k in byKey) {
+      if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
+      var row = byKey[k];
+      if (!row) continue;
+      var mh = String(row.k || "").split("|")[0].trim();
+      var mv = String(row.mv || "").trim();
+      var parentSku = String(row.p || "").trim();
+      if (!mh && !mv) continue;
+      var mhU = mh.toUpperCase();
+      var mvU = mv.toUpperCase();
+      var existing = (mvU && danhMuc[mvU]) || (mhU && danhMuc[mhU]) || null;
+      if (existing) {
+        if (!existing.parentSku && parentSku) existing.parentSku = parentSku;
+        if (!existing.tenHang && row.th) existing.tenHang = row.th;
+        if (!existing.dvt && row.d) existing.dvt = row.d;
+        continue;
+      }
+      var obj = {
+        maHang: mh,
+        maVach: mv,
+        tenHang: row.th || mh,
+        dvt: row.d || "",
+        parentSku: parentSku,
+        isNew: false,
+        fromTonVariant: true
+      };
+      if (mvU) danhMuc[mvU] = obj;
+      if (mhU && !danhMuc[mhU]) danhMuc[mhU] = obj;
+      added++;
+    }
+    return { danhMuc: danhMuc, added: added };
+  } catch (e) {
+    return { danhMuc: danhMuc, added: 0, error: e.message || String(e) };
+  }
 }
 
 
@@ -1427,7 +1732,7 @@ function nhapKhauCapNhatThongTin(payload) {
     for (var wi = 0; wi < entries.length; wi++) {
       if (entries[wi] && (entries[wi].d || (entries[wi].k && String(entries[wi].k).indexOf("|DV:") !== -1))) withDvt++;
     }
-    // Tách mã có Parent_SKU → TON_VARIANT (Ton_Ban_Dau, reset Da_Xuat)
+    // Tách mã có Parent_SKU → TON_VARIANT (UPSERT, giữ Da_Xuat — không clear sheet)
     var variantImport = { rows: 0 };
     try {
       variantImport = importTonVariantFromStockEntries_(ss, entries) || { rows: 0 };
@@ -1447,14 +1752,14 @@ function nhapKhauCapNhatThongTin(payload) {
       done: true,
       _debugTotalMs: Date.now() - tQ7,
       _debugQ7Ms: q7Fast.ms || 0,
-      _debugRun: "import-q7-variant-v2",
+      _debugRun: "import-q7-variant-upsert-v3",
       msg: "Đã cập nhật " + TON_Q7_SHEET_NAME + " (" + (q7Fast.rows || 0) + " dòng)" +
-        ((variantImport.rows || 0) ? (" + " + TON_VARIANT_SHEET_NAME + " (" + variantImport.rows + " biến thể, reset Da_Xuat)") : "") +
+        ((variantImport.rows || 0) ? (" + UPSERT " + TON_VARIANT_SHEET_NAME + " (" + variantImport.rows + " biến thể, giữ Da_Xuat)") : "") +
         "."
     };
   }
 
-  // Import riêng TON_VARIANT (Admin)
+  // Import riêng TON_VARIANT (Admin) — UPSERT, không clear
   if (importType === "stockVariant") {
     var tVar = Date.now();
     var vEntries = payload.variantEntries || payload.q7Entries || [];
@@ -1468,12 +1773,13 @@ function nhapKhauCapNhatThongTin(payload) {
       variantRows: vInfo.rows || 0,
       done: true,
       _debugTotalMs: Date.now() - tVar,
-      _debugRun: "import-ton-variant-v2",
-      msg: "Đã cập nhật " + TON_VARIANT_SHEET_NAME + " (" + (vInfo.rows || 0) + " dòng) — Ton_Ban_Dau mới, Da_Xuat=0."
+      _debugRun: "import-ton-variant-upsert-v3",
+      msg: "Đã UPSERT " + TON_VARIANT_SHEET_NAME + " (" + (vInfo.updated || 0) + " cập nhật, " +
+        (vInfo.appended || 0) + " thêm mới) — giữ Da_Xuat / mã con hiện có."
     };
   }
 
-  // Import nhanh catalog: FE đã tách sẵn mã/tên/ĐVT → ghi Data_Excel (payload nhỏ, tránh timeout)
+  // Import nhanh catalog: staging MISA_IMPORT + UPSERT Data_Excel (giữ Parent_SKU / mã con)
   if (importType === 'catalogFast') {
     var tCat = Date.now();
     var catEntries = payload.catalogEntries || [];
@@ -1487,22 +1793,74 @@ function nhapKhauCapNhatThongTin(payload) {
     var isFirstC = chunkIndexC === 0;
     var isLastC = chunkIndexC >= chunkTotalC - 1;
     var catInfo = writeCatalogEntriesToSheet_(ss, catEntries, isFirstC);
-    if (isLastC) invalidateCatalogCache_();
+    var variantMeta = { rows: 0 };
+    if (isLastC) {
+      // Đồng bộ meta Cha–Con sang TON_VARIANT (append mã mới, không đụng Da_Xuat)
+      try {
+        var tonMetaEntries = [];
+        for (var ci = 0; ci < catEntries.length; ci++) {
+          var ce = catEntries[ci];
+          if (!ce) continue;
+          var pSku = String(ce.p || ce.parentSku || "").trim();
+          if (!pSku) continue;
+          var childMh = String(ce.mh || ce.maHang || "").trim();
+          if (!childMh) continue;
+          tonMetaEntries.push({
+            maHang: childMh,
+            mv: ce.mv || ce.maVach || "",
+            th: ce.th || ce.tenHang || "",
+            d: ce.d || ce.dvt || "",
+            p: pSku
+            // không gửi q → không đụng Ton_Ban_Dau
+          });
+        }
+        // Quét lại Data_Excel các dòng có Parent để UPSERT meta TON_VARIANT
+        try {
+          var lookupEnd = getCatalogLookup(ss);
+          if (lookupEnd && lookupEnd.byMaHang) {
+            for (var mk in lookupEnd.byMaHang) {
+              if (!Object.prototype.hasOwnProperty.call(lookupEnd.byMaHang, mk)) continue;
+              var itc = lookupEnd.byMaHang[mk];
+              if (!itc || !itc.parentSku) continue;
+              tonMetaEntries.push({
+                maHang: itc.maHang || mk,
+                mv: itc.maVach || "",
+                th: itc.tenHang || "",
+                d: itc.dvt || "",
+                p: itc.parentSku
+              });
+            }
+          }
+        } catch (eLook) {}
+        if (tonMetaEntries.length) {
+          variantMeta = writeTonVariantEntriesToSheet_(ss, tonMetaEntries) || { rows: 0 };
+        }
+      } catch (eTonMeta) { Logger.log(eTonMeta); }
+      invalidateCatalogCache_();
+    }
     return {
       success: true,
       importType: importType,
       targetSheet: 'Data_Excel',
+      stagingSheet: MISA_IMPORT_SHEET_NAME,
       updatedRows: catInfo.rows || 0,
       updatedCols: 8,
       chunkIndex: chunkIndexC,
       chunkTotal: chunkTotalC,
       done: isLastC,
       withDvt: catInfo.withDvt || 0,
+      preservedParent: catInfo.preservedParent || 0,
+      appended: catInfo.appended || 0,
+      updated: catInfo.updated || 0,
+      variantRows: variantMeta.rows || 0,
       _debugTotalMs: Date.now() - tCat,
-      _debugRun: "import-catalog-fast-v1",
+      _debugRun: "import-catalog-upsert-v2",
       msg: isLastC
-        ? ("Đã cập nhật nhanh Data_Excel (" + (catInfo.totalRows || catInfo.rows || 0) + " dòng, " + (catInfo.withDvt || 0) + " có ĐVT).")
-        : ("Đã nhận chunk catalog " + (chunkIndexC + 1) + "/" + chunkTotalC + ".")
+        ? ("UPSERT danh mục: Data_Excel " + (catInfo.totalRows || 0) + " dòng (cập nhật " +
+          (catInfo.updated || 0) + ", thêm " + (catInfo.appended || 0) +
+          ", giữ Parent " + (catInfo.preservedParent || 0) + "). Staging: " + MISA_IMPORT_SHEET_NAME +
+          ((variantMeta.rows || 0) ? ("; TON_VARIANT meta " + variantMeta.rows + " dòng.") : "."))
+        : ("Đã nhận chunk catalog " + (chunkIndexC + 1) + "/" + chunkTotalC + " (UPSERT, không xóa mã con).")
     };
   }
 
@@ -1557,25 +1915,49 @@ function nhapKhauCapNhatThongTin(payload) {
       };
     }
     if (importType === 'catalog') {
-      var catalogSheetDirect = getOrCreateCatalogSheet(ss);
+      // Legacy matrix → chuyển sang UPSERT entries (không wipe Data_Excel)
       var adjustedCatalogData = removeColumnFromMatrix(fileData, 3);
-      var catalogWriteInfo = isFirstChunk
-        ? writeImportedDataToSheet(catalogSheetDirect, adjustedCatalogData)
-        : appendImportedDataToSheet_(catalogSheetDirect, adjustedCatalogData);
+      var legacyEntries = [];
+      for (var li = 0; li < adjustedCatalogData.length; li++) {
+        if (li === 0) continue; // skip header-ish
+        var lr = adjustedCatalogData[li] || [];
+        var lmh = String(lr[0] || "").trim();
+        var lmv = String(lr[2] || lr[1] || "").trim();
+        var lth = String(lr[5] || lr[4] || lr[3] || "").trim();
+        var ld = String(lr[7] || lr[6] || "").trim();
+        if (!lmh && !lmv) continue;
+        legacyEntries.push({ mh: lmh, mv: lmv, th: lth, d: ld });
+      }
+      if (!legacyEntries.length) {
+        // Fallback: parse bằng extract kiểu thô từ matrix
+        for (var lj = 1; lj < adjustedCatalogData.length; lj++) {
+          var rowL = adjustedCatalogData[lj] || [];
+          var joined = rowL.join(" ");
+          if (!String(joined || "").trim()) continue;
+          legacyEntries.push({
+            mh: String(rowL[0] || "").trim(),
+            mv: String(rowL[2] || "").trim(),
+            th: String(rowL[5] || "").trim(),
+            d: String(rowL[7] || "").trim()
+          });
+        }
+      }
+      var legInfo = writeCatalogEntriesToSheet_(ss, legacyEntries, isFirstChunk);
       SpreadsheetApp.flush();
       if (isLastChunk) invalidateCatalogCache_();
       return {
         success: true,
         importType: importType,
         targetSheet: 'Data_Excel',
-        updatedRows: catalogWriteInfo.rows,
-        updatedCols: catalogWriteInfo.cols,
+        stagingSheet: MISA_IMPORT_SHEET_NAME,
+        updatedRows: legInfo.rows || 0,
+        updatedCols: legInfo.withDvt || 0,
         chunkIndex: chunkIndex,
         chunkTotal: chunkTotal,
         done: isLastChunk,
         msg: isLastChunk
-          ? 'Đã cập nhật file nhập khẩu thông tin lên sheet Data_Excel sau khi bỏ cột D của file tải lên.'
-          : ('Đã nhận chunk ' + (chunkIndex + 1) + '/' + chunkTotal + '.')
+          ? ('UPSERT Data_Excel từ file MISA (giữ Parent_SKU / mã con). Staging: ' + MISA_IMPORT_SHEET_NAME + '.')
+          : ('Đã nhận chunk ' + (chunkIndex + 1) + '/' + chunkTotal + ' (UPSERT).')
       };
     }
     throw new Error('Loại cập nhật không hợp lệ.');
@@ -1609,59 +1991,13 @@ function nhapKhauCapNhatThongTin(payload) {
   var catalogRows = [];
   for (var key in catalogMap) catalogRows.push(catalogMap[key]);
 
+  // UPSERT Data_Excel — không clearContent / không mất Parent_SKU & mã con
+  var sourceEntries = catalogRows.map(function(r) {
+    return { mh: r.maHang || "", mv: r.maVach || "", th: r.tenHang || "", d: r.dvt || "" };
+  });
+  try { writeMisaImportSheet_(ss, sourceEntries, true); } catch (eSrcMisa) {}
+  var sourceCatInfo = mergeCatalogEntriesUpsert_(ss, sourceEntries);
   var catalogSheet = getOrCreateCatalogSheet(ss);
-  var catalogData = catalogSheet.getDataRange().getValues();
-  var catalogHeaderIndex = findHeaderRowIndex(catalogData, 8);
-  if (catalogHeaderIndex < 0) catalogHeaderIndex = 0;
-  var catalogHeader = catalogData[catalogHeaderIndex] || [];
-  var cMaHang = findColumnIndexByAliases(catalogHeader, ['mahang', 'sku', 'code']);
-  var cMaVach = findColumnIndexByAliases(catalogHeader, ['mavach', 'barcode', 'ean']);
-  var cTenHang = findColumnIndexByAliases(catalogHeader, ['tenhang', 'name', 'description']);
-  var cDvt = findColumnIndexByAliases(catalogHeader, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
-  if (cMaHang === -1) cMaHang = 0;
-  if (cMaVach === -1) cMaVach = 2;
-  if (cTenHang === -1) cTenHang = 5;
-  if (cDvt === -1) cDvt = 7;
-
-  var catalogStartRow = catalogHeaderIndex + 2;
-  var catalogColumnCount = Math.max(catalogSheet.getLastColumn(), CATALOG_COL_COUNT);
-  var cNgayTao = findColumnIndexByAliases(catalogHeader, ["ngaytao", "createdat", "created", "ngaythem", "importedat"]);
-  if (cNgayTao === -1) {
-    cNgayTao = 8; // cột I mặc định
-    try {
-      catalogSheet.getRange(1, 9).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
-    } catch (eNg) {}
-  }
-  var cIsNew = findColumnIndexByAliases(catalogHeader, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
-  if (cIsNew === -1) cIsNew = 10;
-  // Giữ tick IsNew Admin trước khi xóa/ghi đè danh mục
-  var preservedIsNewLegacy = readCatalogIsNewFlagMap_(ss);
-  if (catalogSheet.getLastRow() >= catalogStartRow) {
-    catalogSheet.getRange(catalogStartRow, 1, catalogSheet.getLastRow() - catalogStartRow + 1, catalogColumnCount).clearContent();
-  }
-  if (catalogRows.length) {
-    var catalogWrite = [];
-    var importStamp = catalogNowStamp_();
-    for (var c = 0; c < catalogRows.length; c++) {
-      var rowOut = [];
-      for (var z = 0; z < catalogColumnCount; z++) rowOut.push("");
-      rowOut[cMaHang] = catalogRows[c].maHang;
-      rowOut[cMaVach] = catalogRows[c].maVach;
-      rowOut[cTenHang] = catalogRows[c].tenHang;
-      rowOut[cDvt] = catalogRows[c].dvt;
-      rowOut[cNgayTao] = importStamp.date;
-      var mhU = String(catalogRows[c].maHang || "").trim().toUpperCase();
-      var mvU = String(catalogRows[c].maVach || "").trim().toUpperCase();
-      if (preservedIsNewLegacy["MH:" + mhU] || preservedIsNewLegacy["MV:" + mvU]) {
-        rowOut[cIsNew] = "TRUE";
-      }
-      catalogWrite.push(rowOut);
-    }
-    catalogSheet.getRange(catalogStartRow, 1, catalogWrite.length, catalogColumnCount).setValues(catalogWrite);
-    try {
-      catalogSheet.getRange(catalogStartRow, cNgayTao + 1, catalogWrite.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
-    } catch (eFmt2) {}
-  }
 
   var stockRows = parsedRows.filter(function(r) {
     return r.kho && r.tonKho !== "";
@@ -1700,10 +2036,13 @@ function nhapKhauCapNhatThongTin(payload) {
 
   return {
     success: true,
-    catalogUpdated: catalogRows.length,
+    catalogUpdated: (sourceCatInfo && sourceCatInfo.totalRows) || catalogRows.length,
+    catalogUpserted: sourceCatInfo || {},
     stockUpdated: stockUpdated,
     sourceSheet: sourceSheetName,
-    warnings: warnings
+    stagingSheet: MISA_IMPORT_SHEET_NAME,
+    warnings: warnings,
+    msg: "UPSERT danh mục từ sheet nguồn (giữ Parent_SKU / mã con). Staging: " + MISA_IMPORT_SHEET_NAME
   };
 }
 
@@ -1742,6 +2081,10 @@ function getCatalogData(forceRefresh) {
     }
 
     var danhMuc = buildCatalogFromSheet_(getSS());
+    try {
+      var merged = mergeTonVariantChildrenIntoCatalog_(getSS(), danhMuc);
+      danhMuc = merged.danhMuc || danhMuc;
+    } catch (eMerge) {}
     var keys = 0;
     for (var k in danhMuc) {
       if (Object.prototype.hasOwnProperty.call(danhMuc, k)) keys++;
@@ -1752,7 +2095,8 @@ function getCatalogData(forceRefresh) {
       version: version,
       keyCount: keys,
       forced: !!force,
-      _debugRun: force ? "catalog-nocache-v1" : "catalog-cache-v1"
+      mergedTonVariant: true,
+      _debugRun: force ? "catalog-nocache-merge-v1" : "catalog-cache-merge-v1"
     };
     try {
       putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS);
@@ -2240,34 +2584,15 @@ function getChildVariantsForAdmin_(parentSku) {
 /**
  * Upsert TON_VARIANT giữ Da_Xuat / Da_Nhan_Nhap — chỉ cập nhật meta + Ton_Ban_Dau.
  * entries: [{maHang, dvt, parentSku, tenHang, maVach, tonBanDau}]
+ * KHÔNG clear sheet.
  */
 function upsertTonVariantKeepExport_(ss, entries) {
   ss = ss || getSS();
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
   try {
-    var sh = getOrCreateTonVariantSheet_(ss);
-    var byKey = {};
-    var lastRow = sh.getLastRow();
-    if (lastRow >= 2) {
-      var existing = sh.getRange(2, 1, lastRow - 1, TON_VARIANT_COL_COUNT).getValues();
-      for (var r = 0; r < existing.length; r++) {
-        var ek = String(existing[r][0] || "").trim();
-        if (!ek) continue;
-        byKey[ek] = {
-          k: ek,
-          p: String(existing[r][1] || "").trim(),
-          tonBanDau: Number(existing[r][2]) || 0,
-          daXuat: Number(existing[r][3]) || 0,
-          tonHienTai: Number(existing[r][4]) || 0,
-          daNhanNhap: Number(existing[r][5]) || 0,
-          th: String(existing[r][6] || "").trim(),
-          mv: String(existing[r][7] || "").trim(),
-          d: String(existing[r][8] || "").trim()
-        };
-      }
-    }
-
+    var byKey = readTonVariantByKeyMap_(ss);
+    var dirty = {};
     for (var i = 0; i < (entries || []).length; i++) {
       var ent = entries[i];
       if (!ent) continue;
@@ -2289,35 +2614,16 @@ function upsertTonVariantKeepExport_(ss, entries) {
       if (d) prev.d = d;
       prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
       byKey[key] = prev;
+      dirty[key] = prev;
     }
-
-    var rows = [];
-    var now = new Date();
-    for (var k in byKey) {
-      if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
-      var row = byKey[k];
-      row.tonHienTai = calcTonHienTaiVariant_(row.tonBanDau, row.daXuat, row.daNhanNhap);
-      rows.push([
-        row.k, row.p || "", Number(row.tonBanDau) || 0, Number(row.daXuat) || 0,
-        Number(row.tonHienTai) || 0, Number(row.daNhanNhap) || 0,
-        row.th || "", row.mv || "", row.d || "", now
-      ]);
-    }
-    rows.sort(function(a, b) {
-      var ap = String(a[1] || "");
-      var bp = String(b[1] || "");
-      if (ap !== bp) return ap < bp ? -1 : 1;
-      return String(a[0] || "") < String(b[0] || "") ? -1 : 1;
-    });
-    sh.clear();
-    sh.getRange(1, 1, 1, TON_VARIANT_COL_COUNT).setValues([TON_VARIANT_HEADERS])
-      .setFontWeight("bold").setBackground("#cfe2f3");
-    if (rows.length) sh.getRange(2, 1, rows.length, TON_VARIANT_COL_COUNT).setValues(rows);
-    try { SpreadsheetApp.flush(); } catch (e2) {}
-    var map = buildTonVariantStockMapFromRows_(rows);
-    try { putCacheJson_(getScriptCache_(), CACHE_TON_VARIANT_KEY, map, CACHE_TTL_SECONDS); } catch (e3) {}
-    try { syncParentVariantTotalsToTonQ7_(ss, rows); } catch (eSync) {}
-    return { success: true, rows: rows.length };
+    var written = persistTonVariantByKeyNoClear_(ss, dirty);
+    try {
+      var shSync = getOrCreateTonVariantSheet_(ss);
+      var lrSync = shSync.getLastRow();
+      var syncRows = lrSync >= 2 ? shSync.getRange(2, 1, lrSync - 1, TON_VARIANT_COL_COUNT).getValues() : [];
+      syncParentVariantTotalsToTonQ7_(ss, syncRows);
+    } catch (eSync) {}
+    return { success: true, rows: written.rows || 0, updated: written.updated || 0, appended: written.appended || 0 };
   } finally {
     try { lock.releaseLock(); } catch (eL) {}
   }

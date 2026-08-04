@@ -10,6 +10,8 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     var targetNormalized = normalizeOrderCodeText(target);
     var ss = getSS();
     var catalogLookup = getCatalogLookup(ss);
+    var parentByChild = {};
+    try { parentByChild = buildTonVariantParentLookup_(ss) || {}; } catch (eP) { parentByChild = {}; }
     var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
     if (!historySheet) return "";
     var data = historySheet.getDataRange().getValues();
@@ -50,11 +52,12 @@ function taoPdfDonHangVaLayLink(soPhieu) {
       var displayQty = slThucNhan !== "" ? slThucNhan : slGiao;
       if (!displayQty || displayQty <= 0) continue;
       if (slThucNhan !== "" && slThucNhan !== slGiao) diffRowIndexes.push(rows.length);
+      var metaPdf = resolveVariantDisplayMeta_(catalogLookup, data[i][4], data[i][5], data[i][6], parentByChild);
       rows.push([
         rows.length + 1,
-        data[i][4] || "",
+        metaPdf.maHangDisplay || data[i][4] || "",
         data[i][5] || "",
-        formatVariantDisplayName_(data[i][4], data[i][6]),
+        metaPdf.tenHangDisplay || formatVariantDisplayName_(data[i][4], data[i][6]),
         resolveDvtValue(catalogLookup, data[i][4], data[i][5], data[i][9]),
         slGiao,
         slThucNhan,
@@ -69,7 +72,7 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     var ngayText = createdAt ? Utilities.formatDate(new Date(createdAt), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm") : "";
     tempSheet.getRange("A2:H2").merge().setValue("Kho xuất: " + khoXuat + " | Kho nhận: " + khoNhan + (ngayText ? " | Thời gian tạo: " + ngayText : "")).setFontStyle("italic");
 
-    var headers = [["STT", "Mã hàng", "Mã vạch", "Tên hàng", "ĐVT", "SL Giao (Soạn)", "SL Thực Nhận", "Trạng thái dòng"]];
+    var headers = [["STT", "Mã Parent (kệ)", "Mã vạch", "Tên / Phân loại biến thể", "ĐVT", "SL Giao (Soạn)", "SL Thực Nhận", "Trạng thái dòng"]];
     tempSheet.getRange(4, 1, 1, 8).setValues(headers).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
     tempSheet.getRange(5, 1, rows.length, 8).setValues(rows);
     tempSheet.getRange(4, 1, rows.length + 1, 8).setBorder(true, true, true, true, true, true, "#000000", SpreadsheetApp.BorderStyle.SOLID);
@@ -195,6 +198,12 @@ function getOrderDetail(soPhieu) {
         maHang: r.maHang || "",
         maVach: r.maVach || "",
         tenHang: r.tenHang || "",
+        parentSku: r.parentSku || "",
+        variantSku: r.variantSku || r.maHang || "",
+        variantName: r.variantName || r.tenHang || "",
+        parentName: r.parentName || "",
+        maHangDisplay: r.maHangDisplay || "",
+        tenHangDisplay: r.tenHangDisplay || "",
         dvt: r.dvt || "",
         slGoc: Number(r.slGoc) || 0,
         slSoan: (r.slSoan === "" || r.slSoan == null) ? "" : (Number(r.slSoan) || 0),
@@ -683,6 +692,8 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
     var sheetOrders = pack.orders || [];
     var catalogLookup = null;
     try { catalogLookup = getCatalogLookup(ss); } catch (catErr) { catalogLookup = null; }
+    var parentByChild = {};
+    try { parentByChild = buildTonVariantParentLookup_(ss) || {}; } catch (ePar) { parentByChild = {}; }
 
     var matchedRows = [];
     for (var i = 1; i < data.length; i++) {
@@ -706,7 +717,7 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
       if (isReceived && hasActualQty) slThucTe = Number(data[i][8]);
       else if (!isReceived && hasActualQty && !hasSlGiao) slThucTe = Number(data[i][8]);
 
-      matchedRows.push({
+      var rowItem = {
         rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
         maHang: data[i][4],
         maVach: data[i][5],
@@ -719,7 +730,9 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
         trangThai: rowStatus || "Mới",
         nguoiSoanHang: data[i][13] || "",
         stock: ""
-      });
+      };
+      attachVariantMetaToItem_(rowItem, catalogLookup, parentByChild);
+      matchedRows.push(rowItem);
     }
 
     if (wantStock && matchedRows.length && isPackingQ7Store_(storeName)) {
@@ -1590,6 +1603,8 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu, r
 function taoFileExcelVaLayLink(payload) {
   var ss = getSS();
   var catalogLookup = getCatalogLookup(ss);
+  var parentByChild = {};
+  try { parentByChild = buildTonVariantParentLookup_(ss) || {}; } catch (eP) { parentByChild = {}; }
   var tenTabPhieu = "__TMP_XUAT_EXCEL";
   var targetSheet = recreateTempSheet(ss, tenTabPhieu, ["In_"]);
   
@@ -1627,13 +1642,15 @@ function taoFileExcelVaLayLink(payload) {
       else slFinal = slDat;
       if (!slFinal || slFinal <= 0) continue;
 
-      finalItems.push({
+      var histItem = {
         maHang: row[4] || "",
         maVach: row[5] || "",
         tenHang: row[6] || "",
         dvt: resolveDvtValue(catalogLookup, row[4], row[5], row[9]),
         sl: slFinal
-      });
+      };
+      attachVariantMetaToItem_(histItem, catalogLookup, parentByChild);
+      finalItems.push(histItem);
     }
   }
 
@@ -1643,13 +1660,17 @@ function taoFileExcelVaLayLink(payload) {
       var pItem = payload.items[f];
       var qty = Number(pItem.sl);
       if (!qty || qty <= 0) continue;
-      finalItems.push({
+      var fallItem = {
         maHang: pItem.maHang || "",
         maVach: pItem.maVach || "",
         tenHang: pItem.tenHang || "",
+        parentSku: pItem.parentSku || "",
         dvt: resolveDvtValue(catalogLookup, pItem.maHang, pItem.maVach, pItem.dvt),
         sl: qty
-      });
+      };
+      attachVariantMetaToItem_(fallItem, catalogLookup, parentByChild);
+      if (!fallItem.parentSku && pItem.parentSku) fallItem.parentSku = pItem.parentSku;
+      finalItems.push(fallItem);
     }
   }
   
@@ -1658,18 +1679,24 @@ function taoFileExcelVaLayLink(payload) {
   targetSheet.getRange("A8").setValue("Kho xuất:").setFontWeight("bold"); targetSheet.getRange("B8").setValue(khoXuat);
   targetSheet.getRange("A9").setValue("Kho nhận:").setFontWeight("bold"); targetSheet.getRange("B9").setValue(khoNhan);
   
-  var headers = ["STT", "Mã hàng hóa", "Mã vạch", "Tên hàng hóa", "ĐVT", "Số lượng (Soạn)"];
+  var headers = ["STT", "Mã Parent (kệ)", "Mã vạch", "Tên / Phân loại biến thể", "ĐVT", "Số lượng (Soạn)"];
   targetSheet.getRange("A12:F12").setValues([headers]).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#f8f9fa");
   
   var dataArr = []; var stt = 1;
   for (var j = 0; j < finalItems.length; j++) {
-    // Cột MH/MV = mã con chuẩn; cột tên kèm chi tiết biến thể (phẳng, không gộp cha)
     var fi = finalItems[j];
+    var metaX = resolveVariantDisplayMeta_(catalogLookup, fi.maHang, fi.maVach, fi.tenHang, parentByChild);
+    if (fi.parentSku && !metaX.parentSku) {
+      metaX.parentSku = fi.parentSku;
+      metaX.maHangDisplay = fi.parentSku;
+      metaX.tenHangDisplay = (fi.parentName ? (fi.parentName + " - ") : "") +
+        (fi.variantName || fi.tenHang || "") + " (Mã con: " + (fi.maHang || "") + ")";
+    }
     dataArr.push([
       stt++,
-      fi.maHang || "",
+      metaX.maHangDisplay || fi.maHang || "",
       fi.maVach || "",
-      formatVariantDisplayName_(fi.maHang, fi.tenHang),
+      metaX.tenHangDisplay || formatVariantDisplayName_(fi.maHang, fi.tenHang),
       fi.dvt || "",
       fi.sl
     ]);
@@ -1759,6 +1786,8 @@ function getChiTietDonHangMobile(soPhieu) {
 
   var catalogLookup = null;
   try { catalogLookup = getCatalogLookup(ss); } catch (catErr) { catalogLookup = null; }
+  var parentByChild = {};
+  try { parentByChild = buildTonVariantParentLookup_(ss) || {}; } catch (ePar) { parentByChild = {}; }
 
   var items = [];
   var khoXuat = "";
@@ -1787,7 +1816,7 @@ function getChiTietDonHangMobile(soPhieu) {
     if (catalogLookup) {
       try { dvtVal = resolveDvtValue(catalogLookup, row[4], row[5], row[9]) || dvtVal; } catch (dvtErr) {}
     }
-    items.push({
+    var mobileItem = {
       rowIndex: sheetOrders[i - 1] || (pack.startRow + i - 1),
       maHang: row[4],
       maVach: row[5],
@@ -1801,7 +1830,9 @@ function getChiTietDonHangMobile(soPhieu) {
       nguoiSoanHang: row[13] || "",
       _debugPackQty: packInputQty,
       _debugHasCol16: hasSlGiao
-    });
+    };
+    attachVariantMetaToItem_(mobileItem, catalogLookup, parentByChild);
+    items.push(mobileItem);
   }
 
   try {
