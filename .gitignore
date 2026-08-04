@@ -11,3 +11,8 @@ coverage/
 .idea/
 .vercel
 .env*
+
+# Local clasp / backup artifacts (do not push)
+Code.js
+*.bak_*
+.clasp.json

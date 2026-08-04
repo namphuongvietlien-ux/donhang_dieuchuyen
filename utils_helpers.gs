@@ -1,0 +1,1050 @@
+// ============================================================
+// utils_helpers.gs — Helpers: cache, ngay gio, store, matrix, auth
+// ============================================================
+
+
+function getScriptCache_() {
+  return CacheService.getScriptCache();
+}
+
+
+function normalizeDvtKey_(dvt) {
+  return normalizeHeaderText(String(dvt || "").trim());
+}
+
+
+function dvtFromStockKey_(key) {
+  var text = String(key || "");
+  var idx = text.indexOf("|DV:");
+  if (idx === -1) return "";
+  return text.substring(idx + 4);
+}
+
+
+function invalidateStoresCache_() {
+  getScriptCache_().remove(CACHE_STORES_KEY);
+}
+
+
+function readHistoryDataPack_(historySheet, maxRows) {
+  if (!historySheet) return { data: [[]], startRow: 2 };
+  var lastRow = historySheet.getLastRow();
+  var lastCol = Math.max(historySheet.getLastColumn(), 16);
+  if (lastRow < 2) return { data: [[]], startRow: 2 };
+
+  var limit = maxRows || HISTORY_MAX_ROWS_DEFAULT;
+  var startRow = 2;
+  if (lastRow - 1 > limit) startRow = lastRow - limit + 1;
+  var numRows = lastRow - startRow + 1;
+  var body = historySheet.getRange(startRow, 1, numRows, lastCol).getValues();
+  var data = [[]];
+  for (var i = 0; i < body.length; i++) data.push(body[i]);
+  return { data: data, startRow: startRow };
+}
+
+
+function getCacheJson_(cache, key) {
+  if (!cache) return null;
+  var raw = cache.get(key);
+  if (raw) {
+    try { return JSON.parse(raw); } catch (e) {}
+  }
+  var n = cache.get(key + "_n");
+  if (!n) return null;
+  var parts = [];
+  var num = Number(n) || 0;
+  for (var i = 0; i < num; i++) {
+    var part = cache.get(key + "_" + i);
+    if (part === null) return null;
+    parts.push(part);
+  }
+  try { return JSON.parse(parts.join("")); } catch (e) { return null; }
+}
+
+
+function putCacheJson_(cache, key, obj, ttl) {
+  if (!cache) return;
+  var json = JSON.stringify(obj);
+  if (json.length < 95000) {
+    cache.put(key, json, ttl);
+    return;
+  }
+  var chunkSize = 90000;
+  var numChunks = Math.ceil(json.length / chunkSize);
+  cache.put(key + "_n", String(numChunks), ttl);
+  for (var ci = 0; ci < numChunks; ci++) {
+    cache.put(key + "_" + ci, json.substring(ci * chunkSize, (ci + 1) * chunkSize), ttl);
+  }
+}
+
+
+function readHistoryForSelectedOrders_(historySheet, selectedSet, baseDateStr, maxScanRows) {
+  // Quét từ dưới lên theo chunk; khi đã thấy đủ số phiếu thì đọc thêm 1 chunk rồi dừng.
+  maxScanRows = maxScanRows || 2500;
+  var chunkSize = 600;
+  var lastRow = historySheet.getLastRow();
+  var lastCol = Math.min(Math.max(historySheet.getLastColumn(), 13), 16);
+  if (lastRow < 2) return { data: [[]], startRow: 2, scannedRows: 0, matchedRows: 0 };
+
+  var foundOrders = {};
+  var needLeft = (selectedSet && selectedSet._list && selectedSet._list.length)
+    ? selectedSet._list.length
+    : 0;
+  if (!needLeft) {
+    for (var nk in selectedSet) {
+      if (!selectedSet.hasOwnProperty(nk) || nk === "_list") continue;
+      needLeft++;
+    }
+  }
+  var matchedRows = [];
+  var scanned = 0;
+  var endRow = lastRow;
+  var extraChunkAfterFound = false;
+
+  while (endRow >= 2 && scanned < maxScanRows) {
+    var startRow = Math.max(2, endRow - chunkSize + 1);
+    if (scanned + (endRow - startRow + 1) > maxScanRows) {
+      startRow = Math.max(2, endRow - (maxScanRows - scanned) + 1);
+    }
+    var numRows = endRow - startRow + 1;
+    var body = historySheet.getRange(startRow, 1, numRows, lastCol).getValues();
+    for (var i = 0; i < body.length; i++) {
+      var row = body[i];
+      if (!row) continue;
+      var soPhieu = row[1] ? String(row[1]).trim() : "";
+      if (!soPhieu || !orderInMatchSet_(soPhieu, selectedSet)) continue;
+      matchedRows.push({ row: row, order: startRow + i });
+      if (!foundOrders[soPhieu]) {
+        foundOrders[soPhieu] = true;
+        needLeft--;
+      }
+    }
+    scanned += numRows;
+    endRow = startRow - 1;
+    if (needLeft <= 0) {
+      if (extraChunkAfterFound) break;
+      extraChunkAfterFound = true;
+    }
+  }
+
+  matchedRows.sort(function(a, b) { return a.order - b.order; });
+  var data = [[]];
+  var orders = [];
+  for (var m = 0; m < matchedRows.length; m++) {
+    data.push(matchedRows[m].row);
+    orders.push(matchedRows[m].order);
+  }
+  return {
+    data: data,
+    orders: orders,
+    startRow: matchedRows.length ? matchedRows[0].order : 2,
+    scannedRows: scanned,
+    matchedRows: matchedRows.length,
+    foundOrders: Object.keys(foundOrders).length
+  };
+}
+
+
+function extractStoreFullNameFromCell_(value) {
+  var text = String(value || "").trim();
+  if (!text) return "";
+  var pipeIdx = text.indexOf("|");
+  if (pipeIdx !== -1) return String(text.substring(pipeIdx + 1)).trim();
+  return text;
+}
+
+
+function extractStoreCodeFromCell_(value) {
+  var text = String(value || "").trim();
+  if (!text) return "";
+  var pipeIdx = text.indexOf("|");
+  if (pipeIdx !== -1) return String(text.substring(0, pipeIdx)).trim();
+  return text.split(/\s+/)[0] || text;
+}
+
+
+function findGuideSheetColumns_(headerRow) {
+  var cols = { stt: -1, khoCode: -1, diaChi: -1, khoFull: -1, tenNgan: -1 };
+  if (!headerRow) return cols;
+  var khoCols = [];
+  for (var c = 0; c < headerRow.length; c++) {
+    var token = normalizeHeaderText(headerRow[c]);
+    if (!token) continue;
+    if (token === "stt") cols.stt = c;
+    else if (token.indexOf("diachi") !== -1 || token.indexOf("dia chi") !== -1) cols.diaChi = c;
+    else if (token.indexOf("tenngan") !== -1 || token.indexOf("ten ngan") !== -1) cols.tenNgan = c;
+    else if (token.indexOf("kho") !== -1) khoCols.push(c);
+  }
+  if (khoCols.length >= 2) {
+    cols.khoCode = khoCols[0];
+    cols.khoFull = khoCols[1];
+  } else if (khoCols.length === 1) {
+    cols.khoFull = khoCols[0];
+    cols.khoCode = khoCols[0];
+  }
+  return cols;
+}
+
+
+function buildFallbackStoreRegistry_() {
+  var stores = Object.keys(STORE_MAP);
+  return { stores: stores, storeMap: copyObject_(STORE_MAP), storeDetails: [] };
+}
+
+
+function copyObject_(obj) {
+  var out = {};
+  for (var key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) out[key] = obj[key];
+  }
+  return out;
+}
+
+
+function loadStoresFromGuideSheet(ss) {
+  ss = ss || getSS();
+  var sheet = ss.getSheetByName(GUIDE_SHEET_NAME);
+  if (!sheet) return buildFallbackStoreRegistry_();
+
+  var data = sheet.getDataRange().getValues();
+  if (!data || data.length < 2) return buildFallbackStoreRegistry_();
+
+  var headerIndex = -1;
+  var cols = null;
+  for (var r = 0; r < Math.min(data.length, 20); r++) {
+    var row = data[r];
+    if (!row) continue;
+    var probe = findGuideSheetColumns_(row);
+    if (probe.khoFull !== -1 && probe.tenNgan !== -1) {
+      headerIndex = r;
+      cols = probe;
+      break;
+    }
+  }
+  if (headerIndex < 0 || !cols) {
+    headerIndex = 0;
+    cols = { stt: 0, khoCode: 1, diaChi: 2, khoFull: 3, tenNgan: 4 };
+  }
+
+  var stores = [];
+  var storeMap = {};
+  var storeDetails = [];
+  for (var i = headerIndex + 1; i < data.length; i++) {
+    var row = data[i];
+    if (!row) continue;
+    var fullName = getCellValue(row, cols.khoFull, "");
+    if (!fullName) fullName = extractStoreFullNameFromCell_(getCellValue(row, cols.khoCode, ""));
+    fullName = String(fullName).trim();
+    if (!fullName) continue;
+
+    var shortName = String(getCellValue(row, cols.tenNgan, "")).trim();
+    var codeCell = getCellValue(row, cols.khoCode, "");
+    var address = getCellValue(row, cols.diaChi, "");
+    var sttVal = getCellValue(row, cols.stt, "");
+
+    if (stores.indexOf(fullName) === -1) stores.push(fullName);
+    storeMap[fullName] = shortName || fullName;
+    storeDetails.push({
+      stt: sttVal,
+      code: extractStoreCodeFromCell_(codeCell),
+      fullName: fullName,
+      shortName: shortName || fullName,
+      address: address
+    });
+  }
+
+  if (!stores.length) return buildFallbackStoreRegistry_();
+  return { stores: stores, storeMap: storeMap, storeDetails: storeDetails };
+}
+
+
+function getStoreRegistry(ss) {
+  var cache = getScriptCache_();
+  var cached = cache.get(CACHE_STORES_KEY);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (e) {}
+  }
+  var registry = loadStoresFromGuideSheet(ss);
+  try {
+    cache.put(CACHE_STORES_KEY, JSON.stringify(registry), CACHE_TTL_SECONDS);
+  } catch (e) {}
+  return registry;
+}
+
+
+function getActiveStoreMap() {
+  try {
+    var registry = getStoreRegistry();
+    var merged = copyObject_(STORE_MAP);
+    if (registry && registry.storeMap) {
+      for (var key in registry.storeMap) {
+        if (Object.prototype.hasOwnProperty.call(registry.storeMap, key)) {
+          merged[key] = registry.storeMap[key];
+        }
+      }
+    }
+    return merged;
+  } catch (e) {
+    return STORE_MAP;
+  }
+}
+
+
+function getRuntimeStores() {
+  try {
+    var registry = getStoreRegistry();
+    if (registry && registry.stores && registry.stores.length) return registry.stores;
+  } catch (e) {}
+  return Object.keys(STORE_MAP);
+}
+
+function getSS() {
+  return SpreadsheetApp.openById(SHEET_ID);
+}
+
+
+function getOrderWebUrl(soPhieu, tabName, isPublic) {
+  var tab = tabName || "quan-ly";
+  var url = WEB_APP_URL + "?tab=" + encodeURIComponent(tab) + "&soPhieu=" + encodeURIComponent(soPhieu);
+  if (isPublic) {
+    url += "&public=1";
+  }
+  return url;
+}
+
+
+function sanitizeFileNamePart(value) {
+  var text = String(value || "").trim();
+  if (!text) return "don_hang";
+  return text.replace(/[\\/:*?"<>|#%&{}\[\]~]/g, "_").replace(/\s+/g, "_");
+}
+
+function normalizeOrderCodeText(value) {
+  // Đ/đ không luôn tách thành D trong NFKD → map thủ công để khớp Q7-ĐC… ↔ Q7-DC…
+  return String(value || "")
+    .trim()
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toUpperCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+
+/** Khớp số phiếu linh hoạt: Q7-DC318957 ↔ DC-318957 ↔ ĐC-318957 */
+function orderKeysMatch_(left, right) {
+  var a = normalizeOrderCodeText(left);
+  var b = normalizeOrderCodeText(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 6 && b.indexOf(a) !== -1) return true;
+  if (b.length >= 6 && a.indexOf(b) !== -1) return true;
+  return false;
+}
+
+
+function buildOrderMatchSet_(soPhieuOrList) {
+  var set = { _list: [] };
+  var list = Object.prototype.toString.call(soPhieuOrList) === "[object Array]" ? soPhieuOrList : [soPhieuOrList];
+  for (var i = 0; i < list.length; i++) {
+    var s = String(list[i] || "").trim();
+    if (!s) continue;
+    set[s] = true;
+    set[s.toLowerCase()] = true;
+    set[normalizeOrderCodeText(s)] = true;
+    set._list.push(s);
+  }
+  return set;
+}
+
+
+function orderInMatchSet_(soPhieu, matchSet) {
+  var s = String(soPhieu || "").trim();
+  if (!s || !matchSet) return false;
+  if (matchSet[s] || matchSet[s.toLowerCase()] || matchSet[normalizeOrderCodeText(s)]) return true;
+  var list = matchSet._list || [];
+  for (var i = 0; i < list.length; i++) {
+    if (orderKeysMatch_(s, list[i])) return true;
+  }
+  return false;
+}
+
+
+// --- API TÀI KHOẢN & ĐĂNG NHẬP ---
+function getOrCreateUserSheet(ss) {
+  var sheet = ss.getSheetByName("Tài Khoản");
+  if (!sheet) {
+    sheet = ss.insertSheet("Tài Khoản");
+    sheet.appendRow(["Tên đăng nhập", "Mật khẩu", "Phân quyền", "Chi nhánh"]);
+    sheet.appendRow(["admin", "123456", "Admin", "Tất cả"]);
+    sheet.getRange("A1:D1").setFontWeight("bold").setBackground("#d9ead3");
+  }
+  return sheet;
+}
+
+
+function normalizeHeaderText(value) {
+  if (value === null || value === undefined) return "";
+  // Đ/đ không tách trong NFKD — map D trước khi lọc a-z (tránh "Đơn vị tính" → "onvitinh")
+  return String(value)
+    .trim()
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+
+function findColumnIndexByAliases(row, aliases) {
+  if (!row) return -1;
+  for (var c = 0; c < row.length; c++) {
+    var normalized = normalizeHeaderText(row[c]);
+    for (var i = 0; i < aliases.length; i++) {
+      if (normalized.indexOf(aliases[i]) !== -1) return c;
+    }
+  }
+  return -1;
+}
+
+
+function findAllColumnIndicesByAliases(row, aliases) {
+  if (!row) return [];
+  var indexes = [];
+  for (var c = 0; c < row.length; c++) {
+    var normalized = normalizeHeaderText(row[c]);
+    for (var i = 0; i < aliases.length; i++) {
+      if (normalized.indexOf(aliases[i]) !== -1) {
+        indexes.push(c);
+        break;
+      }
+    }
+  }
+  return indexes;
+}
+
+
+function getCellValue(row, index, fallback) {
+  if (!row || index === undefined || index === null || index < 0 || index >= row.length) return fallback;
+  var value = row[index];
+  if (value === null || value === undefined || value === "") return fallback;
+  return String(value).trim();
+}
+
+
+function findHeaderRowIndex(data, maxScanRows) {
+  // Dò dòng tiêu đề bằng cách yêu cầu ÍT NHẤT 2 ô khớp alias trong CÙNG một dòng.
+  // Chỉ khớp 1 ô là không đủ, vì dòng tiêu đề báo cáo (vd "TỔNG HỢP TỒN KHO") ở ô A1
+  // cũng chứa chuỗi con "tonkho" và dễ bị nhận nhầm là dòng tiêu đề thật.
+  var limit = Math.min(data.length, maxScanRows || 8);
+  var markerAliases = ['mahang', 'mavach', 'tenhang', 'tonkho', 'soluongton', 'cuahang', 'donvitinh', 'dvt', 'dauky', 'nhapkho', 'xuatkho', 'cuoiky'];
+  for (var r = 0; r < limit; r++) {
+    var row = data[r];
+    if (!row) continue;
+    var matchCount = 0;
+    for (var c = 0; c < row.length; c++) {
+      var token = normalizeHeaderText(row[c]);
+      if (!token) continue;
+      for (var a = 0; a < markerAliases.length; a++) {
+        if (token.indexOf(markerAliases[a]) !== -1 || token === 'kho') {
+          matchCount++;
+          break;
+        }
+      }
+    }
+    if (matchCount >= 2) return r;
+  }
+  return -1;
+}
+
+
+// --- API: QUẢN LÝ PHIẾU (CÓ PHÂN QUYỀN) ---
+function getNgayFilterBounds_(ngayFilter) {
+  var filter = String(ngayFilter || "").trim().toLowerCase();
+  if (!filter || filter === "all") return { filter: "all", startMs: null, endMs: null, maxScan: 6000 };
+  var today = getScriptTodayStart_();
+  if (!today) return { filter: filter, startMs: null, endMs: null, maxScan: 4000 };
+  var dayMs = 24 * 60 * 60 * 1000;
+  if (filter === "today" || /^\d{4}-\d{2}-\d{2}$/.test(filter)) {
+    var day = filter === "today" ? today : parseDateInputYYYYMMDD(filter);
+    if (!day) return { filter: filter, startMs: null, endMs: null, maxScan: 3000 };
+    return { filter: filter, startMs: day.getTime(), endMs: day.getTime() + dayMs - 1, maxScan: 2500, exactDate: filter === "today" ? formatSheetDateYYYYMMDD(today) : filter };
+  }
+  if (filter === "yesterday") {
+    var y = new Date(today);
+    y.setDate(today.getDate() - 1);
+    return { filter: filter, startMs: y.getTime(), endMs: y.getTime() + dayMs - 1, maxScan: 2500, exactDate: formatSheetDateYYYYMMDD(y) };
+  }
+  if (filter === "7days") {
+    var start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    return { filter: filter, startMs: start.getTime(), endMs: today.getTime() + dayMs - 1, maxScan: 4500 };
+  }
+  return { filter: filter, startMs: null, endMs: null, maxScan: 4000 };
+}
+
+
+function storeMatchesFast_(rowStore, targetStore) {
+  if (!targetStore) return true;
+  var left = String(rowStore || "").trim();
+  var right = String(targetStore || "").trim();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return isSameStoreName(left, right);
+}
+
+
+function getDashboardTimelineBounds_(timeline, fromDate, toDate) {
+  var today = getScriptTodayStart_();
+  if (!today) return { startMs: null, endMs: null, maxScan: 5000 };
+  var dayMs = 24 * 60 * 60 * 1000;
+  var endMs = today.getTime() + dayMs - 1;
+  var selected = String(timeline || "2days").trim();
+  if (selected === "all") return { startMs: null, endMs: null, maxScan: 7000 };
+  if (selected === "today") {
+    return { startMs: today.getTime(), endMs: endMs, maxScan: 2500, exactDate: formatSheetDateYYYYMMDD(today) };
+  }
+  if (selected === "custom") {
+    var start = fromDate ? parseDateInputYYYYMMDD(fromDate) : null;
+    var end = toDate ? parseDateInputYYYYMMDD(toDate) : null;
+    if (start && end && start.getTime() > end.getTime()) {
+      var swap = start; start = end; end = swap;
+    }
+    return {
+      startMs: start ? start.getTime() : null,
+      endMs: end ? (end.getTime() + dayMs - 1) : endMs,
+      maxScan: 5000
+    };
+  }
+  var days = 2;
+  if (selected === "7days") days = 7;
+  else if (selected === "30days") days = 30;
+  var rangeStart = new Date(today);
+  rangeStart.setDate(today.getDate() - (days - 1));
+  return {
+    startMs: rangeStart.getTime(),
+    endMs: endMs,
+    maxScan: days <= 2 ? 3000 : (days <= 7 ? 4500 : 6000)
+  };
+}
+
+
+function formatDateTime(value) {
+  if (!value) return "";
+  try {
+    var d = value instanceof Date ? value : new Date(value);
+    return d.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch (e) {
+    return value;
+  }
+}
+
+
+function isDateInTimeline(value, timeline, fromDate, toDate) {
+  if (!value) return false;
+  var dateStr = formatSheetDateYYYYMMDD(value);
+  if (!dateStr) return false;
+  var date = parseDateInputYYYYMMDD(dateStr);
+  if (!date) return false;
+
+  var today = getScriptTodayStart_();
+  if (!today) return false;
+  var selected = String(timeline || '2days').trim();
+  if (selected === 'all') return true;
+  if (selected === 'today') return date.getTime() === today.getTime();
+  if (selected === 'custom') {
+    var start = fromDate ? parseDateInputYYYYMMDD(fromDate) : null;
+    var end = toDate ? parseDateInputYYYYMMDD(toDate) : null;
+    if (start && end && start.getTime() > end.getTime()) {
+      var swap = start;
+      start = end;
+      end = swap;
+    }
+    if (start && date.getTime() < start.getTime()) return false;
+    if (end && date.getTime() > end.getTime()) return false;
+    return !!(start || end);
+  }
+
+  var days = 2;
+  if (selected === '7days') days = 7;
+  else if (selected === '30days') days = 30;
+  var rangeStart = new Date(today);
+  rangeStart.setDate(today.getDate() - (days - 1));
+  return date.getTime() >= rangeStart.getTime() && date.getTime() <= today.getTime();
+}
+
+
+function parseQuantityValue(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return isNaN(value) ? 0 : value;
+  var text = String(value).trim();
+  if (!text) return 0;
+  var normalized = text.replace(/\s+/g, "").replace(/\u00A0/g, "");
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(normalized)) {
+    normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+  } else if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(normalized)) {
+    normalized = normalized.replace(/,/g, "");
+  } else if (/^\d+,\d+$/.test(normalized) && normalized.indexOf(".") === -1) {
+    normalized = normalized.replace(/,/g, ".");
+  } else {
+    normalized = normalized.replace(/,/g, "");
+  }
+  var n = Number(normalized);
+  return isNaN(n) ? 0 : n;
+}
+
+
+function normalizeProductCode(value) {
+  if (value === null || value === undefined) return "";
+  var text = String(value).trim().toUpperCase();
+  if (!text) return "";
+
+  if (text.charAt(0) === "'") text = text.slice(1);
+  text = text.replace(/\u00A0/g, "").replace(/\s+/g, "");
+
+  if (/^\d+\.0+$/.test(text)) {
+    text = text.replace(/\.0+$/, "");
+  }
+  if (/^\d{1,3}(\.\d{3})+$/.test(text)) {
+    text = text.replace(/\./g, "");
+  }
+
+  return text.replace(/[^A-Z0-9]/g, "");
+}
+
+
+function normalizeNumericCode(value) {
+  var code = normalizeProductCode(value);
+  if (!code) return "";
+  if (!/^\d+$/.test(code)) return "";
+  var compact = code.replace(/^0+/, "");
+  return compact || "0";
+}
+
+
+function addStockValueByCode(tonKhoMap, prefix, code, ton, dvt) {
+  var norm = normalizeProductCode(code);
+  if (!norm) return;
+  var qty = Number(ton) || 0;
+  var dvtNorm = normalizeDvtKey_(dvt);
+  var suffix = dvtNorm ? ("|DV:" + dvtNorm) : "";
+  var key = prefix + norm + suffix;
+  tonKhoMap[key] = (tonKhoMap[key] || 0) + qty;
+  var compact = normalizeNumericCode(norm);
+  if (compact && compact !== norm) {
+    var compactKey = prefix + compact + suffix;
+    tonKhoMap[compactKey] = (tonKhoMap[compactKey] || 0) + qty;
+  }
+}
+
+
+function areCodesEquivalent(leftCode, rightCode) {
+  var left = normalizeProductCode(leftCode);
+  var right = normalizeProductCode(rightCode);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  var leftCompact = normalizeNumericCode(left);
+  var rightCompact = normalizeNumericCode(right);
+  return !!(leftCompact && rightCompact && leftCompact === rightCompact);
+}
+
+
+function lookupStockByPrefixCode_(tonKhoMap, prefix, code, dvt) {
+  var norm = normalizeProductCode(code);
+  if (!norm) return null;
+  var dvtNorm = normalizeDvtKey_(dvt);
+  var candidates = [];
+  if (dvtNorm) {
+    candidates.push(prefix + norm + "|DV:" + dvtNorm);
+    var compactD = normalizeNumericCode(norm);
+    if (compactD) candidates.push(prefix + compactD + "|DV:" + dvtNorm);
+  }
+  candidates.push(prefix + norm);
+  var compact = normalizeNumericCode(norm);
+  if (compact) candidates.push(prefix + compact);
+
+  for (var i = 0; i < candidates.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(tonKhoMap, candidates[i])) {
+      return Number(tonKhoMap[candidates[i]]) || 0;
+    }
+  }
+  // Có ĐVT trên đơn nhưng không khớp ĐVT tồn → không lấy nhầm đơn vị khác
+  if (dvtNorm) return 0;
+
+  // Không có ĐVT trên đơn: cộng mọi biến thể ĐVT của mã (fallback)
+  var sum = 0;
+  var found = false;
+  var bases = [prefix + norm];
+  if (compact) bases.push(prefix + compact);
+  for (var k in tonKhoMap) {
+    if (!Object.prototype.hasOwnProperty.call(tonKhoMap, k) || k === "__meta") continue;
+    for (var b = 0; b < bases.length; b++) {
+      if (k === bases[b] || k.indexOf(bases[b] + "|DV:") === 0) {
+        sum += Number(tonKhoMap[k]) || 0;
+        found = true;
+        break;
+      }
+    }
+  }
+  return found ? sum : null;
+}
+
+
+function getStockValueForItem(tonKhoMap, maHang, maVach, dvt) {
+  if (!tonKhoMap) return 0;
+  var byMaHang = lookupStockByPrefixCode_(tonKhoMap, "MH:", maHang, dvt);
+  if (byMaHang !== null) return byMaHang;
+  var byMaVach = lookupStockByPrefixCode_(tonKhoMap, "MV:", maVach, dvt);
+  return byMaVach !== null ? byMaVach : 0;
+}
+
+
+function isStoreNameMatch(stockStoreName, targetStoreName) {
+  var left = normalizeStoreName(stockStoreName || "");
+  var right = normalizeStoreName(targetStoreName || "");
+  if (!left || !right) return false;
+
+  if (left === right) return true;
+
+  var leftNorm = normalizeHeaderText(left);
+  var rightNorm = normalizeHeaderText(right);
+  if (leftNorm && rightNorm && (leftNorm === rightNorm || leftNorm.indexOf(rightNorm) !== -1 || rightNorm.indexOf(leftNorm) !== -1)) {
+    return true;
+  }
+
+  var leftShort = formatShortStoreLabel(left);
+  var rightShort = formatShortStoreLabel(right);
+  return normalizeHeaderText(leftShort) === normalizeHeaderText(rightShort);
+}
+
+
+function normalizeStoreName(storeName) {
+  var raw = String(storeName || "").trim();
+  if (!raw) return "";
+  if (raw === "all" || raw === "Tất cả") return raw;
+  var activeMap = getActiveStoreMap();
+  if (activeMap[raw]) return raw;
+
+  var normalizedRaw = normalizeHeaderText(raw);
+  for (var fullName in activeMap) {
+    if (!Object.prototype.hasOwnProperty.call(activeMap, fullName)) continue;
+    var shortName = activeMap[fullName];
+    if (normalizeHeaderText(fullName) === normalizedRaw || normalizeHeaderText(shortName) === normalizedRaw) {
+      return fullName;
+    }
+  }
+  return raw;
+}
+
+
+function isSameStoreName(leftStore, rightStore) {
+  var left = normalizeStoreName(leftStore);
+  var right = normalizeStoreName(rightStore);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return isStoreNameMatch(left, right);
+}
+
+
+function getAccountByActor(actor) {
+  var users = getDanhSachTaiKhoan();
+  for (var i = 0; i < users.length; i++) {
+    if (String(users[i].user).trim() === String(actor || "").trim()) return users[i];
+  }
+  return null;
+}
+
+
+function isAdminActor(actor) {
+  var account = getAccountByActor(actor);
+  return !!(account && String(account.role).trim() === "Admin");
+}
+
+
+function requireAuthenticatedAction(payload) {
+  var actor = payload && payload.actor ? payload.actor : "";
+  if (!actor) throw new Error("Thiếu thông tin người thực hiện.");
+  var account = getAccountByActor(actor);
+  if (!account) throw new Error("Tài khoản không tồn tại.");
+}
+
+
+function requireAdminAction(action, payload) {
+  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin'];
+  if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
+    throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
+  }
+}
+
+
+function requireAdmin(actor) {
+  var account = getAccountByActor(actor);
+  if (!account || String(account.role).trim() !== "Admin") throw new Error("Chỉ quản trị viên được phép thay đổi hoặc hủy đơn.");
+}
+
+
+function cleanupLegacyGeneratedSheets(ss, prefixes) {
+  if (!ss || typeof ss.getSheets !== "function") return;
+  var allSheets = ss.getSheets();
+  for (var i = allSheets.length - 1; i >= 0; i--) {
+    var sheet = allSheets[i];
+    var name = sheet.getName ? sheet.getName() : "";
+    for (var p = 0; p < prefixes.length; p++) {
+      if (name.indexOf(prefixes[p]) === 0) {
+        ss.deleteSheet(sheet);
+        break;
+      }
+    }
+  }
+}
+
+
+function recreateTempSheet(ss, sheetName, legacyPrefixes) {
+  cleanupLegacyGeneratedSheets(ss, legacyPrefixes || []);
+  var existing = ss.getSheetByName(sheetName);
+  if (existing) {
+    existing.clear();
+    return existing;
+  }
+  return ss.insertSheet(sheetName);
+}
+
+
+function recreateTempSheetFast_(ss, sheetName) {
+  var existing = ss.getSheetByName(sheetName);
+  if (existing) {
+    existing.clear();
+    return existing;
+  }
+  return ss.insertSheet(sheetName);
+}
+
+
+function parseDateInputYYYYMMDD(value) {
+  var raw = String(value || "").trim();
+  if (!raw) return null;
+  var m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  var y = Number(m[1]);
+  var mm = Number(m[2]) - 1;
+  var d = Number(m[3]);
+  var date = new Date(y, mm, d);
+  if (isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+
+/** Ghép ngày + "HH:mm" → Date (local components — tránh lệch UTC) */
+function combineDateAndTime_(dateObj, timeHHmm) {
+  if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj.getTime())) return null;
+  var raw = String(timeHHmm || "").trim();
+  var m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  var hh = Number(m[1]);
+  var mm = Number(m[2]);
+  if (isNaN(hh) || isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), hh, mm, 0, 0);
+}
+
+
+/**
+ * Chuẩn hóa mọi giá trị ngày/giờ về Unix ms theo lịch local (Asia/Ho_Chi_Minh khi script TZ đúng).
+ * Tránh so sánh chuỗi và tránh `new Date("yyyy-MM-dd...")` parse UTC.
+ */
+function toHoChiMinhMillis_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
+  if (value === null || value === undefined || value === "") return NaN;
+  if (typeof value === "number" && isFinite(value)) return value;
+
+  var s = String(value).trim();
+  if (!s) return NaN;
+
+  var mIso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?/);
+  if (mIso) {
+    return new Date(
+      Number(mIso[1]), Number(mIso[2]) - 1, Number(mIso[3]),
+      Number(mIso[4] || 0), Number(mIso[5] || 0), Number(mIso[6] || 0), 0
+    ).getTime();
+  }
+
+  var mVn = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (mVn) {
+    return new Date(
+      Number(mVn[3]), Number(mVn[2]) - 1, Number(mVn[1]),
+      Number(mVn[4] || 0), Number(mVn[5] || 0), Number(mVn[6] || 0), 0
+    ).getTime();
+  }
+
+  try {
+    var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+    var formats = [
+      "dd/MM/yyyy HH:mm:ss",
+      "dd/MM/yyyy HH:mm",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd HH:mm",
+      "yyyy/MM/dd HH:mm:ss",
+      "yyyy/MM/dd HH:mm"
+    ];
+    for (var fi = 0; fi < formats.length; fi++) {
+      try {
+        var parsed = Utilities.parseDate(s, tz, formats[fi]);
+        if (parsed && !isNaN(parsed.getTime())) return parsed.getTime();
+      } catch (parseErr) {}
+    }
+  } catch (tzErr) {}
+
+  var fallback = new Date(s);
+  return isNaN(fallback.getTime()) ? NaN : fallback.getTime();
+}
+
+
+function toMillisSafe_(value) {
+  return toHoChiMinhMillis_(value);
+}
+
+
+function getScriptTodayStart_() {
+  var todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  return parseDateInputYYYYMMDD(todayStr);
+}
+
+
+function formatSheetDateYYYYMMDD(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  var asString = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(asString)) return asString;
+  var parsed = new Date(value);
+  if (!isNaN(parsed.getTime())) {
+    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  return "";
+}
+
+
+function matchesNgayFilter(rowDate, ngayFilter) {
+  var filter = String(ngayFilter || "").trim().toLowerCase();
+  if (!filter || filter === "all") return true;
+
+  var rowDateStr = formatSheetDateYYYYMMDD(rowDate);
+  if (!rowDateStr) return false;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(filter)) {
+    return rowDateStr === filter;
+  }
+
+  var today = getScriptTodayStart_();
+  if (!today) return true;
+  var rowDateObj = parseDateInputYYYYMMDD(rowDateStr);
+  if (!rowDateObj) return false;
+
+  if (filter === "today") {
+    return rowDateObj.getTime() === today.getTime();
+  }
+  if (filter === "yesterday") {
+    var yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    return rowDateObj.getTime() === yesterday.getTime();
+  }
+  if (filter === "7days") {
+    var start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    return rowDateObj.getTime() >= start.getTime() && rowDateObj.getTime() <= today.getTime();
+  }
+
+  return rowDateStr === filter;
+}
+
+
+function lookupStoreCodeDigits_(storeName) {
+  // Không gọi isSameStoreName/formatShortStoreLabel ở đây (tránh đệ quy).
+  // Mã link dữ liệu Q4: luôn dùng 178 / 275 (không dùng mã sheet kiểu 004 / 006).
+  var raw = String(storeName || "").trim();
+  if (!raw) return "";
+  var rawNorm = normalizeHeaderText(raw);
+  var activeMap = getActiveStoreMap();
+
+  // 1) Cấu hình cố định theo tên đầy đủ / tên ngắn
+  if (STORE_SHORT_CODES[raw]) return STORE_SHORT_CODES[raw];
+  for (var full in STORE_SHORT_CODES) {
+    if (!Object.prototype.hasOwnProperty.call(STORE_SHORT_CODES, full)) continue;
+    var fullNorm = normalizeHeaderText(full);
+    var shortOfFull = normalizeHeaderText(activeMap[full] || "");
+    if (
+      rawNorm === fullNorm ||
+      (shortOfFull && rawNorm === shortOfFull) ||
+      raw === activeMap[full] ||
+      rawNorm.indexOf(fullNorm) !== -1
+    ) {
+      return STORE_SHORT_CODES[full];
+    }
+  }
+
+  // 2) Suy từ tên hiển thị (Quận 4 Mới / Cũ)
+  var display = normalizeHeaderText(activeMap[raw] || raw);
+  if ((display.indexOf("q4") !== -1 || display.indexOf("quan4") !== -1) && display.indexOf("moi") !== -1) return "178";
+  if ((display.indexOf("q4") !== -1 || display.indexOf("quan4") !== -1) && (display.indexOf("cu") !== -1 || display.indexOf("old") !== -1)) return "275";
+
+  // 3) Sheet Hướng dẫn — chỉ nhận mã link hợp lệ 178/275 (bỏ 004/006…)
+  try {
+    var registry = getStoreRegistry();
+    var details = registry && registry.storeDetails ? registry.storeDetails : [];
+    for (var i = 0; i < details.length; i++) {
+      var d = details[i];
+      if (!d) continue;
+      var dFullNorm = normalizeHeaderText(d.fullName || "");
+      var dShortNorm = normalizeHeaderText(d.shortName || "");
+      if (rawNorm !== dFullNorm && rawNorm !== dShortNorm && raw !== d.fullName && raw !== d.shortName) continue;
+      var code = String(d.code || "").trim();
+      var m = code.match(/(\d{2,})/);
+      if (!m) continue;
+      if (m[1] === "178" || m[1] === "275") return m[1];
+      // Map mã kho nội bộ thường gặp → mã link
+      if (STORE_SHORT_CODES[d.fullName]) return STORE_SHORT_CODES[d.fullName];
+    }
+  } catch (e) {}
+
+  return "";
+}
+
+
+function formatShortStoreLabel(storeName) {
+  var activeMap = getActiveStoreMap();
+  var name = String(activeMap[storeName] || storeName || "").trim();
+  var normalized = normalizeHeaderText(name);
+  var base = "";
+  if (normalized.indexOf("q7") !== -1 || normalized.indexOf("quan7") !== -1) base = "Q7";
+  else if (normalized.indexOf("q8") !== -1 || normalized.indexOf("quan8") !== -1) base = "Q8";
+  else if (normalized.indexOf("phamhung") !== -1) base = "PH";
+  else if (normalized.indexOf("q5") !== -1 || normalized.indexOf("quan5") !== -1) base = "Q5";
+  else if (normalized.indexOf("q1") !== -1 || normalized.indexOf("quan1") !== -1) base = "Q1";
+  else if (normalized.indexOf("q4") !== -1 || normalized.indexOf("quan4") !== -1) base = "Q4";
+  else return name || "Khác";
+
+  // Hai cửa hàng Q4 phải tách cột: Q4_178 / Q4_275 (không dùng Q4_004 / Q4_006)
+  if (base === "Q4") {
+    var code = lookupStoreCodeDigits_(storeName);
+    if (!code) code = lookupStoreCodeDigits_(name);
+    if (code === "178" || code === "275") return "Q4_" + code;
+    // Fallback cuối theo tên đã chuẩn hóa
+    if (normalized.indexOf("moi") !== -1) return "Q4_178";
+    if (normalized.indexOf("cu") !== -1 || normalized.indexOf("old") !== -1) return "Q4_275";
+    return "Q4";
+  }
+  return base;
+}
+
+
+function getCanonicalStoreKey(storeName) {
+  var normalizedStore = normalizeStoreName(storeName || "");
+  if (!normalizedStore) return "";
+  var shortLabel = formatShortStoreLabel(normalizedStore);
+  var key = normalizeHeaderText(shortLabel);
+  if (key) return key;
+  return normalizeHeaderText(normalizedStore);
+}
