@@ -73,6 +73,10 @@ function doPost(e) {
             requireAdminAction(action, payload.payload || {});
             result = saveCatalogIsNewFlags_(payload.payload || {});
             break;
+          case 'saveChildVariants':
+            requireAdminAction(action, payload.payload || {});
+            result = saveChildVariants_(payload.payload || {});
+            break;
           case 'postProcessNewOrder':
             result = postProcessNewOrder(payload.payload || {});
             break;
@@ -255,6 +259,15 @@ function doGet(e) {
           break;
         case 'getVariantStockList':
           res = getVariantStockList(e.parameter.parentSku || e.parameter.parent || '');
+          break;
+        case 'getParentVariantGroupsAdmin':
+          res = getParentVariantGroupsAdmin_(e.parameter.q || '', e.parameter.limit || 200);
+          break;
+        case 'getChildVariantsForAdmin':
+          res = getChildVariantsForAdmin_(e.parameter.parentSku || e.parameter.parent || '');
+          break;
+        case 'getOrderDetail':
+          res = getOrderDetail(e.parameter.soPhieu || '');
           break;
         case 'layDanhSachPhieuTheoFilter':
           res = layDanhSachPhieuTheoFilter(e.parameter.khoNhan || '', e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');

@@ -145,20 +145,76 @@ function getThongTinPhieu(soPhieu) {
     var selectedSet = buildOrderMatchSet_(soPhieu);
     var pack = readHistoryForSelectedOrders_(historySheet, selectedSet, "", 3000);
     var data = pack.data || [[]];
+    var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
     for (var i = 1; i < data.length; i++) {
       if (!data[i] || !data[i][1]) continue;
       var sp = String(data[i][1]).trim();
       if (!orderInMatchSet_(sp, selectedSet)) continue;
+      var thoiGian = "";
+      try {
+        if (data[i][0] instanceof Date) {
+          thoiGian = Utilities.formatDate(data[i][0], tz, "dd/MM/yyyy HH:mm");
+        } else if (data[i][0]) {
+          thoiGian = String(data[i][0]);
+        }
+      } catch (eT) {}
       return {
         soPhieu: sp,
         khoXuat: data[i][2] ? String(data[i][2]).trim() : "",
-        khoNhan: data[i][3] ? String(data[i][3]).trim() : ""
+        khoNhan: data[i][3] ? String(data[i][3]).trim() : "",
+        thoiGian: thoiGian
       };
     }
     return null;
   } catch (e) {
     Logger.log("getThongTinPhieu error: " + (e.message || e));
     return null;
+  }
+}
+
+
+/** Chi tiết phiếu cho FE xem/in PDF web */
+function getOrderDetail(soPhieu) {
+  try {
+    var code = String(soPhieu || "").trim();
+    if (!code) return { success: false, error: "Thiếu số phiếu." };
+    var info = getThongTinPhieu(code);
+    if (!info) return { success: false, error: "Không tìm thấy phiếu " + code };
+    var rows = getChiTietPhieu(code, info.khoXuat || "", "0") || [];
+    var items = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r) continue;
+      var st = String(r.trangThai || "").trim();
+      if (st === "Đã hủy dòng" || st === "Đã hủy đơn") continue;
+      var sl = "";
+      if (r.slSoan !== "" && r.slSoan !== null && r.slSoan !== undefined) sl = Number(r.slSoan) || 0;
+      else if (r.slThucTe !== "" && r.slThucTe !== null && r.slThucTe !== undefined) sl = Number(r.slThucTe) || 0;
+      else sl = Number(r.slGoc) || 0;
+      items.push({
+        maHang: r.maHang || "",
+        maVach: r.maVach || "",
+        tenHang: r.tenHang || "",
+        dvt: r.dvt || "",
+        slGoc: Number(r.slGoc) || 0,
+        slSoan: (r.slSoan === "" || r.slSoan == null) ? "" : (Number(r.slSoan) || 0),
+        slThucTe: (r.slThucTe === "" || r.slThucTe == null) ? "" : (Number(r.slThucTe) || 0),
+        sl: sl,
+        trangThai: st || "Mới",
+        ghiChu: r.ghiChu || ""
+      });
+    }
+    return {
+      success: true,
+      soPhieu: info.soPhieu || code,
+      khoXuat: info.khoXuat || "",
+      khoNhan: info.khoNhan || "",
+      thoiGian: info.thoiGian || "",
+      items: items,
+      itemCount: items.length
+    };
+  } catch (e) {
+    return { success: false, error: e.message || String(e) };
   }
 }
 

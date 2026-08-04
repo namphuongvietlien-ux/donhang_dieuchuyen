@@ -185,6 +185,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
   // #region agent log
   var _dbgMs = Date.now() - _dbgT0;
   // #endregion
+  var branchMergeHints = buildBranchMergeHints_(orders);
   return {
     success: true,
     date: win.prevDayStr,
@@ -198,8 +199,10 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
     totalWindow: win.totalLabel,
     total: orders.length,
     orders: orders,
+    branchMergeHints: branchMergeHints,
+    hasBranchMergeWarning: branchMergeHints.length > 0,
     _debugTotalMs: _dbgMs,
-    _debugRun: "packing-window-v5"
+    _debugRun: "packing-window-v6-merge-hint"
   };
 }
 
@@ -325,6 +328,36 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     orders.sort(function(a, b) { return a.thoiGianDatMillis - b.thoiGianDatMillis; });
   }
   return orders;
+}
+
+
+/** Chi nhánh (kho nhận) có ≥ 2 đơn trong danh sách — dùng cho modal cảnh báo gộp */
+function buildBranchMergeHints_(orders) {
+  var byBranch = {};
+  for (var i = 0; i < (orders || []).length; i++) {
+    var o = orders[i];
+    if (!o) continue;
+    var gk = String(o.groupKey || normalizeStoreName(o.khoNhan || "") || o.khoNhan || "").trim();
+    if (!gk) continue;
+    if (!byBranch[gk]) {
+      byBranch[gk] = {
+        groupKey: gk,
+        khoNhan: o.khoNhan || gk,
+        khoNhanLabel: formatShortStoreLabel(o.khoNhan) || o.khoNhan || gk,
+        orderCount: 0,
+        soPhieuList: []
+      };
+    }
+    byBranch[gk].orderCount++;
+    byBranch[gk].soPhieuList.push(o.soPhieu);
+  }
+  var hints = [];
+  for (var k in byBranch) {
+    if (!Object.prototype.hasOwnProperty.call(byBranch, k)) continue;
+    if (byBranch[k].orderCount >= 2) hints.push(byBranch[k]);
+  }
+  hints.sort(function(a, b) { return b.orderCount - a.orderCount; });
+  return hints;
 }
 
 
