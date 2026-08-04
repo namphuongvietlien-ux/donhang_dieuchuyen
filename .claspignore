@@ -1,0 +1,13 @@
+# Chỉ đẩy file Apps Script ở root; bỏ qua FE/Vercel
+api/**
+public/**
+node_modules/**
+vercel.json
+package.json
+package-lock.json
+**/*.md
+**/*.bak_*
+Code.js
+.env*
+.git/**
+.vercel/**
