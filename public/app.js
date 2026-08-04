@@ -100,7 +100,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v48-shift';
+var APP_BUILD = '2026-08-04-v49-variant';
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
 console.warn('[donhang] build', APP_BUILD);
@@ -305,6 +305,8 @@ var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
 var storeMap = {};
 var newProductsList = [];
 var newProductKeySet = {};
+var variantIndexByParent = {};
+var variantPickerState = { open: false, mode: 'order', parentSku: '', qty: 1 };
 var catalogLoadState = { loading: false, ready: false, version: '' };
 var CATALOG_CACHE_KEY = 'donhang_catalog_v2';
 var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v2';
@@ -351,6 +353,37 @@ function rebuildCatalogArray() {
     seenCatalogKeys[key] = true;
     return true;
   });
+  rebuildVariantIndex_();
+}
+
+function rebuildVariantIndex_() {
+  variantIndexByParent = {};
+  danhMucArr.forEach(function(item) {
+    if (!item) return;
+    var p = String(item.parentSku || '').trim().toUpperCase();
+    if (!p) return;
+    if (!variantIndexByParent[p]) variantIndexByParent[p] = [];
+    var dedupe = String(item.maHang || '').trim().toUpperCase() + '|' + String(item.maVach || '').trim().toUpperCase();
+    var exists = variantIndexByParent[p].some(function(v) {
+      return String(v.maHang || '').trim().toUpperCase() + '|' + String(v.maVach || '').trim().toUpperCase() === dedupe;
+    });
+    if (!exists) variantIndexByParent[p].push(item);
+  });
+}
+
+function getParentSkuOfItem_(it) {
+  return String(it && it.parentSku ? it.parentSku : '').trim().toUpperCase();
+}
+
+function getVariantGroupForItem_(it) {
+  var p = getParentSkuOfItem_(it);
+  if (!p) return [];
+  return variantIndexByParent[p] || [];
+}
+
+function itemHasVariantGroup_(it) {
+  // Có Parent_SKU → mở panel chọn biến thể (kèm tồn), kể cả nhóm 1 mã
+  return !!getParentSkuOfItem_(it);
 }
 
 function applyCatalogData(res) {
@@ -963,7 +996,8 @@ function handleSearchInput(e) {
   results.slice(0, 10).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
     var newBadge = isNewProductItem_(item) ? ' <span class="badge-new">MỚI</span>' : '';
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + newBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
+    var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
+    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + newBadge + groupBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + (item.parentSku ? (' · Parent: ' + item.parentSku) : '') + '</div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
@@ -1032,7 +1066,8 @@ function ql_handleAddCodeInput(e) {
   var html = '';
   results.slice(0, 8).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + '</div></div>';
+    var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
+    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + groupBadge + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + (item.dvt || 'Cái') + (item.parentSku ? (' · Parent: ' + item.parentSku) : '') + '</div></div>';
   });
   box.innerHTML = html;
   box.style.display = "block";
@@ -1063,11 +1098,120 @@ function chonSanPhamFromSuggest(itemStr) {
   document.getElementById("input-scan").value = ""; document.getElementById("suggest-box").style.display = "none"; document.getElementById("input-scan").focus();
 }
 
-function chonSanPham(it) {
-  var existingIndex = arrItems.findIndex(x => x.maVach === it.maVach && x.maHang !== "LỖI MÃ");
-  if(existingIndex !== -1) { arrItems[existingIndex].sl = Number(arrItems[existingIndex].sl) + 1; arrItems[existingIndex].highlight = true; }
-  else { arrItems.unshift({ maHang: it.maHang, maVach: it.maVach, tenHang: it.tenHang, dvt: it.dvt, sl: "1", highlight: true }); }
+function closeVariantPicker_() {
+  variantPickerState.open = false;
+  variantPickerState.parentSku = '';
+  var modal = document.getElementById('modal-variant-picker');
+  if (modal) modal.style.display = 'none';
+}
+
+function openVariantPicker_(seedItem, mode, qty) {
+  var parentSku = getParentSkuOfItem_(seedItem);
+  if (!parentSku) {
+    if (mode === 'ql') ql_themMaHangDirect_(seedItem, qty);
+    else chonSanPhamDirect_(seedItem);
+    return;
+  }
+  variantPickerState.open = true;
+  variantPickerState.mode = mode || 'order';
+  variantPickerState.parentSku = parentSku;
+  variantPickerState.qty = Number(qty) > 0 ? Number(qty) : 1;
+
+  var modal = document.getElementById('modal-variant-picker');
+  var sub = document.getElementById('variant-picker-sub');
+  var list = document.getElementById('variant-picker-list');
+  if (!modal || !list) return;
+  if (sub) {
+    sub.innerHTML = 'Nhóm <b>' + escapeHtml(parentSku) + '</b> — chọn đúng mã biến thể (kèm tồn riêng).';
+  }
+  list.innerHTML = '<div style="padding:12px;color:#64748b;text-align:center;">Đang tải tồn biến thể...</div>';
+  modal.style.display = 'flex';
+
+  var localGroup = getVariantGroupForItem_(seedItem).slice();
+  function renderRows_(variants) {
+    if (!variants || !variants.length) {
+      list.innerHTML = '<div style="padding:12px;color:#d93025;text-align:center;font-weight:600;">Không có biến thể trong nhóm này.</div>';
+      return;
+    }
+    var html = '';
+    variants.forEach(function(v) {
+      var stock = (v.stock === '' || v.stock === null || v.stock === undefined) ? null : Number(v.stock);
+      var stockBadge = '';
+      if (stock === null || isNaN(stock)) stockBadge = '<span class="badge-stock-zero">Tồn: ?</span>';
+      else if (stock <= 0) stockBadge = '<span class="badge-stock-zero">Tồn: 0</span>';
+      else stockBadge = '<span class="badge-stock-ok">Tồn: ' + stock + '</span>';
+      var payload = encodeURIComponent(JSON.stringify({
+        maHang: v.maHang || '',
+        maVach: v.maVach || '',
+        tenHang: v.tenHang || '',
+        dvt: v.dvt || 'Cái',
+        parentSku: v.parentSku || parentSku
+      }));
+      var zeroClass = (stock !== null && !isNaN(stock) && stock <= 0) ? ' zero' : '';
+      html += '<div class="variant-pick-row' + zeroClass + '" onclick="pickVariantFromPicker_(\'' + payload + '\')">' +
+        '<div style="font-weight:700;color:#0f172a;">' + escapeHtml(v.tenHang || '(Không tên)') + stockBadge + '</div>' +
+        '<div style="font-size:12px;color:#64748b;margin-top:4px;">Mã hàng: <b style="color:#1a73e8;">' + escapeHtml(v.maHang || '-') + '</b> · MV: ' + escapeHtml(v.maVach || '-') + ' · ĐVT: ' + escapeHtml(v.dvt || 'Cái') + '</div>' +
+        '</div>';
+    });
+    list.innerHTML = html;
+  }
+
+  renderRows_(localGroup.map(function(v) {
+    return { maHang: v.maHang, maVach: v.maVach, tenHang: v.tenHang, dvt: v.dvt, parentSku: parentSku, stock: null };
+  }));
+
+  apiGet('getVariantStockList', { parentSku: parentSku }, { timeoutMs: 45000 }).then(function(res) {
+    if (!variantPickerState.open || variantPickerState.parentSku !== parentSku) return;
+    if (res && res.success && Array.isArray(res.variants) && res.variants.length) {
+      renderRows_(res.variants);
+    }
+  }).catch(function() {
+    // Giữ list local nếu API lỗi
+  });
+}
+
+function pickVariantFromPicker_(payload) {
+  var item = null;
+  try { item = JSON.parse(decodeURIComponent(payload)); } catch (e) { return; }
+  if (!item) return;
+  var mode = variantPickerState.mode || 'order';
+  var qty = variantPickerState.qty || 1;
+  closeVariantPicker_();
+  if (mode === 'ql') ql_themMaHangDirect_(item, qty);
+  else chonSanPhamDirect_(item);
+}
+
+function chonSanPhamDirect_(it) {
+  if (!it) return;
+  var existingIndex = arrItems.findIndex(function(x) {
+    return x.maHang !== "LỖI MÃ" &&
+      String(x.maHang || '').trim().toUpperCase() === String(it.maHang || '').trim().toUpperCase() &&
+      String(x.maVach || '').trim().toUpperCase() === String(it.maVach || '').trim().toUpperCase();
+  });
+  if (existingIndex !== -1) {
+    arrItems[existingIndex].sl = Number(arrItems[existingIndex].sl) + 1;
+    arrItems[existingIndex].highlight = true;
+  } else {
+    arrItems.unshift({
+      maHang: it.maHang,
+      maVach: it.maVach,
+      tenHang: it.tenHang,
+      dvt: it.dvt,
+      parentSku: it.parentSku || '',
+      sl: "1",
+      highlight: true
+    });
+  }
   renderTable();
+}
+
+function chonSanPham(it) {
+  if (!it) return;
+  if (itemHasVariantGroup_(it)) {
+    openVariantPicker_(it, 'order', 1);
+    return;
+  }
+  chonSanPhamDirect_(it);
 }
 
 document.addEventListener("click", function(event) {
@@ -1748,31 +1892,38 @@ function ql_onEditQtyInput(input) {
 
 function ql_getVariantOptions(rowMeta) {
   var maHang = String(rowMeta && rowMeta.maHang ? rowMeta.maHang : '').trim().toUpperCase();
+  var parentSku = getParentSkuOfItem_(rowMeta);
+  if (!parentSku && maHang && danhMucGoc[maHang]) parentSku = getParentSkuOfItem_(danhMucGoc[maHang]);
   var seen = {};
   var variants = [];
   danhMucArr.forEach(function(item) {
     if (!item) return;
     var itemMaHang = String(item.maHang || '').trim().toUpperCase();
-    var sameGroup = maHang && itemMaHang === maHang;
+    var itemParent = getParentSkuOfItem_(item);
+    var sameGroup = parentSku
+      ? (itemParent === parentSku)
+      : (maHang && itemMaHang === maHang);
     if (!sameGroup) return;
-    var key = String(item.maVach || '').trim().toUpperCase() + '|' + String(item.dvt || 'Cái').trim().toUpperCase();
+    var key = String(item.maHang || '').trim().toUpperCase() + '|' + String(item.maVach || '').trim().toUpperCase() + '|' + String(item.dvt || 'Cái').trim().toUpperCase();
     if (!key || seen[key]) return;
     seen[key] = true;
     variants.push({
       maVach: item.maVach || '',
       dvt: item.dvt || 'Cái',
       tenHang: item.tenHang || rowMeta.tenHang || '',
-      maHang: item.maHang || rowMeta.maHang || ''
+      maHang: item.maHang || rowMeta.maHang || '',
+      parentSku: itemParent || parentSku || ''
     });
   });
 
-  var currentKey = String(rowMeta.maVach || '').trim().toUpperCase() + '|' + String(rowMeta.dvt || 'Cái').trim().toUpperCase();
+  var currentKey = String(rowMeta.maHang || '').trim().toUpperCase() + '|' + String(rowMeta.maVach || '').trim().toUpperCase() + '|' + String(rowMeta.dvt || 'Cái').trim().toUpperCase();
   if (!seen[currentKey]) {
     variants.unshift({
       maVach: rowMeta.maVach || '',
       dvt: rowMeta.dvt || 'Cái',
       tenHang: rowMeta.tenHang || '',
-      maHang: rowMeta.maHang || ''
+      maHang: rowMeta.maHang || '',
+      parentSku: parentSku || ''
     });
   }
   return variants;
@@ -1786,9 +1937,12 @@ function ql_renderVariantSelector(rowMeta, rowKey, isReadOnlyRow) {
   }
   var optionsHtml = '';
   variants.forEach(function(v) {
-    var selected = String(v.maVach || '').trim().toUpperCase() === currentMaVach ? ' selected' : '';
+    var selected = String(v.maVach || '').trim().toUpperCase() === currentMaVach &&
+      String(v.maHang || '').trim().toUpperCase() === String(rowMeta.maHang || '').trim().toUpperCase()
+      ? ' selected' : '';
     var payload = encodeURIComponent(JSON.stringify(v));
-    optionsHtml += '<option value="' + payload + '"' + selected + '>' + (v.maVach || '-') + ' | ĐVT: ' + (v.dvt || 'Cái') + '</option>';
+    var label = (v.tenHang || v.maVach || '-') + ' | MH: ' + (v.maHang || '-') + ' | MV: ' + (v.maVach || '-') + ' | ĐVT: ' + (v.dvt || 'Cái');
+    optionsHtml += '<option value="' + payload + '"' + selected + '>' + label + '</option>';
   });
   return '<select class="ql-variant-select" data-row="' + rowKey + '" onchange="ql_onVariantChange(this)">' + optionsHtml + '</select>';
 }
@@ -1818,8 +1972,12 @@ function ql_isDuplicateOrderItem(item) {
     if (!existing) return false;
     var existingMaHang = String(existing.maHang || "").trim().toUpperCase();
     var existingMaVach = String(existing.maVach || "").trim().toUpperCase();
-    if (itemMaHang && existingMaHang && itemMaHang === existingMaHang) return true;
-    if (itemMaVach && existingMaVach && itemMaVach === existingMaVach) return true;
+    // Trùng khi cùng MH + MV — cho phép nhiều biến thể khác nhau cùng Parent trên 1 đơn
+    if (itemMaHang && existingMaHang && itemMaVach && existingMaVach) {
+      return itemMaHang === existingMaHang && itemMaVach === existingMaVach;
+    }
+    if (itemMaHang && existingMaHang && itemMaHang === existingMaHang && !itemMaVach && !existingMaVach) return true;
+    if (itemMaVach && existingMaVach && itemMaVach === existingMaVach && !itemMaHang && !existingMaHang) return true;
     return false;
   });
 }
@@ -1876,14 +2034,10 @@ function ql_luuSua() {
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
-function ql_themMaHang(itemOverride) {
+function ql_themMaHangDirect_(item, quantity) {
   if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
-  var inputEl = document.getElementById("ql-add-code");
-  var code = (inputEl ? inputEl.value : "").trim().toUpperCase();
-  var quantity = Number(document.getElementById("ql-add-qty").value);
-  var selectedItem = qlSelectedSuggestedItem && ql_isItemMatchedWithCode(qlSelectedSuggestedItem, code) ? qlSelectedSuggestedItem : null;
-  var item = itemOverride || selectedItem || danhMucGoc[code] || filterProducts(code)[0];
   if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
+  quantity = Number(quantity);
   if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
   if (ql_isDuplicateOrderItem(item)) {
     alert("⚠️ Mã này đã tồn tại trong đơn hiện tại. Không thể thêm dòng trùng.");
@@ -1895,10 +2049,14 @@ function ql_themMaHang(itemOverride) {
     'Thêm mã vào đơn?\n\n' + addTip.title + '\n' + addTip.shipMsg +
     '\n\nMã thêm mới sẽ ghi chú "Thêm mới vào đơn" và đi theo khung giờ hiện tại.'
   )) return;
+
+  var inputEl = document.getElementById("ql-add-code");
   qlSelectedSuggestedItem = null;
   if (inputEl) inputEl.value = "";
-  document.getElementById("ql-add-qty").value = "1";
-  document.getElementById("ql-suggest-box").style.display = "none";
+  var qtyEl = document.getElementById("ql-add-qty");
+  if (qtyEl) qtyEl.value = "1";
+  var suggestBox = document.getElementById("ql-suggest-box");
+  if (suggestBox) suggestBox.style.display = "none";
 
   var tb = document.getElementById("ql-tbody");
   if (tb) {
@@ -1910,6 +2068,7 @@ function ql_themMaHang(itemOverride) {
       maVach: item.maVach,
       tenHang: item.tenHang,
       dvt: item.dvt || "Cái",
+      parentSku: item.parentSku || "",
       slGoc: latestQty,
       slThucTe: latestQty,
       stock: 0,
@@ -1921,6 +2080,22 @@ function ql_themMaHang(itemOverride) {
   }
 
   alert("✅ Đã thêm mã vào bảng chỉnh sửa. Nhấn Lưu để ghi vào hệ thống.");
+}
+
+function ql_themMaHang(itemOverride) {
+  if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
+  var inputEl = document.getElementById("ql-add-code");
+  var code = (inputEl ? inputEl.value : "").trim().toUpperCase();
+  var quantity = Number(document.getElementById("ql-add-qty").value);
+  var selectedItem = qlSelectedSuggestedItem && ql_isItemMatchedWithCode(qlSelectedSuggestedItem, code) ? qlSelectedSuggestedItem : null;
+  var item = itemOverride || selectedItem || danhMucGoc[code] || filterProducts(code)[0];
+  if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
+  if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
+  if (itemHasVariantGroup_(item) && !itemOverride) {
+    openVariantPicker_(item, 'ql', quantity);
+    return;
+  }
+  ql_themMaHangDirect_(item, quantity);
 }
 
 function ql_huyDong(row) {
@@ -2649,13 +2824,23 @@ function extractCatalogEntriesFromRows_(rows) {
       if (hn.indexOf('don vi') !== -1 || hn === 'dv' || hn.indexOf('dvt') !== -1) { dvtIdx = dc; break; }
     }
   }
-  // File mẫu cũ hay có cột "Mã hàng hóa cha" — bỏ qua khi chọn mã hàng chính
+  // Cột Parent_SKU / Mã hàng hóa cha / Ma_Nhom_Ban — đọc riêng, không dùng làm mã hàng chính
+  var parentIdx = -1;
+  for (var pc = 0; pc < header.length; pc++) {
+    var pn = impNormalizeText(header[pc]).replace(/\s+/g, '');
+    if (!pn) continue;
+    if (pn === 'parentsku' || pn === 'parent' || pn === 'manhomban' || pn === 'nhomban') { parentIdx = pc; break; }
+    if ((pn.indexOf('mahang') !== -1 || pn.indexOf('mahanghoa') !== -1) && (pn.indexOf('cha') !== -1 || pn.indexOf('parent') !== -1)) {
+      parentIdx = pc; break;
+    }
+    if (pn.indexOf('parentsku') !== -1 || pn.indexOf('manhomban') !== -1) { parentIdx = pc; break; }
+  }
   if (maHangIdx >= 0) {
     var mhHeader = impNormalizeText(header[maHangIdx]).replace(/\s+/g, '');
-    if (mhHeader.indexOf('cha') !== -1 || mhHeader.indexOf('parent') !== -1) {
+    if (mhHeader.indexOf('cha') !== -1 || mhHeader.indexOf('parent') !== -1 || maHangIdx === parentIdx) {
       var altMh = -1;
       for (var ac = 0; ac < header.length; ac++) {
-        if (ac === maHangIdx) continue;
+        if (ac === maHangIdx || ac === parentIdx) continue;
         var an = impNormalizeText(header[ac]).replace(/\s+/g, '');
         if ((an.indexOf('mahang') !== -1 || an === 'sku') && an.indexOf('cha') === -1 && an.indexOf('parent') === -1) {
           altMh = ac; break;
@@ -2667,6 +2852,7 @@ function extractCatalogEntriesFromRows_(rows) {
 
   var entries = [];
   var withDvt = 0;
+  var withParent = 0;
   var startRow = headerIndex + 1;
   for (var r = startRow; r < rows.length; r++) {
     var row = rows[r];
@@ -2675,10 +2861,12 @@ function extractCatalogEntriesFromRows_(rows) {
     var mv = maVachIdx >= 0 ? String(row[maVachIdx] == null ? '' : row[maVachIdx]).trim() : '';
     var th = tenHangIdx >= 0 ? String(row[tenHangIdx] == null ? '' : row[tenHangIdx]).trim() : '';
     var d = dvtIdx >= 0 ? String(row[dvtIdx] == null ? '' : row[dvtIdx]).trim() : '';
+    var p = parentIdx >= 0 ? String(row[parentIdx] == null ? '' : row[parentIdx]).trim() : '';
     if (!mh && !mv) continue;
     if (!th && !d && !mh && !mv) continue;
     if (d) withDvt++;
-    entries.push({ mh: mh, mv: mv, th: th, d: d });
+    if (p) withParent++;
+    entries.push({ mh: mh, mv: mv, th: th, d: d, p: p });
   }
   var headerNorm = (header || []).map(function(h) {
     return { raw: String(h == null ? '' : h).slice(0, 40), norm: impNormalizeText(h).replace(/\s+/g, '') };
@@ -2704,8 +2892,10 @@ function extractCatalogEntriesFromRows_(rows) {
       maVachIdx: maVachIdx,
       tenHangIdx: tenHangIdx,
       dvtIdx: dvtIdx,
+      parentIdx: parentIdx,
       entryCount: entries.length,
-      withDvt: withDvt
+      withDvt: withDvt,
+      withParent: withParent
     }
   };
 }

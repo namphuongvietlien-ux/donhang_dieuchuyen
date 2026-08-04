@@ -31,6 +31,11 @@ var NEW_PRODUCTS_DEFAULT_LIMIT = 8;
 var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
 var TON_Q7_SHEET_NAME = "TON_Q7";
 var CACHE_TON_Q7_KEY = "ton_q7_map_v2";
+// Tồn riêng theo biến thể đồ chơi (không trộn vào TON_Q7)
+var TON_VARIANT_SHEET_NAME = "TON_VARIANT";
+var CACHE_TON_VARIANT_KEY = "ton_variant_map_v1";
+var CATALOG_PARENT_HEADER = "Parent_SKU";
+var CATALOG_COL_COUNT = 10;
 
 function getScriptCache_() {
   return CacheService.getScriptCache();
@@ -104,6 +109,198 @@ function writeTonQ7EntriesToSheet_(ss, entries) {
     else if (!dvtLabels[key]) dvtLabels[key] = dvtFromStockKey_(key);
   }
   return writeTonQ7MapToSheet_(ss, map, dvtLabels);
+}
+
+function getOrCreateTonVariantSheet_(ss) {
+  ss = ss || getSS();
+  var sh = ss.getSheetByName(TON_VARIANT_SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(TON_VARIANT_SHEET_NAME);
+    sh.getRange(1, 1, 1, 7).setValues([["Key", "Qty", "Parent_SKU", "TenSP", "MaVach", "DonViTinh", "UpdatedAt"]]);
+    sh.getRange(1, 1, 1, 7).setFontWeight("bold").setBackground("#cfe2f3");
+  } else {
+    try {
+      var h1 = String(sh.getRange(1, 1).getValue() || "").trim();
+      if (!h1) {
+        sh.getRange(1, 1, 1, 7).setValues([["Key", "Qty", "Parent_SKU", "TenSP", "MaVach", "DonViTinh", "UpdatedAt"]]);
+        sh.getRange(1, 1, 1, 7).setFontWeight("bold").setBackground("#cfe2f3");
+      }
+    } catch (e) {}
+  }
+  return sh;
+}
+
+/**
+ * Ghi/gộp TON_VARIANT từ entries {k|maHang, q|qty, p|parentSku, th|tenHang|tenSP, mv|maVach, d|dvt}.
+ * Batch: 1 lần getValues (merge) + 1 lần setValues.
+ */
+function writeTonVariantEntriesToSheet_(ss, entries) {
+  ss = ss || getSS();
+  var t0 = Date.now();
+  var sh = getOrCreateTonVariantSheet_(ss);
+  var byKey = {};
+  var lastRow = sh.getLastRow();
+  if (lastRow >= 2) {
+    var existing = sh.getRange(2, 1, lastRow - 1, 7).getValues();
+    for (var r = 0; r < existing.length; r++) {
+      var ek = String(existing[r][0] || "").trim();
+      if (!ek) continue;
+      byKey[ek] = {
+        k: ek,
+        q: Number(existing[r][1]) || 0,
+        p: String(existing[r][2] || "").trim(),
+        th: String(existing[r][3] || "").trim(),
+        mv: String(existing[r][4] || "").trim(),
+        d: String(existing[r][5] || "").trim()
+      };
+    }
+  }
+
+  for (var i = 0; i < (entries || []).length; i++) {
+    var ent = entries[i];
+    if (!ent) continue;
+    var key = String(ent.k || "").trim();
+    if (!key) {
+      var mh = normalizeProductCode(ent.maHang || ent.mh || "");
+      var dvtNorm = normalizeDvtKey_(ent.d || ent.dvt || "");
+      if (mh) key = "MH:" + mh + (dvtNorm ? ("|DV:" + dvtNorm) : "");
+    }
+    if (!key) continue;
+    var prev = byKey[key] || { k: key, q: 0, p: "", th: "", mv: "", d: "" };
+    if (ent.replace === true || ent.resetRow === true) prev.q = Number(ent.q != null ? ent.q : ent.qty) || 0;
+    else prev.q = (Number(prev.q) || 0) + (Number(ent.q != null ? ent.q : ent.qty) || 0);
+    var p = String(ent.p || ent.parentSku || "").trim();
+    var th = String(ent.th || ent.tenHang || ent.tenSP || "").trim();
+    var mv = String(ent.mv || ent.maVach || "").trim();
+    var d = String(ent.d || ent.dvt || "").trim();
+    if (p) prev.p = p;
+    if (th) prev.th = th;
+    if (mv) prev.mv = mv;
+    if (d) prev.d = d;
+    byKey[key] = prev;
+  }
+
+  var rows = [];
+  var now = new Date();
+  for (var k in byKey) {
+    if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
+    var row = byKey[k];
+    rows.push([row.k, Number(row.q) || 0, row.p || "", row.th || "", row.mv || "", row.d || "", now]);
+  }
+  rows.sort(function(a, b) {
+    var ap = String(a[2] || "");
+    var bp = String(b[2] || "");
+    if (ap !== bp) return ap < bp ? -1 : 1;
+    return String(a[0] || "") < String(b[0] || "") ? -1 : 1;
+  });
+
+  sh.clear();
+  sh.getRange(1, 1, 1, 7).setValues([["Key", "Qty", "Parent_SKU", "TenSP", "MaVach", "DonViTinh", "UpdatedAt"]]);
+  sh.getRange(1, 1, 1, 7).setFontWeight("bold").setBackground("#cfe2f3");
+  if (rows.length) sh.getRange(2, 1, rows.length, 7).setValues(rows);
+  try { SpreadsheetApp.flush(); } catch (e2) {}
+
+  var map = {};
+  for (var m = 0; m < rows.length; m++) map[rows[m][0]] = Number(rows[m][1]) || 0;
+  try {
+    putCacheJson_(getScriptCache_(), CACHE_TON_VARIANT_KEY, map, CACHE_TTL_SECONDS);
+  } catch (e3) {}
+
+  return {
+    success: true,
+    sheetName: TON_VARIANT_SHEET_NAME,
+    rows: rows.length,
+    keyCount: rows.length,
+    ms: Date.now() - t0
+  };
+}
+
+function readTonVariantMap_(ss) {
+  ss = ss || getSS();
+  var cache = getScriptCache_();
+  var cached = getCacheJson_(cache, CACHE_TON_VARIANT_KEY);
+  if (cached && typeof cached === "object" && Object.keys(cached).length) return cached;
+
+  var sh = ss.getSheetByName(TON_VARIANT_SHEET_NAME);
+  if (!sh || sh.getLastRow() < 2) return {};
+  var data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  var map = {};
+  for (var i = 0; i < data.length; i++) {
+    var key = String(data[i][0] || "").trim();
+    if (!key) continue;
+    map[key] = (Number(map[key]) || 0) + (Number(data[i][1]) || 0);
+  }
+  try { putCacheJson_(cache, CACHE_TON_VARIANT_KEY, map, CACHE_TTL_SECONDS); } catch (e) {}
+  return map;
+}
+
+/** Trả stock variant nếu key có trong TON_VARIANT; null nếu không thuộc nhóm variant */
+function getVariantStockIfPresent_(map, maHang, maVach, dvt) {
+  if (!map || !Object.keys(map).length) return null;
+  var mh = normalizeProductCode(maHang);
+  var mv = normalizeProductCode(maVach);
+  var present = false;
+  for (var k in map) {
+    if (!Object.prototype.hasOwnProperty.call(map, k) || k === "__meta") continue;
+    if (mh && (k === ("MH:" + mh) || k.indexOf("MH:" + mh + "|DV:") === 0)) { present = true; break; }
+    if (mv && (k === ("MV:" + mv) || k.indexOf("MV:" + mv + "|DV:") === 0)) { present = true; break; }
+  }
+  if (!present) return null;
+  return getStockValueForItem(map, maHang, maVach, dvt);
+}
+
+/**
+ * API: danh sách biến thể theo Parent_SKU kèm tồn từ TON_VARIANT.
+ * @param {string} parentSku
+ */
+function getVariantStockList(parentSku) {
+  try {
+    var parent = String(parentSku || "").trim().toUpperCase();
+    if (!parent) return { success: false, error: "Thiếu parentSku", parentSku: "", variants: [] };
+
+    var ss = getSS();
+    var catalogRes = getCatalogData();
+    var danhMuc = (catalogRes && catalogRes.success && catalogRes.danhMuc) ? catalogRes.danhMuc : buildCatalogFromSheet_(ss);
+    var seen = {};
+    var variants = [];
+    for (var key in danhMuc) {
+      if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
+      var item = danhMuc[key];
+      if (!item) continue;
+      var p = String(item.parentSku || "").trim().toUpperCase();
+      if (p !== parent) continue;
+      var dedupe = String(item.maHang || "").trim().toUpperCase() + "|" + String(item.maVach || "").trim().toUpperCase();
+      if (!dedupe || seen[dedupe]) continue;
+      seen[dedupe] = true;
+      variants.push({
+        maHang: item.maHang || "",
+        maVach: item.maVach || "",
+        tenHang: item.tenHang || "",
+        dvt: item.dvt || "",
+        parentSku: p,
+        stock: 0
+      });
+    }
+
+    var map = readTonVariantMap_(ss) || {};
+    for (var i = 0; i < variants.length; i++) {
+      variants[i].stock = getStockValueForItem(map, variants[i].maHang, variants[i].maVach, variants[i].dvt);
+    }
+    variants.sort(function(a, b) {
+      return String(a.tenHang || "").localeCompare(String(b.tenHang || "")) ||
+        String(a.maHang || "").localeCompare(String(b.maHang || ""));
+    });
+
+    return {
+      success: true,
+      parentSku: parent,
+      variants: variants,
+      count: variants.length,
+      stockReady: Object.keys(map).length > 0
+    };
+  } catch (e) {
+    return { success: false, error: e.message || String(e), parentSku: String(parentSku || ""), variants: [] };
+  }
 }
 
 function rebuildTonKhoQ7Sheet_(ss) {
@@ -614,10 +811,17 @@ function buildCatalogFromSheet_(ss) {
       break;
     }
   }
-  var maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
+  var parentSkuIdx = findCatalogParentColIdx_(headerRow);
+  var maHangIdx = findCatalogMaHangColIdx_(headerRow, parentSkuIdx);
+  if (maHangIdx === -1) maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
   var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid']);
   var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
   var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  if (parentSkuIdx === -1 && headerRow && headerRow.length >= 10) {
+    // Sheet chuẩn: cột J = Parent_SKU
+    var hJ = normalizeHeaderText(headerRow[9]);
+    if (!hJ || hJ.indexOf("parent") !== -1 || hJ.indexOf("nhom") !== -1 || hJ.indexOf("cha") !== -1) parentSkuIdx = 9;
+  }
   var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
   for (var k = startRow; k < rawData.length; k++) {
     if (!rawData[k]) continue;
@@ -631,12 +835,13 @@ function buildCatalogFromSheet_(ss) {
     var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
     var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
     var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
+    var parentSku = parentSkuIdx !== -1 ? getCellValue(rawData[i], parentSkuIdx, "") : "";
     if (dvt === "" && dvtIdx === -1) {
       var fallbackDvt = getCellValue(rawData[i], 6, "");
       if (fallbackDvt !== "") dvt = fallbackDvt;
     }
     if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
-    var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "" };
+    var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "", parentSku: parentSku || "" };
     if (maVach !== "") danhMucHangHoa[maVach.toUpperCase()] = obj;
     if (maHang !== "" && !danhMucHangHoa[maHang.toUpperCase()]) danhMucHangHoa[maHang.toUpperCase()] = obj;
   }
@@ -885,6 +1090,9 @@ function doGet(e) {
           break;
         case 'getNewProductsList':
           res = getNewProductsList(e.parameter.limit || NEW_PRODUCTS_DEFAULT_LIMIT);
+          break;
+        case 'getVariantStockList':
+          res = getVariantStockList(e.parameter.parentSku || e.parameter.parent || '');
           break;
         case 'layDanhSachPhieuTheoFilter':
           res = layDanhSachPhieuTheoFilter(e.parameter.khoNhan || '', e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');
@@ -1566,6 +1774,35 @@ function findColumnIndexByAliases(row, aliases) {
   return -1;
 }
 
+/** Cột Parent_SKU / Mã hàng hóa cha / Ma_Nhom_Ban */
+function findCatalogParentColIdx_(headerRow) {
+  if (!headerRow) return -1;
+  for (var c = 0; c < headerRow.length; c++) {
+    var n = normalizeHeaderText(headerRow[c]);
+    if (!n) continue;
+    if (n === "parentsku" || n === "parent" || n === "manhomban" || n === "nhomban") return c;
+    if (n.indexOf("parentsku") !== -1 || n.indexOf("manhomban") !== -1) return c;
+    if (n.indexOf("mahang") !== -1 && (n.indexOf("cha") !== -1 || n.indexOf("parent") !== -1)) return c;
+    if (n.indexOf("mahanghoa") !== -1 && n.indexOf("cha") !== -1) return c;
+  }
+  return -1;
+}
+
+/** Mã hàng chính — bỏ qua cột cha/parent */
+function findCatalogMaHangColIdx_(headerRow, parentIdx) {
+  if (!headerRow) return -1;
+  for (var c = 0; c < headerRow.length; c++) {
+    if (parentIdx >= 0 && c === parentIdx) continue;
+    var n = normalizeHeaderText(headerRow[c]);
+    if (!n) continue;
+    if (n.indexOf("cha") !== -1 || n.indexOf("parent") !== -1) continue;
+    if (n.indexOf("mahang") !== -1 || n === "sku" || n.indexOf("article") !== -1 || n === "code" || n.indexOf("itemcode") !== -1 || n === "mahh") {
+      return c;
+    }
+  }
+  return -1;
+}
+
 function findAllColumnIndicesByAliases(row, aliases) {
   if (!row) return [];
   var indexes = [];
@@ -1650,34 +1887,39 @@ function getOrCreateCatalogSheet(ss) {
   var sheet = ss.getSheetByName("Data_Excel");
   if (!sheet) {
     sheet = ss.insertSheet("Data_Excel");
-    sheet.getRange(1, 1, 1, 9).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo"]]);
-    sheet.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#d9ead3");
+    sheet.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo", CATALOG_PARENT_HEADER]]);
+    sheet.getRange(1, 1, 1, CATALOG_COL_COUNT).setFontWeight("bold").setBackground("#d9ead3");
   } else {
-    // Bổ sung header Ngày tạo nếu sheet cũ chưa có
+    // Bổ sung header Ngày tạo / Parent_SKU nếu sheet cũ chưa có
     try {
       var h9 = String(sheet.getRange(1, 9).getValue() || "").trim();
       if (!h9) {
         sheet.getRange(1, 9).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
+      }
+      var h10 = String(sheet.getRange(1, 10).getValue() || "").trim();
+      if (!h10) {
+        sheet.getRange(1, 10).setValue(CATALOG_PARENT_HEADER).setFontWeight("bold").setBackground("#d9ead3");
       }
     } catch (e) {}
   }
   return sheet;
 }
 
-/** Ghi catalog từ entries gọn {mh,mv,th,d} — layout Data_Excel cố định + cột Ngày tạo */
+/** Ghi catalog từ entries gọn {mh,mv,th,d,p} — layout Data_Excel + Ngày tạo + Parent_SKU (cột J) */
 function writeCatalogEntriesToSheet_(ss, entries, reset) {
   ss = ss || getSS();
   var sh = getOrCreateCatalogSheet(ss);
   var t0 = Date.now();
   if (reset) {
     var oldLastRow = sh.getLastRow();
-    var oldLastCol = Math.max(sh.getLastColumn(), 9);
+    var oldLastCol = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
     if (oldLastRow > 0) sh.getRange(1, 1, oldLastRow, oldLastCol).clearContent();
-    sh.getRange(1, 1, 1, 9).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo"]]);
-    sh.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#d9ead3");
+    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo", CATALOG_PARENT_HEADER]]);
+    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setFontWeight("bold").setBackground("#d9ead3");
   }
   var rows = [];
   var withDvt = 0;
+  var withParent = 0;
   var now = new Date();
   for (var i = 0; i < (entries || []).length; i++) {
     var e = entries[i];
@@ -1686,18 +1928,21 @@ function writeCatalogEntriesToSheet_(ss, entries, reset) {
     var mv = String(e.mv || "").trim();
     var th = String(e.th || "").trim();
     var d = String(e.d || "").trim();
+    var p = String(e.p || e.parentSku || "").trim();
     if (!mh && !mv) continue;
     if (d) withDvt++;
-    rows.push([mh, "", mv, "", "", th, "", d, now]);
+    if (p) withParent++;
+    rows.push([mh, "", mv, "", "", th, "", d, now, p]);
   }
   if (rows.length) {
     var startRow = Math.max(sh.getLastRow() + 1, 2);
-    sh.getRange(startRow, 1, rows.length, 9).setValues(rows);
+    sh.getRange(startRow, 1, rows.length, CATALOG_COL_COUNT).setValues(rows);
   }
   try { SpreadsheetApp.flush(); } catch (e) {}
   return {
     rows: rows.length,
     withDvt: withDvt,
+    withParent: withParent,
     totalRows: Math.max(sh.getLastRow() - 1, 0),
     ms: Date.now() - t0
   };
@@ -2311,12 +2556,15 @@ function buildNewProductsList_(ss, limit) {
     }
   }
 
-  var maHangIdx = findColumnIndexByAliases(headerRow, ["mahang", "sku", "article", "code"]);
+  var parentSkuIdxNp = findCatalogParentColIdx_(headerRow);
+  var maHangIdx = findCatalogMaHangColIdx_(headerRow, parentSkuIdxNp);
+  if (maHangIdx === -1) maHangIdx = findColumnIndexByAliases(headerRow, ["mahang", "sku", "article", "code"]);
   var maVachIdx = findColumnIndexByAliases(headerRow, ["mavach", "barcode", "barcodeid"]);
   var tenHangIdx = findColumnIndexByAliases(headerRow, ["tenhang", "name", "tênhang", "description"]);
   var dvtIdx = findColumnIndexByAliases(headerRow, ["dvt", "donvitinh", "donvi", "unit", "uom"]);
   var ngayTaoIdx = findColumnIndexByAliases(headerRow, ["ngaytao", "createdat", "created", "ngaythem", "importedat", "timestamp"]);
   var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "moi", "hangmoi", "newflag"]);
+  if (parentSkuIdxNp === -1 && headerRow && headerRow.length >= 10) parentSkuIdxNp = 9;
   var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
 
   var byKey = {};
@@ -2326,6 +2574,7 @@ function buildNewProductsList_(ss, limit) {
     var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
     var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
     var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
+    var parentSkuNp = parentSkuIdxNp !== -1 ? getCellValue(rawData[i], parentSkuIdxNp, "") : "";
     if (!maHang && !maVach) continue;
     if (!tenHang && !maHang && !maVach) continue;
 
@@ -2362,6 +2611,7 @@ function buildNewProductsList_(ss, limit) {
         maVach: maVach,
         tenHang: tenHang,
         dvt: dvt || "",
+        parentSku: parentSkuNp || "",
         sheetRow: sheetRow,
         ngayMs: ngayMs,
         ngayTao: ngayLabel,
@@ -3037,6 +3287,18 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
       for (var j = 0; j < matchedRows.length; j++) {
         matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach, matchedRows[j].dvt);
       }
+    }
+    // Overlay tồn biến thể (TON_VARIANT) nếu SKU thuộc nhóm Parent — không đụng logic trừ tồn A/B/C
+    if (wantStock && matchedRows.length) {
+      try {
+        var variantMap = readTonVariantMap_(ss);
+        if (variantMap && Object.keys(variantMap).length) {
+          for (var jv = 0; jv < matchedRows.length; jv++) {
+            var vStock = getVariantStockIfPresent_(variantMap, matchedRows[jv].maHang, matchedRows[jv].maVach, matchedRows[jv].dvt);
+            if (vStock !== null) matchedRows[jv].stock = vStock;
+          }
+        }
+      } catch (varStockErr) {}
     }
 
     try {
