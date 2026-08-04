@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v54-all-status';
+var APP_BUILD = '2026-08-04-v55-preview-isnew';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -568,9 +568,12 @@ function applyNewProductsData(list) {
 
 function isNewProductItem_(item) {
   if (!item) return false;
+  if (item.isNew === true || item.isNew === 1 || item.isNew === '1' || item.isNew === 'true') return true;
   var mh = String(item.maHang || '').trim().toUpperCase();
   var mv = String(item.maVach || '').trim().toUpperCase();
-  return !!(newProductKeySet[mh] || newProductKeySet[mv]);
+  if (newProductKeySet[mh] || newProductKeySet[mv]) return true;
+  var cat = (mh && danhMucGoc[mh]) || (mv && danhMucGoc[mv]) || null;
+  return !!(cat && (cat.isNew === true || cat.isNew === 1 || cat.isNew === 'TRUE' || cat.isNew === 'true'));
 }
 
 function renderNewProductsHighlight() {
@@ -853,7 +856,10 @@ function switchTab(tabId) {
   if(tabId === 'tab-xac-nhan') confirm_loadPhieu();
   if(tabId === 'tab-soan-hang') sh_taiDanhSachDon();
   if(tabId === 'tab-dashboard') loadDashboardSummary();
-  if(tabId === 'tab-admin') loadDSUser();
+  if(tabId === 'tab-admin') {
+    loadDSUser();
+    if (sessionUser.role === 'Admin') adm_loadNewProductFlags();
+  }
   if(tabId === 'tab-ban-kem') xb_onTabOpen();
 }
 
@@ -957,6 +963,30 @@ function formatStoreShortLabel_(storeName) {
     if (storeMap[full] === raw) return raw;
   }
   return raw;
+}
+
+/** Mã ngắn phân biệt 2 kho Q4 — tránh dính chữ "Mới/Cũ" với cột Trạng thái */
+var PACKING_STORE_CODES_ = {
+  'Kho Địa điểm kinh doanh 01': '178',
+  'Kho Địa điểm kinh doanh 06': '275'
+};
+
+/** Ô kho trên bảng xem trước soạn hàng — tách sạch khỏi trạng thái đơn */
+function formatPackingStoreCellHtml_(storeName) {
+  var raw = String(storeName || '').trim();
+  if (!raw) return '-';
+  var code = PACKING_STORE_CODES_[raw] || '';
+  var short = formatStoreShortLabel_(raw);
+  var cleaned = String(short).replace(/\s+(Mới|Cũ|Moi|Cu)\s*$/i, '').trim() || short;
+  var hint = '';
+  if (code) hint = code;
+  else if (/mới|moi/i.test(short) && cleaned !== short) hint = 'CN mới';
+  else if (/cũ|cu/i.test(short) && cleaned !== short) hint = 'CN cũ';
+  if (hint) {
+    return '<span class="sh-store-name">' + escapeHtml(cleaned) + '</span>' +
+      ' <small class="sh-store-hint" style="color:#64748b;font-weight:600;">· ' + escapeHtml(hint) + '</small>';
+  }
+  return '<span class="sh-store-name">' + escapeHtml(cleaned) + '</span>';
 }
 
 // ================= PHÂN QUYỀN KHO =================
@@ -2420,7 +2450,7 @@ function sh_isOrderDefaultChecked_(order) {
   if (!order) return false;
   if (typeof order.defaultChecked === 'boolean') return order.defaultChecked;
   var st = String(order.trangThai || order.status || '').trim().toLowerCase();
-  if (!st || st === 'mới' || st === 'moi' || st === 'chờ duyệt' || st === 'cho duyet') return true;
+  if (!st || st === 'mới' || st === 'moi' || st === 'chờ duyệt' || st === 'cho duyet' || st === 'chờ xử lý' || st === 'cho xu ly' || st === 'đang xử lý') return true;
   return false;
 }
 
@@ -2430,13 +2460,16 @@ function sh_statusBadgeHtml_(order) {
   if (!tone) {
     var st = label.toLowerCase();
     if (st.indexOf('hủy') !== -1 || st.indexOf('huy') !== -1) tone = 'danger';
-    else if (st.indexOf('soạn') !== -1 || st.indexOf('soan') !== -1 || st.indexOf('xác nhận') !== -1 || st.indexOf('xac nhan') !== -1 || st.indexOf('đang xử lý') !== -1 || st.indexOf('cho') !== -1) tone = 'warn';
-    else tone = 'ok';
+    else if (st.indexOf('xác nhận') !== -1 || st.indexOf('xac nhan') !== -1 || st.indexOf('đã nhận') !== -1) tone = 'success';
+    else if (st.indexOf('soạn') !== -1 || st.indexOf('soan') !== -1) tone = 'warn';
+    else tone = 'info';
   }
-  var bg = '#dcfce7';
-  var fg = '#166534';
+  // info=blue (mới) | warn=yellow (đã soạn) | success=green (đã nhận) | danger=red (hủy)
+  var bg = '#dbeafe';
+  var fg = '#1d4ed8';
   if (tone === 'danger') { bg = '#fee2e2'; fg = '#b91c1c'; }
-  else if (tone === 'warn') { bg = '#fef3c7'; fg = '#b45309'; }
+  else if (tone === 'warn') { bg = '#ffedd5'; fg = '#c2410c'; }
+  else if (tone === 'success' || tone === 'ok') { bg = '#dcfce7'; fg = '#166534'; }
   return '<span class="sh-status-badge" style="display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800;background:' + bg + ';color:' + fg + ';">' + escapeHtml(label) + '</span>';
 }
 
@@ -2477,17 +2510,37 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
     return;
   }
   var html = '';
+  var lastGroup = '';
+  var modeNow = sh_getPackingMode_();
   candidates.forEach(function(order, idx) {
     var soPhieuSafe = String(order.soPhieu || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    var bucket = order.packingBucket ? (' <small style="color:#64748b;">[' + escapeHtml(order.packingBucket) + ']</small>') : '';
+    var bucketLabel = order.packingBucketLabel
+      || (order.packingBucket === 'bổ sung' ? 'Đơn Bổ Sung' : (order.packingBucket === 'chính' ? 'Đơn Chính' : ''));
+    var bucketBadge = bucketLabel
+      ? (' <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:800;background:' +
+        (order.packingBucket === 'bổ sung' ? '#ffedd5;color:#c2410c' : '#e0e7ff;color:#3730a3') +
+        ';">[' + escapeHtml(bucketLabel) + ']</span>')
+      : '';
+    var mergeHint = order.mergeWithMain
+      ? ' <small style="color:#0f766e;font-weight:600;">· gộp cùng kho</small>'
+      : '';
     var checkedAttr = sh_isOrderDefaultChecked_(order) ? ' checked' : '';
+
+    // Mode tổng hợp: chèn header nhóm theo kho nhận
+    var gk = String(order.groupKey || order.khoNhan || '');
+    if (modeNow === 'total' && gk && gk !== lastGroup) {
+      lastGroup = gk;
+      html += '<tr style="background:#f1f5f9;"><td colspan="8" style="padding:8px 10px;font-size:12px;font-weight:800;color:#334155;">📦 Kho nhận: ' +
+        formatPackingStoreCellHtml_(order.khoNhan) + '</td></tr>';
+    }
+
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
       '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '"' + checkedAttr + ' onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucket + '</td>' +
+      '<td><b>' + escapeHtml(order.soPhieu) + '</b>' + bucketBadge + mergeHint + '</td>' +
+      '<td>' + formatPackingStoreCellHtml_(order.khoXuat) + '</td>' +
+      '<td>' + formatPackingStoreCellHtml_(order.khoNhan) + '</td>' +
       '<td>' + sh_statusBadgeHtml_(order) + '</td>' +
-      '<td>' + formatStoreShortLabel_(order.khoXuat) + '</td>' +
-      '<td>' + formatStoreShortLabel_(order.khoNhan) + '</td>' +
       '<td>' + escapeHtml(order.thoiGianDat || '-') + '</td>' +
       '<td style="text-align:center;">' +
         '<button type="button" class="btn-submit" style="width:auto; padding:6px 10px; border-radius:8px; box-shadow:none; background:#0f766e; font-size:12px;" onclick="sh_inDonTuBangSoan(\'' + soPhieuSafe + '\')">🖨️ In</button>' +
@@ -2497,11 +2550,11 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
   bodyEl.innerHTML = html;
   var summaryEl = document.getElementById('sh-order-picker-summary');
   if (summaryEl) {
-    var mode = sh_getPackingMode_();
+    var mode = modeNow;
     var modeText = mode === 'main' ? 'Đơn chính' : (mode === 'supp' ? 'Bổ sung' : 'Tổng hợp ca');
-    var base = 'N2 ' + packingDay + ' · Mode: ' + modeText + ' · Hiện đủ mọi trạng thái';
+    var base = 'N2 ' + packingDay + ' · Mode: ' + modeText + ' · Cột kho tách khỏi trạng thái';
     if (windowHint) base += ' · ' + windowHint;
-    base += ' · Badge xanh = mặc định chọn; đỏ/vàng = mặc định bỏ tích (vẫn chọn tay được)';
+    base += ' · Xanh dương=chọn sẵn · Vàng=đã soạn · Xanh lá=đã nhận · Đỏ=hủy';
     if (suggested && packingDay !== suggested) {
       base += ' · Đang lệch ngày gợi ý theo giờ (' + suggested + ')';
     }
@@ -2779,6 +2832,82 @@ function loadDSUser() {
       tb.insertAdjacentHTML('beforeend', '<tr><td><b>'+escapeHtml(u.user)+'</b></td><td>'+escapeHtml(u.role)+'</td><td>'+escapeHtml(storeLabel)+'</td></tr>');
     });
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
+}
+
+var admNewProductRows_ = [];
+
+function adm_loadNewProductFlags() {
+  if (sessionUser.role !== 'Admin') return;
+  var qEl = document.getElementById('adm-new-q');
+  var meta = document.getElementById('adm-new-meta');
+  var q = qEl ? String(qEl.value || '').trim() : '';
+  if (meta) meta.innerText = 'Đang tải danh mục...';
+  showLoad('Đang tải danh mục Hàng Mới...');
+  apiGet('getCatalogIsNewAdminList', { q: q, limit: 250 }, { timeoutMs: 60000 }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) throw new Error((res && res.error) || 'Không tải được danh mục.');
+    admNewProductRows_ = Array.isArray(res.items) ? res.items : [];
+    adm_renderNewProductFlags_();
+    if (meta) meta.innerText = 'Hiển thị ' + admNewProductRows_.length + ' sản phẩm' + (q ? (' · lọc: "' + q + '"') : '') + '. Tick rồi nhấn Lưu.';
+  }).catch(function(err) {
+    hideLoad();
+    if (meta) meta.innerText = 'Lỗi: ' + (err && err.message || err);
+    alert('Lỗi tải Hàng Mới: ' + (err && err.message || err));
+  });
+}
+
+function adm_renderNewProductFlags_() {
+  var tb = document.getElementById('adm-new-tbody');
+  if (!tb) return;
+  if (!admNewProductRows_.length) {
+    tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:16px;">Không có sản phẩm phù hợp.</td></tr>';
+    return;
+  }
+  var html = '';
+  admNewProductRows_.forEach(function(it, idx) {
+    var checked = it.isNew ? ' checked' : '';
+    html += '<tr>' +
+      '<td style="text-align:center;"><input type="checkbox" class="adm-isnew-check" data-idx="' + idx + '"' + checked + '></td>' +
+      '<td><b>' + escapeHtml(it.maHang || '-') + '</b></td>' +
+      '<td>' + escapeHtml(it.maVach || '-') + '</td>' +
+      '<td>' + escapeHtml(it.tenHang || '-') + '</td>' +
+      '<td>' + escapeHtml(it.dvt || '') + '</td>' +
+      '</tr>';
+  });
+  tb.innerHTML = html;
+}
+
+function adm_saveNewProductFlags() {
+  if (sessionUser.role !== 'Admin') return alert('Chỉ Admin được lưu Hàng Mới.');
+  if (!admNewProductRows_.length) return alert('Chưa có danh sách để lưu. Hãy tải danh sách trước.');
+  var checks = document.querySelectorAll('.adm-isnew-check');
+  var flags = [];
+  checks.forEach(function(cb) {
+    var idx = Number(cb.getAttribute('data-idx'));
+    var row = admNewProductRows_[idx];
+    if (!row) return;
+    var next = !!cb.checked;
+    flags.push({
+      sheetRow: row.sheetRow,
+      maHang: row.maHang,
+      maVach: row.maVach,
+      isNew: next
+    });
+    row.isNew = next;
+  });
+  showLoad('Đang lưu Hàng Mới...');
+  apiPost('saveCatalogIsNewFlags', { flags: flags, actor: sessionUser.user }, { timeoutMs: 90000 }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) throw new Error((res && (res.error || res.msg)) || 'Lưu thất bại.');
+    alert('✅ ' + (res.msg || ('Đã cập nhật ' + (res.changed || 0) + ' sản phẩm.')));
+    loadCatalogInBackground(true);
+    loadNewProductsInBackground();
+    var meta = document.getElementById('adm-new-meta');
+    if (meta) meta.innerText = 'Đã lưu · thay đổi: ' + (res.changed || 0) + ' · tổng tick gửi: ' + flags.length;
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi lưu Hàng Mới: ' + (err && err.message || err));
+  });
 }
 function taoTaiKhoan() {
   var role = document.getElementById("adm-role").value;

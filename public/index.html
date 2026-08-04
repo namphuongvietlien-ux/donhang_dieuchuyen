@@ -602,16 +602,16 @@
             </div>
           </div>
           <div style="max-height:260px; overflow:auto; border:1px solid #e2e8f0; border-radius:10px; background:#fff;">
-            <table style="min-width:900px; margin:0;">
+            <table style="min-width:980px; margin:0;">
               <thead>
                 <tr>
                   <th style="width:48px; text-align:center;">STT</th>
                   <th style="width:56px; text-align:center;">Chọn</th>
                   <th>Số phiếu</th>
-                  <th style="width:140px;">Trạng thái</th>
                   <th>Kho xuất</th>
                   <th>Kho nhận</th>
-                  <th>Giờ đặt</th>
+                  <th style="width:150px;">Trạng thái</th>
+                  <th style="width:120px;">Giờ đặt</th>
                   <th style="width:88px; text-align:center;">In đơn</th>
                 </tr>
               </thead>
@@ -701,11 +701,47 @@
           </table>
         </div>
       </div>
+
+      <div class="card" style="border-left: 4px solid #ea580c;">
+        <h3 style="margin-top:0;">Quản lý Hàng Mới (Badge NEW)</h3>
+        <p style="font-size:13px; color:#64748b; margin-top:-4px;">
+          Tick sản phẩm để hiện badge <b>MỚI</b> khi đặt hàng / soạn hàng. Lưu batch vào cột <b>IsNew</b> trên Data_Excel.
+        </p>
+        <div class="form-row" style="align-items:end;">
+          <div class="form-group" style="flex:1;">
+            <label>Tìm mã / tên sản phẩm</label>
+            <input type="text" id="adm-new-q" placeholder="Nhập mã hàng, mã vạch hoặc tên..." onkeydown="if(event.key==='Enter'){event.preventDefault(); adm_loadNewProductFlags();}">
+          </div>
+          <div class="form-group" style="max-width:160px;">
+            <button type="button" class="btn-submit" style="width:100%;" onclick="adm_loadNewProductFlags()">🔎 Tải danh sách</button>
+          </div>
+          <div class="form-group" style="max-width:160px;">
+            <button type="button" class="btn-submit btn-success" style="width:100%;" onclick="adm_saveNewProductFlags()">💾 Lưu Hàng Mới</button>
+          </div>
+        </div>
+        <div id="adm-new-meta" style="font-size:12px; color:#64748b; margin:4px 0 10px;">Chưa tải danh sách.</div>
+        <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
+          <table style="min-width:720px; margin:0;">
+            <thead>
+              <tr>
+                <th style="width:70px; text-align:center;">Hàng Mới</th>
+                <th>Mã hàng</th>
+                <th>Mã vạch</th>
+                <th>Tên sản phẩm</th>
+                <th style="width:80px;">ĐVT</th>
+              </tr>
+            </thead>
+            <tbody id="adm-new-tbody">
+              <tr><td colspan="5" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải danh sách" để quản lý badge MỚI.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
     
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260802v51"></script>
+  <script src="app.js?v=20260804v55"></script>
 </body>
 </html>
