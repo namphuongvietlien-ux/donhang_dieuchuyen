@@ -1918,15 +1918,35 @@ function getNewProductsList(limit) {
 }
 
 
-/** Admin: danh sách catalog để tick Hàng Mới */
+/** Admin: danh sách catalog để tick Hàng Mới — quét TOÀN BỘ Data_Excel */
 function getCatalogIsNewAdminList_(query, limit) {
   try {
-    limit = Math.max(20, Math.min(Number(limit) || 200, 500));
-    var q = String(query || "").trim().toUpperCase();
+    // limit=0 hoặc rất lớn → lấy hết; trần an toàn 30000 tránh payload khổng lồ
+    var limRaw = Number(limit);
+    if (isNaN(limRaw) || limRaw < 0) limRaw = 20000;
+    if (limRaw === 0) limRaw = 20000;
+    limit = Math.min(Math.max(limRaw, 1), 30000);
+
+    var qRaw = String(query || "").trim();
+    var qUpper = "";
+    var qFold = "";
+    try {
+      qUpper = qRaw.normalize("NFC").toUpperCase();
+    } catch (eN) {
+      qUpper = qRaw.toUpperCase();
+    }
+    qFold = String(qUpper)
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/\s+/g, " ")
+      .trim();
+
     var ss = getSS();
     var sh = getOrCreateCatalogSheet(ss);
     var lastRow = sh.getLastRow();
-    if (lastRow < 2) return { success: true, items: [], total: 0 };
+    if (lastRow < 2) return { success: true, items: [], total: 0, scanned: 0 };
 
     var width = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
     var values = sh.getRange(1, 1, lastRow, width).getValues();
@@ -1945,6 +1965,8 @@ function getCatalogIsNewAdminList_(query, limit) {
 
     var items = [];
     var seen = {};
+    var scanned = 0;
+    var matchedBeforeCap = 0;
     for (var r = 1; r < values.length; r++) {
       var row = values[r];
       if (!row) continue;
@@ -1952,28 +1974,74 @@ function getCatalogIsNewAdminList_(query, limit) {
       var mv = String(row[mvIdx] == null ? "" : row[mvIdx]).trim();
       var th = String(row[thIdx] == null ? "" : row[thIdx]).trim();
       var dvt = String(row[dvtIdx] == null ? "" : row[dvtIdx]).trim();
+      var parentSku = parentIdx !== -1 ? String(row[parentIdx] == null ? "" : row[parentIdx]).trim() : "";
       if (!mh && !mv) continue;
-      var key = (mh || mv).toUpperCase();
-      if (seen[key]) continue;
-      seen[key] = true;
-      if (q) {
-        var hay = (mh + " " + mv + " " + th).toUpperCase();
-        if (hay.indexOf(q) === -1) continue;
+      scanned++;
+
+      var mhU = "";
+      var mvU = "";
+      try {
+        mhU = mh.normalize("NFC").toUpperCase();
+        mvU = mv.normalize("NFC").toUpperCase();
+      } catch (eU) {
+        mhU = mh.toUpperCase();
+        mvU = mv.toUpperCase();
       }
+      var key = (mhU || mvU);
+      if (!key || seen[key]) continue;
+      seen[key] = true;
+
+      if (qUpper || qFold) {
+        var thU = "";
+        var pU = "";
+        try {
+          thU = th.normalize("NFC").toUpperCase();
+          pU = parentSku.normalize("NFC").toUpperCase();
+        } catch (eT) {
+          thU = th.toUpperCase();
+          pU = parentSku.toUpperCase();
+        }
+        var hayUpper = (mhU + " " + mvU + " " + thU + " " + pU);
+        var hayFold = hayUpper
+          .toLowerCase()
+          .normalize("NFKD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/đ/g, "d")
+          .replace(/\s+/g, " ");
+        var ok = false;
+        if (qUpper && hayUpper.indexOf(qUpper) !== -1) ok = true;
+        if (!ok && qFold && hayFold.indexOf(qFold) !== -1) ok = true;
+        if (!ok) continue;
+      }
+
+      matchedBeforeCap++;
+      if (items.length >= limit) continue; // vẫn đếm matched, không early-break scan
+
       var flagRaw = String(row[isNewIdx] == null ? "" : row[isNewIdx]).trim().toLowerCase();
       var isNew = flagRaw === "1" || flagRaw === "true" || flagRaw === "yes" || flagRaw === "x" || flagRaw === "moi" || flagRaw === "new";
       items.push({
         sheetRow: r + 1,
         maHang: mh,
+        maSP: mh,
         maVach: mv,
         tenHang: th,
         dvt: dvt,
-        parentSku: parentIdx !== -1 ? String(row[parentIdx] == null ? "" : row[parentIdx]).trim() : "",
+        parentSku: parentSku,
         isNew: isNew
       });
-      if (items.length >= limit) break;
     }
-    return { success: true, items: items, total: items.length, isNewCol: isNewIdx + 1 };
+    return {
+      success: true,
+      items: items,
+      total: items.length,
+      matched: matchedBeforeCap,
+      scanned: scanned,
+      unique: Object.keys(seen).length,
+      truncated: matchedBeforeCap > items.length,
+      limit: limit,
+      isNewCol: isNewIdx + 1,
+      query: qRaw
+    };
   } catch (e) {
     return { success: false, error: e.message || String(e), items: [] };
   }

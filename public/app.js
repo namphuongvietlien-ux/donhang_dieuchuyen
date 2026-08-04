@@ -3265,14 +3265,27 @@ var admNewProductRows_ = [];
 var admNewProductFilterQ_ = '';
 
 function admNormalizeSearch_(value) {
-  return String(value || '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D')
+  var s = '';
+  try {
+    s = String(value || '').normalize('NFC');
+  } catch (e) {
+    s = String(value || '');
+  }
+  return s
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function admNormalizeCode_(value) {
+  try {
+    return String(value || '').normalize('NFC').toUpperCase().trim();
+  } catch (e) {
+    return String(value || '').toUpperCase().trim();
+  }
 }
 
 function adm_loadNewProductFlags() {
@@ -3280,8 +3293,8 @@ function adm_loadNewProductFlags() {
   var meta = document.getElementById('adm-new-meta');
   if (meta) meta.innerText = 'Đang tải danh mục...';
   showLoad('Đang tải danh mục Hàng Mới...');
-  // Tải full danh sách; lọc client-side theo ô searchNewProductInput
-  apiGet('getCatalogIsNewAdminList', { q: '', limit: 250 }, { timeoutMs: 60000 }).then(function(res) {
+  // Quét gần như toàn bộ Data_Excel (không cắt 250 như trước)
+  apiGet('getCatalogIsNewAdminList', { q: '', limit: 20000 }, { timeoutMs: 90000 }).then(function(res) {
     hideLoad();
     if (!res || !res.success) throw new Error((res && res.error) || 'Không tải được danh mục.');
     admNewProductRows_ = Array.isArray(res.items) ? res.items : [];
@@ -3293,25 +3306,89 @@ function adm_loadNewProductFlags() {
   });
 }
 
+function adm_itemMatchesNewProductQuery_(it, qRaw) {
+  if (!it) return false;
+  var qCode = admNormalizeCode_(qRaw);
+  var qFold = admNormalizeSearch_(qRaw);
+  if (!qCode && !qFold) return true;
+  var ma = String(it.maHang || it.maSP || '');
+  var mv = String(it.maVach || '');
+  var th = String(it.tenHang || '');
+  var parent = String(it.parentSku || '');
+  var dvt = String(it.dvt || '');
+  // SKU / barcode: match NFC uppercase (không phân biệt hoa/thường)
+  if (qCode) {
+    if (admNormalizeCode_(ma).indexOf(qCode) !== -1) return true;
+    if (admNormalizeCode_(mv).indexOf(qCode) !== -1) return true;
+    if (admNormalizeCode_(parent).indexOf(qCode) !== -1) return true;
+  }
+  // Tên / toàn bộ: fold dấu + NFC
+  var hay = admNormalizeSearch_([ma, mv, th, parent, dvt].join(' '));
+  return !!(qFold && hay.indexOf(qFold) !== -1);
+}
+
 function adm_getFilteredNewProductIndexes_() {
   var qEl = document.getElementById('searchNewProductInput') || document.getElementById('adm-new-q');
-  var q = admNormalizeSearch_(qEl ? qEl.value : admNewProductFilterQ_);
-  admNewProductFilterQ_ = q;
+  var qRaw = qEl ? String(qEl.value || '') : String(admNewProductFilterQ_ || '');
+  try {
+    qRaw = qRaw.normalize('NFC');
+  } catch (e) {}
+  admNewProductFilterQ_ = admNormalizeSearch_(qRaw);
   var indexes = [];
   for (var i = 0; i < admNewProductRows_.length; i++) {
     var it = admNewProductRows_[i];
     if (!it) continue;
-    if (!q) {
+    if (!String(qRaw || '').trim()) {
       indexes.push(i);
       continue;
     }
-    var hay = admNormalizeSearch_([it.maHang, it.maVach, it.tenHang, it.dvt].join(' '));
-    if (hay.indexOf(q) !== -1) indexes.push(i);
+    if (adm_itemMatchesNewProductQuery_(it, qRaw)) indexes.push(i);
   }
   return indexes;
 }
 
 function adm_filterNewProductFlags() {
+  var qEl = document.getElementById('searchNewProductInput') || document.getElementById('adm-new-q');
+  var qRaw = qEl ? String(qEl.value || '').trim() : '';
+  var indexes = adm_getFilteredNewProductIndexes_();
+  // Nếu local không khớp (danh sách cũ / chưa reload) → hỏi server theo q
+  if (qRaw && !indexes.length) {
+    var meta = document.getElementById('adm-new-meta');
+    if (meta) meta.innerText = 'Đang tìm trên server: "' + qRaw + '"...';
+    apiGet('getCatalogIsNewAdminList', { q: qRaw, limit: 500 }, { timeoutMs: 60000 }).then(function(res) {
+      if (!res || !res.success) {
+        adm_renderNewProductFlags_();
+        return;
+      }
+      var remote = Array.isArray(res.items) ? res.items : [];
+      if (!remote.length) {
+        adm_renderNewProductFlags_();
+        return;
+      }
+      // Merge remote vào cache theo maHang (không mất tick cục bộ nếu trùng)
+      var byKey = {};
+      admNewProductRows_.forEach(function(row, idx) {
+        var k = admNormalizeCode_(row && (row.maHang || row.maSP));
+        if (k) byKey[k] = idx;
+      });
+      remote.forEach(function(row) {
+        var k = admNormalizeCode_(row && (row.maHang || row.maSP));
+        if (!k) return;
+        if (byKey.hasOwnProperty(k)) {
+          var prev = admNewProductRows_[byKey[k]];
+          if (prev && typeof prev.isNew === 'boolean') row.isNew = prev.isNew;
+          admNewProductRows_[byKey[k]] = row;
+        } else {
+          byKey[k] = admNewProductRows_.length;
+          admNewProductRows_.push(row);
+        }
+      });
+      adm_renderNewProductFlags_();
+    }).catch(function() {
+      adm_renderNewProductFlags_();
+    });
+    return;
+  }
   adm_renderNewProductFlags_();
 }
 

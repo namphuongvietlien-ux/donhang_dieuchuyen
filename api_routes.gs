@@ -255,7 +255,8 @@ function doGet(e) {
           res = getNewProductsList(e.parameter.limit || NEW_PRODUCTS_DEFAULT_LIMIT);
           break;
         case 'getCatalogIsNewAdminList':
-          res = getCatalogIsNewAdminList_(e.parameter.q || '', e.parameter.limit || 200);
+          // Default cao: quét gần như toàn bộ catalog (FE Admin Hàng Mới)
+          res = getCatalogIsNewAdminList_(e.parameter.q || '', e.parameter.limit || 20000);
           break;
         case 'getVariantStockList':
           res = getVariantStockList(e.parameter.parentSku || e.parameter.parent || '');
