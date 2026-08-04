@@ -1004,11 +1004,48 @@ function catalogNowStamp_() {
 }
 
 
-/** Ghi catalog từ entries gọn {mh,mv,th,d,p,n} — layout Data_Excel + Parent_SKU + IsNew */
+/**
+ * Đọc map IsNew hiện có trên Data_Excel (theo MH / MV) — dùng giữ lại khi import ghi đè catalog.
+ */
+function readCatalogIsNewFlagMap_(ss) {
+  ss = ss || getSS();
+  var sh = ss.getSheetByName("Data_Excel");
+  var map = {};
+  if (!sh || sh.getLastRow() < 2) return map;
+  try {
+    var width = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
+    var values = sh.getRange(1, 1, sh.getLastRow(), width).getValues();
+    var header = values[0] || [];
+    var parentIdx = findCatalogParentColIdx_(header);
+    var mhIdx = findCatalogMaHangColIdx_(header, parentIdx);
+    if (mhIdx === -1) mhIdx = 0;
+    var mvIdx = findColumnIndexByAliases(header, ["mavach", "barcode", "barcodeid"]);
+    if (mvIdx === -1) mvIdx = 2;
+    var isNewIdx = findColumnIndexByAliases(header, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
+    if (isNewIdx === -1) isNewIdx = 10;
+    for (var r = 1; r < values.length; r++) {
+      var flagRaw = String(values[r][isNewIdx] == null ? "" : values[r][isNewIdx]).trim().toLowerCase();
+      var isNew = flagRaw === "1" || flagRaw === "true" || flagRaw === "yes" || flagRaw === "x" || flagRaw === "moi" || flagRaw === "new";
+      if (!isNew) continue;
+      var mh = String(values[r][mhIdx] == null ? "" : values[r][mhIdx]).trim().toUpperCase();
+      var mv = String(values[r][mvIdx] == null ? "" : values[r][mvIdx]).trim().toUpperCase();
+      if (mh) map["MH:" + mh] = true;
+      if (mv) map["MV:" + mv] = true;
+    }
+  } catch (e) {}
+  return map;
+}
+
+
+/** Ghi catalog từ entries gọn {mh,mv,th,d,p,n} — layout Data_Excel + Parent_SKU + IsNew.
+ *  Khi reset/import: GIỮ IsNew Admin đã tick (không tự gắn mới theo ngày/file).
+ */
 function writeCatalogEntriesToSheet_(ss, entries, reset) {
   ss = ss || getSS();
   var sh = getOrCreateCatalogSheet(ss);
   var t0 = Date.now();
+  // Snapshot IsNew trước khi xóa — import danh mục không được làm mất tick Admin
+  var preservedIsNew = readCatalogIsNewFlagMap_(ss);
   if (reset) {
     var oldLastRow = sh.getLastRow();
     var oldLastCol = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
@@ -1025,6 +1062,7 @@ function writeCatalogEntriesToSheet_(ss, entries, reset) {
   var rows = [];
   var withDvt = 0;
   var withParent = 0;
+  var preservedCount = 0;
   var stamp = catalogNowStamp_();
   for (var i = 0; i < (entries || []).length; i++) {
     var e = entries[i];
@@ -1034,11 +1072,18 @@ function writeCatalogEntriesToSheet_(ss, entries, reset) {
     var th = String(e.th || "").trim();
     var d = String(e.d || "").trim();
     var p = String(e.p || e.parentSku || "").trim();
-    var nFlag = e.n === true || e.isNew === true || e.n === 1 || e.n === "1" ? "TRUE" : "";
+    // Chỉ ghi IsNew khi payload chủ động gửi — hoặc khôi phục tick Admin cũ
+    var nFlag = "";
+    if (e.n === true || e.isNew === true || e.n === 1 || e.n === "1") {
+      nFlag = "TRUE";
+    } else if (preservedIsNew["MH:" + mh.toUpperCase()] || preservedIsNew["MV:" + mv.toUpperCase()]) {
+      nFlag = "TRUE";
+      preservedCount++;
+    }
     if (!mh && !mv) continue;
     if (d) withDvt++;
     if (p) withParent++;
-    // Cột I (Ngày tạo): luôn stamp thời điểm import/tạo SP
+    // Cột I (Ngày tạo): stamp thời điểm import — KHÔNG dùng để auto gắn Hàng mới
     rows.push([mh, "", mv, "", "", th, "", d, stamp.date, p, nFlag]);
   }
   if (rows.length) {
@@ -1054,6 +1099,7 @@ function writeCatalogEntriesToSheet_(ss, entries, reset) {
     rows: rows.length,
     withDvt: withDvt,
     withParent: withParent,
+    preservedIsNew: preservedCount,
     totalRows: Math.max(sh.getLastRow() - 1, 0),
     ms: Date.now() - t0,
     ngayTaoStamp: stamp.text
@@ -1586,6 +1632,10 @@ function nhapKhauCapNhatThongTin(payload) {
       catalogSheet.getRange(1, 9).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
     } catch (eNg) {}
   }
+  var cIsNew = findColumnIndexByAliases(catalogHeader, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
+  if (cIsNew === -1) cIsNew = 10;
+  // Giữ tick IsNew Admin trước khi xóa/ghi đè danh mục
+  var preservedIsNewLegacy = readCatalogIsNewFlagMap_(ss);
   if (catalogSheet.getLastRow() >= catalogStartRow) {
     catalogSheet.getRange(catalogStartRow, 1, catalogSheet.getLastRow() - catalogStartRow + 1, catalogColumnCount).clearContent();
   }
@@ -1600,6 +1650,11 @@ function nhapKhauCapNhatThongTin(payload) {
       rowOut[cTenHang] = catalogRows[c].tenHang;
       rowOut[cDvt] = catalogRows[c].dvt;
       rowOut[cNgayTao] = importStamp.date;
+      var mhU = String(catalogRows[c].maHang || "").trim().toUpperCase();
+      var mvU = String(catalogRows[c].maVach || "").trim().toUpperCase();
+      if (preservedIsNewLegacy["MH:" + mhU] || preservedIsNewLegacy["MV:" + mvU]) {
+        rowOut[cIsNew] = "TRUE";
+      }
       catalogWrite.push(rowOut);
     }
     catalogSheet.getRange(catalogStartRow, 1, catalogWrite.length, catalogColumnCount).setValues(catalogWrite);
@@ -1673,17 +1728,32 @@ function getBootstrapData() {
 }
 
 
-function getCatalogData() {
+function getCatalogData(forceRefresh) {
   try {
     var version = getCatalogVersion_();
     var cacheKey = CACHE_CATALOG_PREFIX + version;
     var cache = getScriptCache_();
+    var force = forceRefresh === true || forceRefresh === 1 || forceRefresh === "1" ||
+      forceRefresh === "true" || forceRefresh === "yes";
     // Cache chunked — hỗ trợ catalog > 90KB (tránh miss cache khiến đọc sheet mỗi lần)
-    var cached = getCacheJson_(cache, cacheKey);
-    if (cached && cached.success && cached.danhMuc) return cached;
+    if (!force) {
+      var cached = getCacheJson_(cache, cacheKey);
+      if (cached && cached.success && cached.danhMuc) return cached;
+    }
 
     var danhMuc = buildCatalogFromSheet_(getSS());
-    var result = { success: true, danhMuc: danhMuc, version: version };
+    var keys = 0;
+    for (var k in danhMuc) {
+      if (Object.prototype.hasOwnProperty.call(danhMuc, k)) keys++;
+    }
+    var result = {
+      success: true,
+      danhMuc: danhMuc,
+      version: version,
+      keyCount: keys,
+      forced: !!force,
+      _debugRun: force ? "catalog-nocache-v1" : "catalog-cache-v1"
+    };
     try {
       putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS);
     } catch (e) {}
@@ -1718,16 +1788,11 @@ function parseCatalogNgayTaoCell_(rawNgay, tz) {
 
 
 /**
- * Hàng mới thông minh:
- * 1) Admin tick IsNew
- * 2) Nếu có NgayTao đủ dữ liệu → sort giảm dần
- * 3) Nếu thiếu/trống NgayTao → quét ngược từ dòng CUỐI Data_Excel
- * 4) Lấp đầy Top 8
+ * Hàng mới: CHỈ Admin tick cột IsNew trên Data_Excel.
+ * Không tự gắn theo Ngày tạo / cuối bảng — tránh lệch khi import tồn/danh mục.
  */
 function getAutoNewProductsList_(ss, limit) {
-  var FILL_MIN = 8;
-  limit = Math.max(1, Math.min(Number(limit) || NEW_PRODUCTS_DEFAULT_LIMIT, 20));
-  var FILL_MAX = Math.max(FILL_MIN, Math.min(limit, 10));
+  limit = Math.max(1, Math.min(Number(limit) || NEW_PRODUCTS_DEFAULT_LIMIT, 50));
   ss = ss || getSS();
   var dataSheet = ss.getSheetByName("Data_Excel");
   if (!dataSheet) return [];
@@ -1760,25 +1825,16 @@ function getAutoNewProductsList_(ss, limit) {
   var maVachIdx = findColumnIndexByAliases(headerRow, ["mavach", "barcode", "barcodeid"]);
   var tenHangIdx = findColumnIndexByAliases(headerRow, ["tenhang", "name", "tênhang", "description"]);
   var dvtIdx = findColumnIndexByAliases(headerRow, ["dvt", "donvitinh", "donvi", "unit", "uom"]);
-  // Không dùng alias "created"/"timestamp" quá rộng — tránh khớp nhầm cột
   var ngayTaoIdx = findColumnIndexByAliases(headerRow, ["ngaytao", "createdat", "ngaythem", "importedat"]);
-  if (ngayTaoIdx === -1 && headerRow && headerRow.length >= 9) {
-    var hI = normalizeHeaderText(headerRow[8]);
-    if (!hI || hI.indexOf("ngay") !== -1 || hI.indexOf("tao") !== -1 || hI.indexOf("created") !== -1) ngayTaoIdx = 8;
-  }
+  if (ngayTaoIdx === -1 && headerRow && headerRow.length >= 9) ngayTaoIdx = 8;
   var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
   if (isNewIdx === -1 && headerRow && headerRow.length >= 11) isNewIdx = 10;
   if (parentSkuIdxNp === -1 && headerRow && headerRow.length >= 10) parentSkuIdxNp = 9;
   var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
   var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
 
-  // Quét 1 lần: giữ bản ghi cuối cùng của mỗi key (dòng dưới = mới hơn khi import append)
   var byKey = {};
-  var datedCount = 0;
-  var orderedBottomUp = []; // unique keys từ dưới lên
-  var seenBottom = {};
-
-  for (var i = rawData.length - 1; i >= startRow; i--) {
+  for (var i = startRow; i < rawData.length; i++) {
     if (!rawData[i]) continue;
     var maHang = getCellValue(rawData[i], maHangIdx !== -1 ? maHangIdx : 0, "");
     var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
@@ -1787,104 +1843,45 @@ function getAutoNewProductsList_(ss, limit) {
     var parentSkuNp = parentSkuIdxNp !== -1 ? getCellValue(rawData[i], parentSkuIdxNp, "") : "";
     if (!maHang && !maVach) continue;
 
-    var key = String(maHang || maVach).trim().toUpperCase();
-    if (!key) continue;
-
-    var ngayInfo = ngayTaoIdx !== -1
-      ? parseCatalogNgayTaoCell_(rawData[i][ngayTaoIdx], tz)
-      : { ms: 0, label: "" };
-
     var flaggedNew = false;
     if (isNewIdx !== -1) {
       var flagVal = String(rawData[i][isNewIdx] == null ? "" : rawData[i][isNewIdx]).trim().toLowerCase();
       flaggedNew = flagVal === "1" || flagVal === "true" || flagVal === "yes" || flagVal === "x" || flagVal === "moi" || flagVal === "new";
     }
+    if (!flaggedNew) continue;
 
+    var key = String(maHang || maVach).trim().toUpperCase();
+    if (!key) continue;
+    var ngayInfo = ngayTaoIdx !== -1
+      ? parseCatalogNgayTaoCell_(rawData[i][ngayTaoIdx], tz)
+      : { ms: 0, label: "" };
     var sheetRow = i + 1;
-    if (!byKey[key]) {
-      byKey[key] = {
-        maHang: maHang,
-        maVach: maVach,
-        tenHang: tenHang,
-        dvt: dvt || "",
-        parentSku: parentSkuNp || "",
-        sheetRow: sheetRow,
-        ngayMs: ngayInfo.ms || 0,
-        ngayTao: ngayInfo.label || "",
-        isNew: flaggedNew
-      };
-      if (ngayInfo.ms > 0) datedCount++;
-      if (!seenBottom[key]) {
-        seenBottom[key] = true;
-        orderedBottomUp.push(key); // đã đi từ dưới lên → thứ tự "mới nhất trước"
-      }
-    } else if (flaggedNew) {
-      byKey[key].isNew = true;
-    }
+    byKey[key] = {
+      maHang: maHang,
+      maVach: maVach,
+      tenHang: tenHang,
+      dvt: dvt || "",
+      parentSku: parentSkuNp || "",
+      sheetRow: sheetRow,
+      ngayMs: ngayInfo.ms || 0,
+      ngayTao: ngayInfo.label || "",
+      isNew: true,
+      isAdminPick: true,
+      sourceReason: "admin",
+      reasonLabel: "ADMIN CHỌN"
+    };
   }
 
-  // Bước 1: Admin tick
-  var flagged = [];
-  var flaggedKeys = {};
+  var top = [];
   for (var k in byKey) {
     if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
-    if (byKey[k].isNew) {
-      flagged.push(byKey[k]);
-      flaggedKeys[k] = true;
-    }
+    top.push(byKey[k]);
   }
-  flagged.sort(function(a, b) {
+  top.sort(function(a, b) {
     if ((b.ngayMs || 0) !== (a.ngayMs || 0)) return (b.ngayMs || 0) - (a.ngayMs || 0);
     return (b.sheetRow || 0) - (a.sheetRow || 0);
   });
-
-  // Bước 2: NgayTao đủ dữ liệu? (>= 8 mã có mốc) — nếu không → bottom-up
-  var hasUsableNgayTao = ngayTaoIdx !== -1 && datedCount >= FILL_MIN;
-  var autoCandidates = [];
-  if (hasUsableNgayTao) {
-    for (var k2 in byKey) {
-      if (!Object.prototype.hasOwnProperty.call(byKey, k2)) continue;
-      if (flaggedKeys[k2]) continue;
-      autoCandidates.push(byKey[k2]);
-    }
-    autoCandidates.sort(function(a, b) {
-      if ((b.ngayMs || 0) !== (a.ngayMs || 0)) return (b.ngayMs || 0) - (a.ngayMs || 0);
-      return (b.sheetRow || 0) - (a.sheetRow || 0);
-    });
-  } else {
-    // Bước 2 fallback: quét ngược — orderedBottomUp đã là dòng cuối → đầu
-    for (var bi = 0; bi < orderedBottomUp.length; bi++) {
-      var bk = orderedBottomUp[bi];
-      if (flaggedKeys[bk]) continue;
-      autoCandidates.push(byKey[bk]);
-    }
-  }
-
-  // Bước 3: gom Admin → lấp đầy Top 8
-  var top = [];
-  for (var fi = 0; fi < flagged.length; fi++) {
-    var fItem = flagged[fi];
-    fItem.isNew = true;
-    fItem.isAdminPick = true;
-    fItem.sourceReason = "admin";
-    fItem.reasonLabel = "ADMIN CHỌN";
-    top.push(fItem);
-  }
-  if (top.length < FILL_MIN) {
-    for (var oi = 0; oi < autoCandidates.length && top.length < FILL_MAX; oi++) {
-      var oItem = autoCandidates[oi];
-      oItem.isNew = false;
-      oItem.isAdminPick = false;
-      if (hasUsableNgayTao && oItem.ngayMs > 0) {
-        oItem.sourceReason = "auto_date";
-        oItem.reasonLabel = oItem.ngayTao ? ("Ngày tạo: " + oItem.ngayTao) : "Mới theo ngày";
-      } else {
-        oItem.sourceReason = "auto_bottom";
-        oItem.reasonLabel = "Cuối bảng · dòng " + (oItem.sheetRow || "?");
-      }
-      top.push(oItem);
-    }
-  }
+  if (top.length > limit) top = top.slice(0, limit);
   for (var t = 0; t < top.length; t++) top[t].rank = t + 1;
   return top;
 }
@@ -1911,7 +1908,7 @@ function getNewProductsList(limit) {
       data: data,
       limit: lim,
       source: "Data_Excel",
-      strategy: "admin_isNew_then_ngayTao_or_bottom_up_fill_8"
+      strategy: "admin_isNew_only"
     };
     try { putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS); } catch (e) {}
     return result;

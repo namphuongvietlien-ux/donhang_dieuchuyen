@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v61-preserve-d-stroke';
+var APP_BUILD = '2026-08-04-v63-flexible-search';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -515,7 +515,7 @@ function renderAdminStoreDropdown() {
 }
 
 function loadCatalogInBackground(forceReload, expectedVersion) {
-  if (catalogLoadState.loading) return Promise.resolve();
+  if (catalogLoadState.loading && !forceReload) return Promise.resolve();
   var cached = !forceReload ? readCatalogFromLocalStorage(expectedVersion) : null;
   if (cached && cached.danhMuc) {
     applyCatalogData(cached);
@@ -525,7 +525,8 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
 
   catalogLoadState.loading = true;
   setCatalogStatus('Đang tải danh mục hàng ở nền...');
-  return apiGet('getCatalogData').then(function(res) {
+  var params = forceReload ? { nocache: '1', _ts: String(Date.now()) } : null;
+  return apiGet('getCatalogData', params, { timeoutMs: 180000, allowDirectFallback: true }).then(function(res) {
     catalogLoadState.loading = false;
     if (!res || !res.success) {
       setCatalogStatus('Danh mục chưa tải xong - thử lại sau vài giây');
@@ -533,12 +534,37 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
     }
     applyCatalogData(res);
     saveCatalogToLocalStorage(res);
-    setCatalogStatus('Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:');
+    var count = danhMucArr ? danhMucArr.length : 0;
+    setCatalogStatus('Quét / gõ tên (có hoặc không dấu) · ' + count + ' mã sẵn sàng');
     return res;
   }).catch(function(err) {
     catalogLoadState.loading = false;
     setCatalogStatus('Lỗi tải danh mục: ' + err.message);
     throw err;
+  });
+}
+
+/** Xóa cache local + gọi getCatalogData?nocache=1 lấy full Data_Excel mới nhất */
+function reloadCatalogNow_() {
+  clearCatalogLocalStorage();
+  showLoad('Đang tải lại toàn bộ danh mục từ Data_Excel...');
+  return loadCatalogInBackground(true).then(function(res) {
+    hideLoad();
+    var n = danhMucArr ? danhMucArr.length : 0;
+    if (!res || !res.success) {
+      alert('Không tải được danh mục: ' + ((res && res.error) || 'unknown'));
+      return res;
+    }
+    alert('✅ Đã tải lại danh mục: ' + n + ' sản phẩm (version: ' + (res.version || catalogLoadState.version || '-') + ').');
+    var input = document.getElementById('input-scan');
+    if (input) {
+      input.focus();
+      if (input.value && input.value.trim()) handleSearchInput({ key: '' });
+    }
+    return res;
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi tải lại danh mục: ' + (err && err.message || err));
   });
 }
 
@@ -594,11 +620,7 @@ function renderNewProductsHighlight() {
     var mv = escapeHtml(item.maVach || '-');
     var dvt = escapeHtml(item.dvt || 'Cái');
     var ngay = escapeHtml(item.ngayTao || '');
-    var isAdmin = !!(item.isAdminPick || item.sourceReason === 'admin');
-    var reasonText = escapeHtml(item.reasonLabel || (isAdmin ? 'ADMIN CHỌN' : (ngay || 'Cuối bảng')));
-    var reasonBadge = isAdmin
-      ? '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:800;background:#dbeafe;color:#1d4ed8;">ADMIN CHỌN</span>'
-      : '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;background:#ffedd5;color:#9a3412;">' + reasonText + '</span>';
+    var reasonBadge = '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:800;background:#dbeafe;color:#1d4ed8;">ADMIN CHỌN</span>';
     var payload = encodeURIComponent(JSON.stringify({
       maHang: item.maHang || '',
       maVach: item.maVach || '',
@@ -612,7 +634,7 @@ function renderNewProductsHighlight() {
           reasonBadge +
         '</div>' +
         '<div class="np-title">' + title + '</div>' +
-        '<div class="np-meta">MH: ' + mh + ' · MV: ' + mv + ' · ĐVT: ' + dvt + '</div>' +
+        '<div class="np-meta">MH: ' + mh + ' · MV: ' + mv + ' · ĐVT: ' + dvt + (ngay ? (' · ' + ngay) : '') + '</div>' +
         '<div class="np-actions"><span class="np-btn">➕ Thêm vào đơn</span></div>' +
       '</button>';
   }).join('');
@@ -1011,6 +1033,7 @@ function applyQuyenKho() {
 /** Chuẩn hóa mã MISA / mã hàng / số HĐ — GIỮ chữ Đ/đ (HĐC… ≠ HDC…) */
 function normalizeMisaCode_(value) {
   return String(value || '')
+    .normalize('NFC')
     .replace(/[^a-zA-Z0-9Đđ]/g, '')
     .trim()
     .toUpperCase();
@@ -1020,42 +1043,124 @@ function normalizeProductCodeClient_(value) {
   return normalizeMisaCode_(value);
 }
 
+/** NFC + lower — nền tảng so khớp */
+function toSearchNfcLower_(value) {
+  try {
+    return String(value == null ? '' : value).normalize('NFC').toLowerCase().trim();
+  } catch (e) {
+    return String(value == null ? '' : value).toLowerCase().trim();
+  }
+}
+
+/**
+ * Form giữ đ (bỏ dấu tổ hợp á→a, ư→u…) — khớp tên có dấu đã gõ / mã có Đ.
+ * VD: "Sữa Tắm" → "sua tam", "HĐC1007" → "hđc1007"
+ */
 function normalizeSearchText(value) {
-  // Giữ đ/Đ khi tìm mã; chỉ bỏ dấu tổ hợp (á→a), không map Đ→D và không xóa Đ
-  return String(value || "")
-    .toLowerCase()
+  return toSearchNfcLower_(value)
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9đ\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
-function getSearchScore(item, query) {
+/**
+ * Form không dấu hoàn toàn (đ→d) — gõ "sua tam" / "duong" vẫn ra "sữa tắm" / "đường".
+ */
+function foldSearchText_(value) {
+  return normalizeSearchText(value).replace(/đ/g, 'd');
+}
+
+function getSearchFields_(item) {
+  if (!item) return [];
+  return [
+    item.maHang,
+    item.maVach,
+    item.tenHang,
+    item.parentSku,
+    item.Parent_SKU,
+    item.dvt
+  ].filter(function(v) { return v != null && String(v).trim() !== ''; });
+}
+
+function tokensAllMatch_(haystack, tokens) {
+  if (!tokens || !tokens.length) return false;
+  for (var i = 0; i < tokens.length; i++) {
+    if (!tokens[i] || haystack.indexOf(tokens[i]) === -1) return false;
+  }
+  return true;
+}
+
+function scoreFieldAgainstQuery_(field, qKeep, qFold, qRawNfc, qCode) {
+  if (field == null || field === '') return 0;
   var score = 0;
-  var fields = [item.maHang, item.maVach, item.tenHang];
-  var q = normalizeSearchText(query);
-  if (!q) return 0;
-  fields.forEach(function(field) {
-    var norm = normalizeSearchText(field);
-    if (!norm) return;
-    if (norm === q) score += 1000;
-    else if (norm.indexOf(q) === 0) score += 600;
-    else if (norm.indexOf(q) !== -1) score += 250;
+  var raw = toSearchNfcLower_(field);
+  var keep = normalizeSearchText(field);
+  var fold = foldSearchText_(field);
+  var code = normalizeMisaCode_(field);
+
+  // Khớp mã chính xác / prefix (giữ Đ)
+  if (qCode && code) {
+    if (code === qCode) score = Math.max(score, 1200);
+    else if (code.indexOf(qCode) === 0) score = Math.max(score, 700);
+    else if (qCode.length >= 6 && code.slice(-6) === qCode.slice(-6)) score = Math.max(score, 500);
+    else if (code.indexOf(qCode) !== -1) score = Math.max(score, 320);
+  }
+
+  // Khớp có dấu / giữ đ
+  if (qKeep) {
+    if (keep === qKeep || raw === qRawNfc) score = Math.max(score, 1000);
+    else if (keep.indexOf(qKeep) === 0 || raw.indexOf(qRawNfc) === 0) score = Math.max(score, 650);
+    else if (keep.indexOf(qKeep) !== -1 || raw.indexOf(qRawNfc) !== -1) score = Math.max(score, 280);
     else {
-      var parts = q.split(/\s+/).filter(Boolean);
-      var matchedParts = parts.filter(function(part) { return norm.indexOf(part) !== -1; }).length;
-      if (matchedParts > 0) score += matchedParts * 80;
+      var partsKeep = qKeep.split(/\s+/).filter(Boolean);
+      if (partsKeep.length > 1 && tokensAllMatch_(keep, partsKeep)) score = Math.max(score, partsKeep.length * 90);
     }
-    if (field === item.maVach && norm.length >= 6 && q.length >= 6 && norm.slice(-6) === q.slice(-6)) score += 180;
-  });
+  }
+
+  // Khớp không dấu (đ→d)
+  if (qFold) {
+    if (fold === qFold) score = Math.max(score, 950);
+    else if (fold.indexOf(qFold) === 0) score = Math.max(score, 600);
+    else if (fold.indexOf(qFold) !== -1) score = Math.max(score, 260);
+    else {
+      var partsFold = qFold.split(/\s+/).filter(Boolean);
+      if (partsFold.length > 1 && tokensAllMatch_(fold, partsFold)) score = Math.max(score, partsFold.length * 85);
+    }
+  }
+
   return score;
+}
+
+function getSearchScore(item, rawQuery) {
+  var qRaw = String(rawQuery == null ? '' : rawQuery).trim();
+  if (!qRaw) return 0;
+  var qRawNfc = toSearchNfcLower_(qRaw);
+  var qKeep = normalizeSearchText(qRaw);
+  var qFold = foldSearchText_(qRaw);
+  var qCode = normalizeMisaCode_(qRaw);
+  if (!qKeep && !qFold && !qCode) return 0;
+
+  var fields = getSearchFields_(item);
+  var best = 0;
+  for (var i = 0; i < fields.length; i++) {
+    var s = scoreFieldAgainstQuery_(fields[i], qKeep, qFold, qRawNfc, qCode);
+    if (s > best) best = s;
+  }
+  // Bonus nhẹ khi khớp cả cụm trên tên
+  if (item && item.tenHang) {
+    var nameFold = foldSearchText_(item.tenHang);
+    if (qFold && nameFold.indexOf(qFold) !== -1) best += 40;
+  }
+  return best;
 }
 
 function handleSearchInput(e) {
   if (!catalogLoadState.ready) {
     var box = document.getElementById("suggest-box");
     if (box) {
-      box.innerHTML = '<div class="suggest-empty">Danh mục hàng đang tải. Vui lòng đợi vài giây...</div>';
+      box.innerHTML = '<div class="suggest-empty">Danh mục hàng đang tải. Vui lòng đợi vài giây... <a href="javascript:void(0)" onclick="reloadCatalogNow_()">Tải lại</a></div>';
       box.style.display = "block";
     }
     return;
@@ -1066,24 +1171,28 @@ function handleSearchInput(e) {
   box.style.width = (inputEl.offsetWidth) + "px"; box.style.left = (inputEl.offsetLeft) + "px"; box.style.top = (inputEl.offsetTop + inputEl.offsetHeight) + "px";
 
   if (val.length < 1) { box.style.display = "none"; return; }
-  var kw = val.toUpperCase();
 
-  if (e.key === "Enter") {
-    var exactMatch = danhMucGoc[kw];
+  if (e && e.key === "Enter") {
+    var exactKey = normalizeMisaCode_(val) || val.toUpperCase();
+    var exactMatch = danhMucGoc[exactKey] || danhMucGoc[val.toUpperCase()] || danhMucGoc[toSearchNfcLower_(val).toUpperCase()];
     if (exactMatch) chonSanPham(exactMatch);
     else {
-      var matched = filterProducts(kw);
+      var matched = filterProducts(val);
       if (matched.length > 0) chonSanPham(matched[0]);
       else { arrItems.unshift({ maHang: "LỖI MÃ", maVach: val, tenHang: "❌ Không tồn tại", dvt: "Lỗi", sl: "1" }); renderTable(); }
     }
     inputEl.value = ""; box.style.display = "none"; return;
   }
 
-  var results = filterProducts(kw);
-  if (results.length === 0) { box.innerHTML = '<div style="padding:10px; color:#d93025; text-align:center; font-weight:600;">Không tìm thấy sản phẩm phù hợp.</div>'; box.style.display = "block"; return; }
+  var results = filterProducts(val);
+  if (results.length === 0) {
+    box.innerHTML = '<div style="padding:10px; color:#d93025; text-align:center; font-weight:600;">Không tìm thấy sản phẩm phù hợp.<br><small style="color:#64748b;font-weight:500;">Thử <a href="javascript:void(0)" onclick="reloadCatalogNow_()">tải lại danh mục</a> nếu vừa cập nhật Data_Excel.</small></div>';
+    box.style.display = "block";
+    return;
+  }
 
   var html = "";
-  results.slice(0, 10).forEach(function(item) {
+  results.slice(0, 12).forEach(function(item) {
     var itemStr = encodeURIComponent(JSON.stringify(item));
     var newBadge = isNewProductItem_(item) ? ' <span class="badge-new">MỚI</span>' : '';
     var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
@@ -1093,14 +1202,15 @@ function handleSearchInput(e) {
 }
 
 function filterProducts(kw) {
-  var query = normalizeSearchText(kw);
+  var query = String(kw == null ? '' : kw).trim();
   if (!query) return [];
+  if (!danhMucArr || !danhMucArr.length) return [];
   var scored = danhMucArr.map(function(it) {
     return { item: it, score: getSearchScore(it, query) };
   }).filter(function(entry) {
     return entry.score > 0;
   }).sort(function(a, b) {
-    return b.score - a.score || String(a.item.tenHang || "").localeCompare(String(b.item.tenHang || ""));
+    return b.score - a.score || String(a.item.tenHang || "").localeCompare(String(b.item.tenHang || ""), 'vi');
   });
   var seenResults = {};
   return scored.filter(function(entry) {
@@ -4279,13 +4389,13 @@ function xb_handleSearchInput(e) {
   positionSuggestionBox(box, inputEl);
   var val = inputEl.value.trim();
   if (val.length < 1) { box.style.display = "none"; return; }
-  var kw = val.toUpperCase();
 
-  if (e.key === "Enter") {
-    var exactMatch = danhMucGoc[kw];
+  if (e && e.key === "Enter") {
+    var exactKey = normalizeMisaCode_(val) || val.toUpperCase();
+    var exactMatch = danhMucGoc[exactKey] || danhMucGoc[val.toUpperCase()];
     if (exactMatch) xb_chonSanPham(exactMatch);
     else {
-      var matched = filterProducts(kw);
+      var matched = filterProducts(val);
       if (matched.length > 0) xb_chonSanPham(matched[0]);
       else {
         xbItems.unshift({ maHang: "LỖI MÃ", maVach: val, tenHang: "❌ Không tồn tại", dvt: "Lỗi", sl: "1" });
@@ -4297,7 +4407,7 @@ function xb_handleSearchInput(e) {
     return;
   }
 
-  var results = filterProducts(kw);
+  var results = filterProducts(val);
   if (results.length === 0) {
     box.innerHTML = '<div class="suggest-empty">Không tìm thấy sản phẩm phù hợp.</div>';
     box.style.display = "block";

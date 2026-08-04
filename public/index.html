@@ -422,12 +422,14 @@
       <div class="card" style="padding-bottom: 20px; position: relative;">
         <div class="form-row" style="margin-bottom:10px;">
           <div class="form-group">
-            <label>Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:</label>
-            <input type="text" id="input-scan" placeholder="Nhập để tìm kiếm hoặc quét mã..." autocomplete="off" onkeyup="handleSearchInput(event)" style="border: 2px solid var(--primary); font-size:16px; font-weight: bold; padding: 12px; background: #f8f9fa;">
+            <label>Quét mã vạch, gõ mã, từ khóa tên (có/không dấu) hoặc 6 số cuối vạch:</label>
+            <input type="text" id="input-scan" placeholder="VD: sữa tắm / sua tam / mã hàng..." autocomplete="off"
+              oninput="handleSearchInput(event)" onkeyup="handleSearchInput(event)"
+              style="border: 2px solid var(--primary); font-size:16px; font-weight: bold; padding: 12px; background: #f8f9fa;">
           </div>
           <div class="form-group" style="max-width:180px;">
-            <label>Thao tác nhanh</label>
-            <button class="btn-submit" type="button" onclick="submitPhieuMoi()" style="padding:10px 12px; width:100%; border-radius:12px;">💾 Lưu phiếu</button>
+            <label>Danh mục</label>
+            <button class="btn-submit" type="button" onclick="reloadCatalogNow_()" style="padding:10px 12px; width:100%; border-radius:12px; background:#0f766e; box-shadow:none;">↻ Tải lại danh mục</button>
           </div>
         </div>
         
@@ -755,7 +757,8 @@
       <div class="card" style="border-left: 4px solid #ea580c;">
         <h3 style="margin-top:0;">Quản lý Hàng Mới (Badge NEW)</h3>
         <p style="font-size:13px; color:#64748b; margin-top:-4px;">
-          Tick sản phẩm để hiện badge <b>MỚI</b> khi đặt hàng / soạn hàng. Lưu batch vào cột <b>IsNew</b> trên Data_Excel.
+          <b>Chỉ Admin</b> tick sản phẩm để hiện badge <b>MỚI</b>. Không tự gắn theo ngày tạo hay dòng cuối bảng —
+          cập nhật file tồn / danh mục sẽ <b>giữ nguyên</b> các tick IsNew đã lưu trên Data_Excel.
         </p>
         <div class="form-row" style="align-items:end;">
           <div class="form-group" style="flex:1;">
@@ -831,6 +834,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260804v61"></script>
+  <script src="app.js?v=20260804v63"></script>
 </body>
 </html>

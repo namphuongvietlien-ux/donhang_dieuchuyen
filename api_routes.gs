@@ -249,7 +249,7 @@ function doGet(e) {
           res = getBootstrapData();
           break;
         case 'getCatalogData':
-          res = getCatalogData();
+          res = getCatalogData(e.parameter.nocache || e.parameter.force || e.parameter.refresh);
           break;
         case 'getNewProductsList':
           res = getNewProductsList(e.parameter.limit || NEW_PRODUCTS_DEFAULT_LIMIT);
