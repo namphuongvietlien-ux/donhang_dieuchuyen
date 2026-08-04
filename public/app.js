@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v66-misa-upsert';
+var APP_BUILD = '2026-08-04-v67-invoice-pdf';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -4743,19 +4743,147 @@ function xb_loadRecent() {
       return;
     }
     var html = '<div style="overflow:auto;"><table style="width:100%; border-collapse:collapse; font-size:13px;">' +
-      '<thead><tr style="text-align:left; color:#64748b;"><th style="padding:6px 4px;">Mã XB</th><th>Số HĐ</th><th>Chi nhánh</th><th>SL dòng</th><th>Tổng SL</th><th>Người tạo</th></tr></thead><tbody>';
+      '<thead><tr style="text-align:left; color:#64748b;"><th style="padding:6px 4px;">Mã XB</th><th>Số HĐ / Mã chứng từ</th><th>Chi nhánh</th><th>SL dòng</th><th>Tổng SL</th><th>Người tạo</th></tr></thead><tbody>';
     rows.slice(0, 30).forEach(function(r) {
+      var soHdShow = String(r.soHoaDon || "").trim() || String(r.maPhieu || "").trim() || "-";
+      var soHdAttr = encodeURIComponent(String(r.soHoaDon || r.maPhieu || ""));
+      var mpAttr = encodeURIComponent(String(r.maPhieu || ""));
+      var hdLink = (soHdShow && soHdShow !== "-")
+        ? ('<a href="javascript:void(0)" class="invoice-pdf-link" title="Xem PDF hóa đơn" onclick="openInvoicePdfView(\'' + soHdAttr + '\',\'' + mpAttr + '\')">' + escapeHtml(soHdShow) + '</a>')
+        : escapeHtml(soHdShow);
       html += '<tr style="border-top:1px solid #e2e8f0;">' +
         '<td style="padding:7px 4px;"><b>' + escapeHtml(r.maPhieu) + '</b></td>' +
-        '<td>' + escapeHtml(r.soHoaDon) + '</td>' +
+        '<td>' + hdLink + '</td>' +
         '<td>' + escapeHtml(formatStoreShortLabel_(r.chiNhanh) || r.chiNhanh) + '</td>' +
         '<td>' + (r.itemCount || 0) + '</td>' +
         '<td>' + (r.tongSl || 0) + '</td>' +
         '<td>' + escapeHtml(r.actor || "") + '</td></tr>';
     });
     html += "</tbody></table></div>";
+    if (res && res.backfilledInvoiceCount) {
+      html = '<div style="margin-bottom:8px;font-size:12px;color:#64748b;">Đã tự điền ' + res.backfilledInvoiceCount + ' số HĐ còn trống (theo mã XB).</div>' + html;
+    }
     box.innerHTML = html;
   }).catch(function(err) {
     box.innerHTML = '<div style="color:#b91c1c;">Không tải được danh sách: ' + escapeHtml(err.message) + "</div>";
   });
+}
+
+/** Click Số HĐ → tab PDF chi tiết (giống Số phiếu ở Tổng quan) */
+function openInvoicePdfView(soHoaDonEncoded, maPhieuEncoded) {
+  var soHd = "";
+  var maPhieu = "";
+  try { soHd = decodeURIComponent(soHoaDonEncoded || ""); } catch (e) { soHd = String(soHoaDonEncoded || ""); }
+  try { maPhieu = decodeURIComponent(maPhieuEncoded || ""); } catch (e2) { maPhieu = String(maPhieuEncoded || ""); }
+  soHd = String(soHd || "").trim();
+  maPhieu = String(maPhieu || "").trim();
+  if (!soHd && !maPhieu) return alert("Thiếu số hóa đơn.");
+  showLoad("Đang tải hóa đơn " + (soHd || maPhieu) + "...");
+  apiGet("getInvoiceDetail", { soHoaDon: soHd, maPhieu: maPhieu }, { timeoutMs: 60000 }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) {
+      alert("Không tải được hóa đơn: " + ((res && res.error) || "unknown"));
+      return;
+    }
+    openInvoicePdfWindow_(res);
+  }).catch(function(err) {
+    hideLoad();
+    alert("Lỗi tải PDF hóa đơn: " + (err && err.message || err));
+  });
+}
+
+function openInvoicePdfWindow_(detail) {
+  if (!detail) return;
+  var w = window.open("", "_blank");
+  if (!w) {
+    alert("Trình duyệt chặn tab mới. Cho phép popup rồi thử lại.");
+    return;
+  }
+  w.document.open();
+  w.document.write(buildInvoicePdfHtml_(detail));
+  w.document.close();
+}
+
+function formatMoneyVn_(n) {
+  var x = Number(n);
+  if (!x || isNaN(x)) return "0";
+  try {
+    return Math.round(x).toLocaleString("vi-VN");
+  } catch (e) {
+    return String(Math.round(x));
+  }
+}
+
+function buildInvoicePdfHtml_(detail) {
+  var so = escapeHtml(detail.soHoaDon || "-");
+  var mp = escapeHtml(detail.maPhieu || "-");
+  var cn = escapeHtml(formatStoreShortLabel_(detail.chiNhanh) || detail.chiNhanh || "-");
+  var tg = escapeHtml(detail.thoiGian || "-");
+  var actor = escapeHtml(detail.actor || "-");
+  var productsHtml = "";
+  var stt = 1;
+  (detail.products || []).forEach(function(it) {
+    productsHtml += "<tr><td>" + (stt++) + "</td>" +
+      "<td class=\"code\">" + escapeHtml(it.maHang || "-") +
+      (it.maVach ? ("<br><small>MV: " + escapeHtml(it.maVach) + "</small>") : "") + "</td>" +
+      "<td>" + escapeHtml(it.tenHang || "-") + "</td>" +
+      "<td>" + escapeHtml(it.dvt || "") + "</td>" +
+      "<td class=\"qty\">" + (Number(it.sl) || 0) + "</td>" +
+      "<td class=\"money\">" + formatMoneyVn_(it.donGia) + "</td>" +
+      "<td class=\"money\">" + formatMoneyVn_(it.thanhTien) + "</td></tr>";
+  });
+  if (!productsHtml) {
+    productsHtml = '<tr><td colspan="7" style="text-align:center;color:#64748b;">Không có hàng hóa vật lý.</td></tr>';
+  }
+
+  var servicesHtml = "";
+  var sttDv = 1;
+  (detail.services || []).forEach(function(sv) {
+    servicesHtml += "<tr><td>" + (sttDv++) + "</td>" +
+      "<td class=\"code\">" + escapeHtml(sv.maDv || "-") + "</td>" +
+      "<td>" + escapeHtml(sv.tenDichVu || "-") + "</td>" +
+      "<td class=\"qty\">" + (Number(sv.sl) || 1) + "</td>" +
+      "<td class=\"money\">" + formatMoneyVn_(sv.chiPhiDv) + "</td>" +
+      "<td class=\"money\">" + formatMoneyVn_(sv.thanhTien) + "</td></tr>";
+  });
+  if (!servicesHtml) {
+    servicesHtml = '<tr><td colspan="6" style="text-align:center;color:#64748b;">Không có dịch vụ đi kèm trên phiếu này.</td></tr>';
+  }
+
+  var tongHang = formatMoneyVn_(detail.tongTienHang);
+  var tongDv = formatMoneyVn_(detail.tongTienDv);
+  var tongAll = formatMoneyVn_(detail.tongTien);
+
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hóa đơn ' + so + '</title>' +
+    "<style>" +
+    'body{font-family:"Segoe UI",Arial,sans-serif;margin:0;padding:24px;color:#0f172a;background:#f8fafc;}' +
+    ".sheet{max-width:960px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px 32px;box-shadow:0 8px 24px rgba(15,23,42,.06);}" +
+    ".toolbar{display:flex;gap:10px;justify-content:flex-end;margin-bottom:16px;}" +
+    ".toolbar button{border:none;background:#1a73e8;color:#fff;font-weight:700;padding:10px 16px;border-radius:8px;cursor:pointer;}" +
+    "h1{margin:0 0 6px;font-size:22px;} h2{margin:22px 0 8px;font-size:15px;color:#1e40af;}" +
+    ".meta{line-height:1.7;margin:12px 0 8px;color:#334155;}" +
+    "table{width:100%;border-collapse:collapse;margin-top:8px;} th,td{border:1px solid #cbd5e1;padding:8px 10px;font-size:13px;vertical-align:top;}" +
+    "th{background:#f1f5f9;text-align:left;} .code{font-weight:700;} .qty{text-align:center;font-weight:700;} .money{text-align:right;font-weight:600;}" +
+    ".totals{margin-top:18px;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;line-height:1.8;}" +
+    ".totals .grand{font-size:16px;font-weight:800;color:#0f172a;}" +
+    "@media print{.toolbar{display:none!important;} body{background:#fff;padding:0;} .sheet{box-shadow:none;border:none;border-radius:0;max-width:none;padding:0;} @page{margin:10mm;}}" +
+    "</style></head><body>" +
+    '<div class="toolbar"><button type="button" onclick="window.print()">🖨️ In Hóa Đơn</button></div>' +
+    '<div class="sheet"><h1>HÓA ĐƠN BÁN HÀNG KÈM DỊCH VỤ</h1>' +
+    '<div class="meta"><b>Số hóa đơn / Mã chứng từ:</b> ' + so +
+    "<br><b>Mã phiếu XB:</b> " + mp +
+    "<br><b>Chi nhánh:</b> " + cn +
+    "<br><b>Ngày chứng từ:</b> " + tg +
+    "<br><b>Người tạo:</b> " + actor + "</div>" +
+    "<h2>1. Hàng hóa vật lý</h2>" +
+    "<table><thead><tr><th>STT</th><th>SKU</th><th>Tên SP</th><th>ĐVT</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>" +
+    productsHtml + "</tbody></table>" +
+    "<h2>2. Dịch vụ đi kèm</h2>" +
+    "<table><thead><tr><th>STT</th><th>Mã DV</th><th>Tên dịch vụ</th><th>SL</th><th>Chi phí DV</th><th>Thành tiền</th></tr></thead><tbody>" +
+    servicesHtml + "</tbody></table>" +
+    '<div class="totals">' +
+    "<div>Tổng tiền hàng: <b>" + tongHang + "</b></div>" +
+    "<div>Tổng tiền dịch vụ: <b>" + tongDv + "</b></div>" +
+    '<div class="grand">Tổng cộng: ' + tongAll + "</div>" +
+    "</div></div></body></html>";
 }

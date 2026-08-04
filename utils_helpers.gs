@@ -334,6 +334,35 @@ function normalizeMisaDocumentCode_(value) {
 }
 
 
+/** Khớp số HĐ / mã chứng từ (giữ Đ; substring linh hoạt) */
+function invoiceKeysMatch_(left, right) {
+  var a = normalizeMisaDocumentCode_(left);
+  var b = normalizeMisaDocumentCode_(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.indexOf(b) !== -1 || b.indexOf(a) !== -1) return true;
+  return false;
+}
+
+
+/**
+ * Phân loại dòng xuất bán: HANG (vật lý) vs DV (dịch vụ đi kèm).
+ * Ưu tiên cột loaiDong; fallback heuristic theo mã/ĐVT/tên.
+ */
+function isXuatBanServiceLine_(maHang, tenHang, dvt, loaiDong) {
+  var loai = String(loaiDong || "").trim().toUpperCase();
+  if (loai === "DV" || loai === "DICHVU" || loai === "SERVICE" || loai === "DỊCH VỤ" || loai === "DICH VU") return true;
+  if (loai === "HANG" || loai === "SP" || loai === "PRODUCT") return false;
+  var mh = String(maHang || "").trim().toUpperCase();
+  var th = String(tenHang || "").trim().toUpperCase();
+  var dv = String(dvt || "").trim().toUpperCase();
+  if (mh.indexOf("DV-") === 0 || mh.indexOf("DV_") === 0 || mh === "DV") return true;
+  if (dv === "DV" || dv === "DICH VU" || dv === "DỊCH VỤ" || dv === "LAN" || dv === "LẦN") return true;
+  if (th.indexOf("DICH VU") === 0 || th.indexOf("DỊCH VỤ") === 0 || th.indexOf("PHÍ ") === 0) return true;
+  return false;
+}
+
+
 /** Khớp số phiếu linh hoạt: Q7-DC318957 ↔ DC-318957 (substring), vẫn phân biệt HĐC ≠ HDC */
 function orderKeysMatch_(left, right) {
   var a = normalizeOrderCodeText(left);

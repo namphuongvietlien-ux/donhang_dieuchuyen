@@ -270,6 +270,9 @@ function doGet(e) {
         case 'getOrderDetail':
           res = getOrderDetail(e.parameter.soPhieu || '');
           break;
+        case 'getInvoiceDetail':
+          res = getInvoiceDetail_(e.parameter.soHoaDon || e.parameter.soHd || '', e.parameter.maPhieu || '');
+          break;
         case 'layDanhSachPhieuTheoFilter':
           res = layDanhSachPhieuTheoFilter(e.parameter.khoNhan || '', e.parameter.ngay || '', e.parameter.userRole || '', e.parameter.userStore || '');
           break;
@@ -731,7 +734,7 @@ function ensureXuatBanHangSheet_(ss) {
   var sh = ss.getSheetByName(XUAT_BAN_SHEET_NAME);
   if (!sh) {
     sh = ss.insertSheet(XUAT_BAN_SHEET_NAME);
-    sh.getRange("A1:L1").setValues([[
+    sh.getRange("A1:P1").setValues([[
       "Thời gian tạo",
       "Số hóa đơn liên kết",
       "Mã phiếu XB",
@@ -743,19 +746,73 @@ function ensureXuatBanHangSheet_(ss) {
       "Số lượng",
       "Người tạo",
       "Ghi chú",
-      "Trạng thái"
+      "Trạng thái",
+      "Đơn giá",
+      "Thành tiền",
+      "Loại dòng",
+      "Chi phí DV"
     ]]).setFontWeight("bold").setBackground("#d9ead3");
     sh.setFrozenRows(1);
     try { sh.setColumnWidth(2, 160); sh.setColumnWidth(7, 280); } catch (e) {}
+  } else {
+    // Bổ sung cột mở rộng nếu sheet cũ chưa có
+    try {
+      var lastCol = sh.getLastColumn();
+      if (lastCol < 13 || !String(sh.getRange(1, 13).getValue() || "").trim()) {
+        sh.getRange(1, 13).setValue("Đơn giá").setFontWeight("bold").setBackground("#d9ead3");
+      }
+      if (lastCol < 14 || !String(sh.getRange(1, 14).getValue() || "").trim()) {
+        sh.getRange(1, 14).setValue("Thành tiền").setFontWeight("bold").setBackground("#d9ead3");
+      }
+      if (lastCol < 15 || !String(sh.getRange(1, 15).getValue() || "").trim()) {
+        sh.getRange(1, 15).setValue("Loại dòng").setFontWeight("bold").setBackground("#d9ead3");
+      }
+      if (lastCol < 16 || !String(sh.getRange(1, 16).getValue() || "").trim()) {
+        sh.getRange(1, 16).setValue("Chi phí DV").setFontWeight("bold").setBackground("#d9ead3");
+      }
+    } catch (eCol) {}
   }
   return sh;
+}
+
+
+/**
+ * Tự điền Số hóa đơn cho các dòng XB thiếu (giữ nguyên HĐ đã có, giữ Đ/đ).
+ * Dùng mã phiếu XB làm mã chứng từ tạm để vẫn bấm xem PDF được.
+ */
+function backfillMissingXuatBanInvoiceNumbers_(sh) {
+  sh = sh || ensureXuatBanHangSheet_();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return { filled: 0 };
+  var width = Math.max(sh.getLastColumn(), 12);
+  var values = sh.getRange(2, 1, lastRow - 1, width).getValues();
+  var filled = 0;
+  var updates = []; // {row, value}
+  for (var i = 0; i < values.length; i++) {
+    var soHd = values[i][1] != null ? String(values[i][1]).trim() : "";
+    var maPhieu = values[i][2] != null ? String(values[i][2]).trim() : "";
+    if (soHd || !maPhieu) continue;
+    // Không gọi normalizeOrderCodeText để giữ dạng XB-###### dễ đọc
+    var autoHd = maPhieu;
+    values[i][1] = autoHd;
+    updates.push({ sheetRow: i + 2, value: autoHd });
+    filled++;
+  }
+  if (!updates.length) return { filled: 0 };
+  // Ghi cột B theo từng dòng (ít dòng trống → an toàn)
+  for (var u = 0; u < updates.length; u++) {
+    sh.getRange(updates[u].sheetRow, 2).setValue(updates[u].value);
+  }
+  try { SpreadsheetApp.flush(); } catch (eF) {}
+  return { filled: filled };
 }
 
 
 /** Lưu phiếu xuất bán kèm dịch vụ — bắt buộc số hóa đơn liên kết */
 function luuXuatBanHang(payload) {
   payload = payload || {};
-  var soHoaDon = normalizeOrderCodeText(payload.soHoaDon || "") || String(payload.soHoaDon || "").trim();
+  var soHoaDonRaw = String(payload.soHoaDon || "").trim();
+  var soHoaDon = normalizeMisaDocumentCode_(soHoaDonRaw) || soHoaDonRaw;
   if (!soHoaDon) throw new Error("Vui lòng nhập số hóa đơn liên kết trước khi lưu.");
   var items = payload.items || [];
   if (!items.length) throw new Error("Chưa có mặt hàng nào để lưu.");
@@ -772,7 +829,6 @@ function luuXuatBanHang(payload) {
   var coLoi = false;
   for (var i = 0; i < items.length; i++) {
     var item = items[i] || {};
-    // Cùng nguồn Data_Excel như luuPhieuTuWebApp / tab Tạo đơn
     var catalogItem = resolveCatalogProduct(catalogLookup, item.maHang, item.maVach);
     var maHangOut = (catalogItem && catalogItem.maHang) ? catalogItem.maHang : (item.maHang || "");
     var maVachOut = (catalogItem && catalogItem.maVach) ? catalogItem.maVach : (item.maVach || "");
@@ -780,6 +836,14 @@ function luuXuatBanHang(payload) {
     var dvtIn = item.dvt || (catalogItem && catalogItem.dvt) || "";
     var dvtResolved = resolveDvtValue(catalogLookup, maHangOut, maVachOut, dvtIn);
     var slNum = Number(item.sl);
+    var donGia = Number(item.donGia != null ? item.donGia : item.gia);
+    if (isNaN(donGia)) donGia = 0;
+    var loaiDong = String(item.loaiDong || item.loai || "").trim().toUpperCase();
+    var isDv = isXuatBanServiceLine_(maHangOut, tenHangOut, dvtResolved, loaiDong);
+    if (!loaiDong) loaiDong = isDv ? "DV" : "HANG";
+    var chiPhiDv = Number(item.chiPhiDv != null ? item.chiPhiDv : (isDv ? donGia : 0));
+    if (isNaN(chiPhiDv)) chiPhiDv = 0;
+    var thanhTien = isDv ? (chiPhiDv * (slNum || 1)) : (donGia * (slNum || 0));
     var note = "";
     var bad = false;
     if (isNaN(slNum) || slNum <= 0) { bad = true; note = "Lỗi số lượng"; slNum = 0; }
@@ -804,7 +868,11 @@ function luuXuatBanHang(payload) {
       slNum,
       actor,
       note,
-      "Đã lưu"
+      "Đã lưu",
+      donGia,
+      thanhTien,
+      loaiDong,
+      isDv ? chiPhiDv : ""
     ]);
   }
 
@@ -813,7 +881,8 @@ function luuXuatBanHang(payload) {
     lock.waitLock(15000);
     var sh = ensureXuatBanHangSheet_(ss);
     var lastRow = sh.getLastRow();
-    sh.getRange(lastRow + 1, 1, rows.length, 12).setValues(rows);
+    var colCount = Math.max(16, sh.getLastColumn());
+    sh.getRange(lastRow + 1, 1, rows.length, 16).setValues(rows);
     sh.getRange(lastRow + 1, 1, rows.length, 1).setNumberFormat("dd/MM/yyyy HH:mm:ss");
     SpreadsheetApp.flush();
   } finally {
@@ -836,15 +905,19 @@ function luuXuatBanHang(payload) {
 function layDanhSachXuatBanHang(ngayYYYYMMDD, userRole, userStore, soHoaDonFilter) {
   var t0 = Date.now();
   var ss = getSS();
-  var sh = ss.getSheetByName(XUAT_BAN_SHEET_NAME);
+  var sh = ensureXuatBanHangSheet_(ss);
   if (!sh || sh.getLastRow() < 2) {
     return { success: true, data: [], _debugTotalMs: Date.now() - t0 };
   }
+  var backfill = { filled: 0 };
+  try { backfill = backfillMissingXuatBanInvoiceNumbers_(sh) || { filled: 0 }; } catch (eBf) {}
+
   var lastRow = sh.getLastRow();
   var start = Math.max(2, lastRow - 3000);
   var num = lastRow - start + 1;
-  var body = sh.getRange(start, 1, num, 12).getValues();
-  var filterHd = normalizeOrderCodeText(soHoaDonFilter || "");
+  var width = Math.max(sh.getLastColumn(), 16);
+  var body = sh.getRange(start, 1, num, width).getValues();
+  var filterHd = normalizeMisaDocumentCode_(soHoaDonFilter || "");
   var filterStore = normalizeStoreName(userStore || "");
   var map = {};
 
@@ -855,8 +928,8 @@ function layDanhSachXuatBanHang(ngayYYYYMMDD, userRole, userStore, soHoaDonFilte
     var soHd = row[1] ? String(row[1]).trim() : "";
     if (!maPhieu && !soHd) continue;
     if (filterHd) {
-      var soHdNorm = normalizeOrderCodeText(soHd);
-      if (soHdNorm.indexOf(filterHd) === -1) continue;
+      var soHdNorm = normalizeMisaDocumentCode_(soHd);
+      if (soHdNorm.indexOf(filterHd) === -1 && !invoiceKeysMatch_(soHd, filterHd)) continue;
     }
     if (!matchesNgayFilter(row[0], ngayYYYYMMDD || "7days")) continue;
     var cn = row[3] ? String(row[3]).trim() : "";
@@ -885,7 +958,130 @@ function layDanhSachXuatBanHang(ngayYYYYMMDD, userRole, userStore, soHoaDonFilte
   return {
     success: true,
     data: list.slice(0, 100),
+    backfilledInvoiceCount: backfill.filled || 0,
     _debugTotalMs: Date.now() - t0,
-    _debugRun: "xuat-ban-v1"
+    _debugRun: "xuat-ban-v2-invoice-link"
   };
+}
+
+
+/**
+ * Chi tiết hóa đơn bán kèm DV — hàng vật lý + dịch vụ.
+ * @param {string} soHoaDon
+ * @param {string} maPhieu optional
+ */
+function getInvoiceDetail_(soHoaDon, maPhieu) {
+  try {
+    var soHdRaw = String(soHoaDon || "").trim();
+    var maPhieuRaw = String(maPhieu || "").trim();
+    if (!soHdRaw && !maPhieuRaw) return { success: false, error: "Thiếu số hóa đơn hoặc mã phiếu XB." };
+
+    var ss = getSS();
+    var sh = ensureXuatBanHangSheet_(ss);
+    try { backfillMissingXuatBanInvoiceNumbers_(sh); } catch (eBf2) {}
+    if (!sh || sh.getLastRow() < 2) {
+      return { success: false, error: "Không có dữ liệu xuất bán." };
+    }
+
+    var lastRow = sh.getLastRow();
+    var width = Math.max(sh.getLastColumn(), 16);
+    var data = sh.getRange(2, 1, lastRow - 1, width).getValues();
+    var products = [];
+    var services = [];
+    var chiNhanh = "";
+    var actor = "";
+    var thoiGian = "";
+    var maPhieuOut = "";
+    var soHdOut = "";
+    var tongTienHang = 0;
+    var tongTienDv = 0;
+
+    for (var i = 0; i < data.length; i++) {
+      var row = data[i];
+      if (!row) continue;
+      var rowHd = row[1] != null ? String(row[1]).trim() : "";
+      var rowMp = row[2] != null ? String(row[2]).trim() : "";
+      var hit = false;
+      if (soHdRaw && rowHd && invoiceKeysMatch_(rowHd, soHdRaw)) hit = true;
+      if (!hit && maPhieuRaw && rowMp && String(rowMp).toUpperCase() === String(maPhieuRaw).toUpperCase()) hit = true;
+      if (!hit && soHdRaw && rowMp && invoiceKeysMatch_(rowMp, soHdRaw)) hit = true;
+      if (!hit) continue;
+
+      if (!chiNhanh && row[3]) chiNhanh = String(row[3]).trim();
+      if (!actor && row[9]) actor = String(row[9]).trim();
+      if (!thoiGian && row[0]) {
+        if (row[0] instanceof Date) {
+          thoiGian = Utilities.formatDate(row[0], Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh", "dd/MM/yyyy HH:mm");
+        } else {
+          thoiGian = String(row[0]);
+        }
+      }
+      if (!maPhieuOut && rowMp) maPhieuOut = rowMp;
+      if (!soHdOut && rowHd) soHdOut = rowHd;
+
+      var maHang = row[4] != null ? String(row[4]).trim() : "";
+      var maVach = row[5] != null ? String(row[5]).trim() : "";
+      var tenHang = row[6] != null ? String(row[6]).trim() : "";
+      var dvt = row[7] != null ? String(row[7]).trim() : "";
+      var sl = Number(row[8]) || 0;
+      var donGia = width > 12 ? Number(row[12]) || 0 : 0;
+      var thanhTien = width > 13 ? Number(row[13]) : NaN;
+      var loaiDong = width > 14 ? String(row[14] || "").trim() : "";
+      var chiPhiDv = width > 15 ? Number(row[15]) || 0 : 0;
+      var isDv = isXuatBanServiceLine_(maHang, tenHang, dvt, loaiDong);
+      if (isNaN(thanhTien)) {
+        thanhTien = isDv ? (chiPhiDv || donGia) * (sl || 1) : donGia * sl;
+      }
+
+      if (isDv) {
+        var phi = chiPhiDv || donGia || thanhTien;
+        services.push({
+          maDv: maHang || maVach,
+          tenDichVu: tenHang,
+          dvt: dvt,
+          sl: sl || 1,
+          chiPhiDv: phi,
+          thanhTien: thanhTien || phi
+        });
+        tongTienDv += Number(thanhTien) || Number(phi) || 0;
+      } else {
+        products.push({
+          maHang: maHang,
+          maVach: maVach,
+          tenHang: tenHang,
+          dvt: dvt,
+          sl: sl,
+          donGia: donGia,
+          thanhTien: thanhTien || (donGia * sl)
+        });
+        tongTienHang += Number(thanhTien) || (donGia * sl) || 0;
+      }
+    }
+
+    if (!products.length && !services.length) {
+      return {
+        success: false,
+        error: "Không tìm thấy hóa đơn " + (soHdRaw || maPhieuRaw) + "."
+      };
+    }
+
+    return {
+      success: true,
+      soHoaDon: soHdOut || soHdRaw,
+      maPhieu: maPhieuOut || maPhieuRaw,
+      chiNhanh: chiNhanh,
+      thoiGian: thoiGian,
+      actor: actor,
+      products: products,
+      services: services,
+      tongTienHang: tongTienHang,
+      tongTienDv: tongTienDv,
+      tongTien: tongTienHang + tongTienDv,
+      productCount: products.length,
+      serviceCount: services.length,
+      _debugRun: "invoice-detail-v1"
+    };
+  } catch (e) {
+    return { success: false, error: e.message || String(e) };
+  }
 }
