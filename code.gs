@@ -17,12 +17,12 @@ var WEB_APP_URL = "https://donhang-dieuchuyen.vercel.app";
 // Mapping original store names -> display (short) names for UI and Telegram
 var STORE_MAP = {
   "Kho Địa điểm kinh doanh Q7": "Q7",
-  "Kho Địa điểm kinh doanh 01": "Q4",
+  "Kho Địa điểm kinh doanh 01": "Q4 Mới",
   "Kho Địa điểm kinh doanh 02": "Q8",
   "Kho Địa điểm kinh doanh 03": "PH",
   "Kho Địa điểm kinh doanh 04": "Q5",
   "Kho Địa điểm kinh doanh 05": "Q1",
-  "Kho Địa điểm kinh doanh 06": "Q4"
+  "Kho Địa điểm kinh doanh 06": "Q4 Cũ"
 };
 
 // Mã ngắn để phân biệt cửa hàng trùng nhãn (2× Q4) trên bảng tổng hợp soạn hàng
@@ -33,7 +33,7 @@ var STORE_SHORT_CODES = {
 
 var GUIDE_SHEET_NAME = "Hướng dẫn";
 
-var CACHE_STORES_KEY = "stores_registry_v2_q4short";
+var CACHE_STORES_KEY = "stores_registry_v3_q4moi_cu";
 
 var CACHE_CATALOG_PREFIX = "catalog_data_v2_";
 

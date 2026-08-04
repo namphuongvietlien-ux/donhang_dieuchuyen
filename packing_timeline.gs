@@ -679,12 +679,12 @@ function taoBangSoanHangNgayMai(payload) {
     : (packingMode === "main"
       ? ("BẢNG ĐƠN CHÍNH — N2 " + packingDayTitle + " | ≥N1 10:00 & <N2 08:00 | " + mainWindowLabel)
       : ("BẢNG TỔNG HỢP CA — N2 " + packingDayTitle + " | ≥N1 10:00 & <N2 10:00 | " + (totalWindowLabel || "")));
-  // Hàng 5 = số đơn theo cột kho; hàng 6 = header tên cột (Q4_178 / Q4_275 / Q8…)
+  // Hàng 5 = số đơn theo cột kho; hàng 6 = header tên cột (Q4 - địa chỉ / Q4 Mới…)
   var headerRow = 6;
   var headers = ["STT", "Mã hàng (Parent)", "Mã vạch", "Tên hàng / Phân loại", "ĐVT", "Stock Q7", "Tổng đặt"];
   var storeOrderCountRow = ["", "", "", "", "", "", "Số đơn"];
   for (var h = 0; h < storeList.length; h++) {
-    headers.push(formatShortStoreLabel(storeList[h]));
+    headers.push(formatPackingColumnLabel_(storeList[h]));
     var storeOrders = ordersByStore[storeList[h]] || {};
     storeOrderCountRow.push(Object.keys(storeOrders).length);
   }

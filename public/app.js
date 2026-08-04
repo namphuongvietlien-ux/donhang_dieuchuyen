@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v70-store-exact-q4';
+var APP_BUILD = '2026-08-04-v71-q4-packing-header';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -1142,25 +1142,38 @@ function formatStoreShortLabel_(storeName) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/[^a-z0-9]+/g, '');
-  if (
+  var isQ4 =
     fold === '178' || fold === '275' ||
     fold === 'q4178' || fold === 'q4275' || fold === 'q4_178' || fold === 'q4_275' ||
-    fold === 'q4' || fold.indexOf('quan4') !== -1 ||
-    (fold.indexOf('q4') !== -1 && (fold.indexOf('moi') !== -1 || fold.indexOf('cu') !== -1 || fold.indexOf('178') !== -1 || fold.indexOf('275') !== -1))
-  ) {
+    fold === 'q4' || fold === 'q4moi' || fold === 'q4cu' || fold.indexOf('quan4') !== -1 ||
+    (fold.indexOf('q4') !== -1 && (fold.indexOf('moi') !== -1 || fold.indexOf('cu') !== -1 || fold.indexOf('178') !== -1 || fold.indexOf('275') !== -1));
+  if (isQ4) {
+    if (fold.indexOf('178') !== -1 || fold.indexOf('moi') !== -1) return 'Q4 Mới';
+    if (fold.indexOf('275') !== -1 || fold.indexOf('cu') !== -1 || fold.indexOf('old') !== -1) return 'Q4 Cũ';
+    if (PACKING_STORE_CODES_[raw] === '178') return 'Q4 Mới';
+    if (PACKING_STORE_CODES_[raw] === '275') return 'Q4 Cũ';
     return 'Q4';
   }
   if (storeMap && storeMap[raw]) {
     var mapped = String(storeMap[raw]).trim();
     var mappedFold = mapped.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/[^a-z0-9]+/g, '');
-    if (mappedFold.indexOf('quan4') !== -1 || mappedFold.indexOf('q4') !== -1) return 'Q4';
+    if (mappedFold.indexOf('quan4') !== -1 || mappedFold.indexOf('q4') !== -1) {
+      if (mappedFold.indexOf('moi') !== -1 || mappedFold.indexOf('178') !== -1) return 'Q4 Mới';
+      if (mappedFold.indexOf('cu') !== -1 || mappedFold.indexOf('275') !== -1) return 'Q4 Cũ';
+      if (PACKING_STORE_CODES_[raw] === '178') return 'Q4 Mới';
+      if (PACKING_STORE_CODES_[raw] === '275') return 'Q4 Cũ';
+      return mapped;
+    }
     return mapped;
   }
   for (var full in storeMap) {
     if (!Object.prototype.hasOwnProperty.call(storeMap, full)) continue;
     if (storeMap[full] === raw) {
-      var snFold = fold;
-      if (snFold.indexOf('quan4') !== -1 || snFold.indexOf('q4') !== -1) return 'Q4';
+      if (fold.indexOf('quan4') !== -1 || fold.indexOf('q4') !== -1) {
+        if (fold.indexOf('moi') !== -1 || fold.indexOf('178') !== -1) return 'Q4 Mới';
+        if (fold.indexOf('cu') !== -1 || fold.indexOf('275') !== -1) return 'Q4 Cũ';
+        return raw;
+      }
       return raw;
     }
   }
@@ -1185,20 +1198,23 @@ function lookupStoreAddressClient_(storeName) {
       return String(d.address || '').trim();
     }
     if (codeHint && (String(d.code || '').indexOf(codeHint) !== -1 || PACKING_STORE_CODES_[d.fullName] === codeHint)) {
-      return String(d.address || '').trim();
+      var byCode = String(d.address || '').trim();
+      if (byCode) return byCode;
     }
   }
-  // Fallback tối thiểu theo mã link
-  if (codeHint) return codeHint;
   return '';
 }
 
-/** Nhãn in PDF: Q4 - địa chỉ chi nhánh */
+/** Nhãn in PDF: Q4 - địa chỉ chi nhánh (fallback Q4 Mới / Q4 Cũ) */
 function formatStorePrintLabel_(storeName) {
   var shortName = formatStoreShortLabel_(storeName);
   if (!shortName || shortName === '-') return '-';
   var address = lookupStoreAddressClient_(storeName);
-  if (address) return shortName + ' - ' + address;
+  if (address) {
+    var base = shortName;
+    if (shortName === 'Q4 Mới' || shortName === 'Q4 Cũ' || shortName === 'Q4') base = 'Q4';
+    return base + ' - ' + address;
+  }
   return shortName;
 }
 

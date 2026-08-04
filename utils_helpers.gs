@@ -344,40 +344,33 @@ function getActiveStoreMap() {
 
 
 /**
- * Tên ngắn thống nhất trên UI: 2 kho Q4 (178/275) → chung "Q4".
- * Mã cột soạn Q4_178/Q4_275 vẫn dùng formatShortStoreLabel riêng.
+ * Tên ngắn trên UI: tách 2 kho Q4 thành "Q4 Mới" / "Q4 Cũ".
+ * Cột nội bộ soạn hàng vẫn dùng formatShortStoreLabel → Q4_178 / Q4_275.
  */
 function formatStoreDisplayLabel_(storeName) {
   var raw = String(storeName || "").trim();
   if (!raw) return "";
-  var norm = normalizeHeaderText(raw);
-  // Quy đổi 178 / 275 / Q4_* / tên cũ → Q4
-  if (
-    norm === "178" || norm === "275" ||
-    norm === "q4178" || norm === "q4275" ||
-    norm === "q4_178" || norm === "q4_275" ||
-    norm.indexOf("quan4") !== -1 ||
-    (norm.indexOf("q4") !== -1 && (norm.indexOf("moi") !== -1 || norm.indexOf("cu") !== -1 || norm.indexOf("178") !== -1 || norm.indexOf("275") !== -1 || norm === "q4"))
-  ) {
-    return "Q4";
+  var code = lookupStoreCodeDigits_(raw);
+  if (!code) {
+    var normProbe = normalizeHeaderText(raw);
+    if (normProbe.indexOf("178") !== -1) code = "178";
+    else if (normProbe.indexOf("275") !== -1) code = "275";
+    else if ((normProbe.indexOf("q4") !== -1 || normProbe.indexOf("quan4") !== -1) && normProbe.indexOf("moi") !== -1) code = "178";
+    else if ((normProbe.indexOf("q4") !== -1 || normProbe.indexOf("quan4") !== -1) && (normProbe.indexOf("cu") !== -1 || normProbe.indexOf("old") !== -1)) code = "275";
   }
+  if (code === "178") return "Q4 Mới";
+  if (code === "275") return "Q4 Cũ";
+
   var activeMap = getActiveStoreMap();
   if (activeMap[raw]) {
     var mapped = String(activeMap[raw]).trim();
-    var mappedNorm = normalizeHeaderText(mapped);
-    if (mappedNorm.indexOf("quan4") !== -1 || mappedNorm.indexOf("q4") !== -1) return "Q4";
+    if (STORE_SHORT_CODES[raw] === "178") return "Q4 Mới";
+    if (STORE_SHORT_CODES[raw] === "275") return "Q4 Cũ";
     return mapped;
   }
-  // Full name cố định 01/06
-  if (STORE_SHORT_CODES[raw]) return "Q4";
-  for (var full in activeMap) {
-    if (!Object.prototype.hasOwnProperty.call(activeMap, full)) continue;
-    if (String(activeMap[full]).trim() === raw) {
-      var sn = normalizeHeaderText(raw);
-      if (sn.indexOf("quan4") !== -1 || sn.indexOf("q4") !== -1) return "Q4";
-      return raw;
-    }
-  }
+  if (STORE_SHORT_CODES[raw] === "178") return "Q4 Mới";
+  if (STORE_SHORT_CODES[raw] === "275") return "Q4 Cũ";
+
   try {
     var registry = getStoreRegistry();
     var details = registry && registry.storeDetails ? registry.storeDetails : [];
@@ -388,11 +381,9 @@ function formatStoreDisplayLabel_(storeName) {
       if (raw === d.fullName || raw === d.shortName ||
           rawNorm === normalizeHeaderText(d.fullName) ||
           rawNorm === normalizeHeaderText(d.shortName)) {
-        if (STORE_SHORT_CODES[d.fullName]) return "Q4";
-        var shortN = String(d.shortName || d.fullName || raw).trim();
-        var shortNorm = normalizeHeaderText(shortN);
-        if (shortNorm.indexOf("quan4") !== -1 || shortNorm.indexOf("q4") !== -1) return "Q4";
-        return shortN;
+        if (STORE_SHORT_CODES[d.fullName] === "178") return "Q4 Mới";
+        if (STORE_SHORT_CODES[d.fullName] === "275") return "Q4 Cũ";
+        return String(d.shortName || d.fullName || raw).trim();
       }
     }
   } catch (e2) {}
@@ -400,7 +391,7 @@ function formatStoreDisplayLabel_(storeName) {
 }
 
 
-/** Địa chỉ kho từ sheet Hướng dẫn (storeDetails) — phân biệt 2 điểm Q4 theo tên đầy đủ */
+/** Địa chỉ kho từ sheet Hướng dẫn — phân biệt 2 điểm Q4 theo mã 178/275 */
 function lookupStoreAddress_(storeName) {
   var raw = String(storeName || "").trim();
   if (!raw) return "";
@@ -408,47 +399,62 @@ function lookupStoreAddress_(storeName) {
     var registry = getStoreRegistry();
     var details = registry && registry.storeDetails ? registry.storeDetails : [];
     var rawNorm = normalizeHeaderText(raw);
-    var codeHint = "";
-    if (STORE_SHORT_CODES[raw]) codeHint = STORE_SHORT_CODES[raw];
-    else if (rawNorm.indexOf("178") !== -1) codeHint = "178";
-    else if (rawNorm.indexOf("275") !== -1) codeHint = "275";
-    else if (rawNorm.indexOf("moi") !== -1 && (rawNorm.indexOf("q4") !== -1 || rawNorm.indexOf("quan4") !== -1)) codeHint = "178";
-    else if ((rawNorm.indexOf("cu") !== -1 || rawNorm.indexOf("old") !== -1) && (rawNorm.indexOf("q4") !== -1 || rawNorm.indexOf("quan4") !== -1)) codeHint = "275";
+    var codeHint = lookupStoreCodeDigits_(raw) || "";
+    if (!codeHint) {
+      if (rawNorm.indexOf("178") !== -1) codeHint = "178";
+      else if (rawNorm.indexOf("275") !== -1) codeHint = "275";
+      else if (rawNorm.indexOf("moi") !== -1 && (rawNorm.indexOf("q4") !== -1 || rawNorm.indexOf("quan4") !== -1)) codeHint = "178";
+      else if ((rawNorm.indexOf("cu") !== -1 || rawNorm.indexOf("old") !== -1) && (rawNorm.indexOf("q4") !== -1 || rawNorm.indexOf("quan4") !== -1)) codeHint = "275";
+    }
 
+    var byCode = "";
     for (var i = 0; i < details.length; i++) {
       var d = details[i];
       if (!d) continue;
       var dFull = normalizeHeaderText(d.fullName || "");
       var dShort = normalizeHeaderText(d.shortName || "");
       var dCode = String(d.code || "").trim();
+      var addr = String(d.address || "").trim();
+      if (!addr) continue;
       if (
         raw === d.fullName || raw === d.shortName ||
         rawNorm === dFull || rawNorm === dShort
       ) {
-        return String(d.address || "").trim();
+        return addr;
       }
       if (codeHint && (dCode.indexOf(codeHint) !== -1 || STORE_SHORT_CODES[d.fullName] === codeHint)) {
-        return String(d.address || "").trim();
+        byCode = addr;
       }
     }
-    // Fallback địa chỉ theo mã link nếu Guide thiếu
-    if (codeHint === "178") return "178";
-    if (codeHint === "275") return "275";
+    if (byCode) return byCode;
   } catch (e) {}
   return "";
 }
 
 
 /**
- * Nhãn in phiếu: [Tên ngắn] - [Địa chỉ]
- * VD: "Q4 - 178 Nguyễn Tất Thành, P.13, Q.4"
+ * Nhãn in / header bảng tổng hợp: ưu tiên "Q4 - [địa chỉ]".
+ * Fallback: "Q4 Mới" / "Q4 Cũ".
  */
 function formatStorePrintLabel_(storeName) {
+  var address = lookupStoreAddress_(storeName);
   var shortName = formatStoreDisplayLabel_(storeName) || String(storeName || "").trim();
   if (!shortName) return "";
-  var address = lookupStoreAddress_(storeName);
-  if (address) return shortName + " - " + address;
+  if (address) {
+    var base = shortName;
+    if (shortName === "Q4 Mới" || shortName === "Q4 Cũ" || shortName === "Q4") base = "Q4";
+    return base + " - " + address;
+  }
   return shortName;
+}
+
+
+/**
+ * Header cột kho trên bảng tổng hợp soạn hàng (Excel).
+ * Không dùng Q4_178 — dùng địa chỉ hoặc Q4 Mới/Cũ.
+ */
+function formatPackingColumnLabel_(storeName) {
+  return formatStorePrintLabel_(storeName) || formatStoreDisplayLabel_(storeName) || formatShortStoreLabel(storeName) || String(storeName || "");
 }
 
 
