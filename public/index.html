@@ -67,6 +67,30 @@
     .timeline-banner.supp { border-color: #fdba74; background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); color: #9a3412; }
     .timeline-banner strong { display: block; margin-bottom: 4px; font-size: 14px; }
     .timeline-banner small { display: block; margin-top: 6px; opacity: 0.9; }
+    .order-meta-badge { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%); border: 1px solid #93c5fd; color: #0f172a; font-size: 14px; font-weight: 700; line-height: 1.45; }
+    .order-meta-badge .om-sep { color: #64748b; font-weight: 600; margin: 0 4px; }
+    .order-meta-badge .om-k { color: #1d4ed8; }
+    .sh-week-cal { margin-top: 4px; }
+    .sh-week-cal-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    .sh-week-cal-nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .sh-week-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 8px; overflow-x: auto; }
+    .sh-day-cell { min-height: 160px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .sh-day-cell.is-today { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.12); }
+    .sh-day-cell-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+    .sh-day-cell-head b { font-size: 12px; color: #0f172a; }
+    .sh-day-cell-head span { font-size: 11px; color: #64748b; }
+    .sh-day-wh { border-top: 1px dashed #e2e8f0; padding-top: 4px; }
+    .sh-day-wh-label { font-size: 11px; font-weight: 800; color: #1e3a8a; margin-bottom: 2px; }
+    .sh-day-order { display: block; width: 100%; text-align: left; border: none; background: #f8fafc; border-radius: 8px; padding: 4px 6px; margin: 2px 0; cursor: pointer; font-size: 12px; font-weight: 700; color: #0f172a; }
+    .sh-day-order:hover { background: #dbeafe; color: #1d4ed8; }
+    .sh-day-order small { display: inline; margin-left: 4px; font-weight: 600; color: #64748b; font-size: 10px; }
+    .sh-day-empty { font-size: 11px; color: #94a3b8; padding: 8px 0; }
+    .btn-print-day { font-size: 11px !important; padding: 5px 8px !important; border-radius: 8px !important; width: auto !important; white-space: nowrap; }
+    #modal-print-day { display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:10004; justify-content:center; align-items:center; padding:16px; }
+    #modal-print-day .modal-box { max-width:720px; width:100%; text-align:left; max-height:92vh; overflow:auto; }
+    @media (max-width: 900px) {
+      .sh-week-cal-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+    }
     .form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
     .form-group { flex: 1; min-width: 160px; }
     label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--muted); }
@@ -245,6 +269,7 @@
     <div class="modal-box">
       <h3 style="color:#34a853; margin-top:0;">🎉 ĐÃ LƯU ĐƠN THÀNH CÔNG</h3>
       <p style="font-size:16px;">Số phiếu: <b id="modal-sophieu" style="color:var(--primary);"></b></p>
+      <div id="modal-order-meta" class="order-meta-badge" style="display:none; text-align:left;"></div>
       <p id="modal-timeline-tip" style="font-size:13px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px; text-align:left; line-height:1.45; margin:12px 0 0;"></p>
       <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
         <button class="btn-submit" onclick="actionPrintNew()">🖨️ IN ĐƠN (WEB)</button>
@@ -300,6 +325,45 @@
   </div>
 
   <!-- Cảnh báo gộp đơn cùng chi nhánh -->
+  <!-- In đơn ngày hàng loạt theo kho -->
+  <div id="modal-print-day">
+    <div class="modal-box">
+      <h3 style="margin:0 0 6px; color:#0f172a;">In Đơn Ngày <span id="print-day-date-label" style="color:#1d4ed8;"></span></h3>
+      <p style="margin:0 0 10px; color:#64748b; font-size:13px;">Chọn kho + tick đơn cần in → ghép 1 PDF liên tục.</p>
+      <div class="form-row" style="margin-bottom:10px;">
+        <div class="form-group" style="margin:0;">
+          <label>Bộ lọc theo kho</label>
+          <select id="print-day-wh-filter" onchange="sh_printDayApplyFilter_()">
+            <option value="__all__">Tất cả các kho</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+        <button type="button" class="btn-submit btn-compact" onclick="sh_printDaySelectAll_(true)">Tick tất cả</button>
+        <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_printDaySelectAll_(false)">Bỏ tick</button>
+      </div>
+      <div style="max-height:42vh; overflow:auto; border:1px solid #e2e8f0; border-radius:12px; background:#fff;">
+        <table style="margin:0; min-width:520px;">
+          <thead>
+            <tr>
+              <th style="width:48px; text-align:center;">Chọn</th>
+              <th>Mã đơn</th>
+              <th>Kho</th>
+              <th style="width:120px;">Giờ tạo</th>
+            </tr>
+          </thead>
+          <tbody id="print-day-tbody">
+            <tr><td colspan="4" style="text-align:center; color:#64748b;">Chưa có đơn.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+        <button type="button" class="btn-submit btn-success" style="flex:1; min-width:200px;" onclick="sh_printDaySelectedPdf_()">🖨️ In Các Đơn Đã Chọn (PDF)</button>
+        <button type="button" class="btn-submit btn-muted" style="flex:0 0 auto;" onclick="sh_closePrintDayModal_()">Đóng</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-branch-merge" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:10002; justify-content:center; align-items:center; padding:16px;">
     <div class="modal-box" style="max-width:640px; width:100%; text-align:left;">
       <h3 style="margin:0 0 8px; color:#9a3412;">⚠️ Cảnh báo: nhiều đơn cùng chi nhánh</h3>
@@ -443,9 +507,10 @@
           </div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Kho Xuất:</label><select id="select-kho-xuat"></select></div>
-          <div class="form-group"><label>Kho Nhận:</label><select id="select-kho-nhan"></select></div>
+          <div class="form-group"><label>Kho Xuất:</label><select id="select-kho-xuat" onchange="refreshCreateOrderMetaBadge_()"></select></div>
+          <div class="form-group"><label>Kho Nhận:</label><select id="select-kho-nhan" onchange="refreshCreateOrderMetaBadge_()"></select></div>
         </div>
+        <div id="create-order-meta-badge" class="order-meta-badge">Mã Đơn: (chưa lưu) | Kho: — | Ngày Tạo: —</div>
       </div>
       
       <div class="card" style="padding-bottom: 20px; position: relative;">
@@ -563,6 +628,7 @@
 
       <div id="ql-view-phieu" class="card" style="display:none; border: 2px solid #34a853;">
         <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
+        <div id="ql-order-meta-badge" class="order-meta-badge">Mã Đơn: — | Kho: — | Ngày Tạo: —</div>
         <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
         <p id="ql-order-meta" style="font-size:13px; color:#137333; margin-top:-6px;"></p>
         <div id="ql-edit-timeline-banner" class="timeline-banner" style="display:none;"></div>
@@ -611,6 +677,7 @@
       </div>
       <div id="confirm-view" class="card" style="display:none; border:2px solid #34a853;">
         <h3 style="margin-top:0;">Chi tiết xác nhận: <span id="confirm-lbl-sophieu" style="color:#d93025;"></span></h3>
+        <div id="confirm-order-meta-badge" class="order-meta-badge">Mã Đơn: — | Kho: — | Ngày Tạo: —</div>
         <p style="font-size:13px; color:gray;" id="confirm-meta"></p>
         <div style="overflow-x:auto;">
           <table id="confirm-table">
@@ -629,6 +696,24 @@
       <div class="tab-guide">
         <b>Cách dùng:</b> chọn ngày tổng hợp / giao → chọn phiếu → nhập SL soạn → lưu.
         <b>Tạo bảng:</b> chọn chế độ <b>Chính</b> / <b>Bổ sung</b> / <b>Tổng hợp</b> theo ca N1→N2. Mốc 10:00 thuộc ngày hôm sau.
+        <b>Lịch tuần:</b> tự nhóm theo kho phát sinh đơn (không khóa cứng Q8/PH).
+      </div>
+      <div class="card sh-week-cal">
+        <div class="sh-week-cal-head">
+          <div>
+            <h3 style="margin:0; color:var(--primary);">📅 Bảng Lịch Gom Đơn Theo Kho</h3>
+            <div id="sh-week-cal-label" style="font-size:13px; color:#64748b; margin-top:4px;">Đang tải tuần...</div>
+          </div>
+          <div class="sh-week-cal-nav">
+            <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_weekCalShift_(-7)">← Tuần trước</button>
+            <button type="button" class="btn-submit btn-compact" onclick="sh_weekCalGoToday_()">Tuần này</button>
+            <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_weekCalShift_(7)">Tuần sau →</button>
+            <button type="button" class="btn-submit btn-teal btn-compact" onclick="sh_loadWeekCalendar_()">↻ Tải lại</button>
+          </div>
+        </div>
+        <div id="sh-week-cal-grid" class="sh-week-cal-grid">
+          <div class="sh-day-empty" style="grid-column:1/-1; text-align:center; padding:18px;">Đang tải lịch tuần...</div>
+        </div>
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
@@ -703,6 +788,7 @@
           </div>
         </div>
       </div>
+      <div id="sh-order-meta-badge" class="order-meta-badge" style="display:none;"></div>
       <div id="sh-list-container"><div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div></div>
       <div class="fixed-footer" id="sh-footer" style="display:none;">
         <div id="sh-status" style="text-align:center; margin-bottom:5px; font-weight:bold; color:#d93025; font-size:13px;"></div>
@@ -991,6 +1077,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260805v79-audit-hardening"></script>
+  <script src="app.js?v=20260805v81-dynamic-wh-calendar"></script>
 </body>
 </html>

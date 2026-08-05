@@ -332,6 +332,13 @@ function doGet(e) {
             e.parameter.includePacked
           );
           break;
+        case 'getPackingWeekCalendar':
+          res = getPackingWeekCalendar_(
+            e.parameter.weekStart || e.parameter.ngay || '',
+            e.parameter.userRole || '',
+            e.parameter.userStore || ''
+          );
+          break;
         case 'getChiTietDonHangMobile':
           res = getChiTietDonHangMobile(e.parameter.soPhieu || '');
           break;

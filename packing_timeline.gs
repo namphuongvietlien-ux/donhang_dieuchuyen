@@ -846,3 +846,154 @@ function taoBangSoanHangNgayMai(payload) {
     _debugDvtBackfill: backfilled
   };
 }
+
+
+/**
+ * Lịch tuần gom đơn đa kho động (Thứ 2 → Chủ Nhật).
+ * Nhóm theo ngày tạo đơn (calendar) + kho nhận thực tế — không hardcode Q8/PH.
+ * @param {string} weekStartYYYYMMDD Monday hoặc bất kỳ ngày trong tuần
+ * @param {string} userRole
+ * @param {string} userStore
+ */
+function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
+  var t0 = Date.now();
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  if (!historySheet) {
+    return { success: false, error: "Không có sheet Lịch Sử Xuất Kho.", days: [], warehouses: [] };
+  }
+
+  var anchor = parseDateInputYYYYMMDD(weekStartYYYYMMDD) || getScriptTodayStart_() || new Date();
+  anchor = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
+  var dow = anchor.getDay(); // 0 Sun … 6 Sat
+  var offsetToMon = (dow + 6) % 7; // Mon→0 … Sun→6
+  var weekStart = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - offsetToMon, 0, 0, 0, 0);
+  var weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7, 0, 0, 0, 0);
+  var weekStartMs = weekStart.getTime();
+  var weekEndMs = weekEnd.getTime();
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+
+  var pack = readHistoryDataPack_(historySheet, 8000);
+  var data = pack.data || [[]];
+  var filterStore = normalizeStoreName(userStore || "");
+  var map = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    if (!row) continue;
+    var soPhieu = row[1] ? String(row[1]).trim() : "";
+    if (!soPhieu) continue;
+    var createdMs = toHoChiMinhMillis_(row[0]);
+    if (isNaN(createdMs) || createdMs < weekStartMs || createdMs >= weekEndMs) continue;
+
+    var khoXuat = row[2] ? String(row[2]).trim() : "";
+    var khoNhan = row[3] ? String(row[3]).trim() : "";
+    if (userRole !== "Admin") {
+      if (!isSameStoreName(khoXuat, filterStore) && !isSameStoreName(khoNhan, filterStore)) continue;
+    }
+    var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
+    if (rowStatus === "Đã hủy đơn") continue;
+
+    if (!map[soPhieu]) {
+      map[soPhieu] = {
+        soPhieu: soPhieu,
+        khoXuat: khoXuat,
+        khoNhan: khoNhan,
+        createdAtMs: createdMs
+      };
+    } else if (createdMs < map[soPhieu].createdAtMs) {
+      map[soPhieu].createdAtMs = createdMs;
+      if (khoXuat) map[soPhieu].khoXuat = khoXuat;
+      if (khoNhan) map[soPhieu].khoNhan = khoNhan;
+    }
+  }
+
+  var weekdayNames = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"];
+  var days = [];
+  var warehouseIndex = {};
+
+  for (var d = 0; d < 7; d++) {
+    var dayDate = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + d, 0, 0, 0, 0);
+    var dayEnd = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate() + 1, 0, 0, 0, 0);
+    var dateStr = Utilities.formatDate(dayDate, tz, "yyyy-MM-dd");
+    var dateLabel = Utilities.formatDate(dayDate, tz, "dd/MM");
+    var byWh = {};
+
+    for (var sp in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, sp)) continue;
+      var ord = map[sp];
+      if (ord.createdAtMs < dayDate.getTime() || ord.createdAtMs >= dayEnd.getTime()) continue;
+
+      // Nhóm theo kho nhận thực tế (fallback kho xuất) — động
+      var rawKho = ord.khoNhan || ord.khoXuat || "Khác";
+      var khoKey = normalizeStoreName(rawKho) || String(rawKho).trim() || "other";
+      var khoLabel = formatStoreDisplayLabel_(rawKho) || formatShortStoreLabel(rawKho) || rawKho;
+      if (!byWh[khoKey]) {
+        byWh[khoKey] = { khoKey: khoKey, khoLabel: khoLabel, khoRaw: rawKho, orders: [] };
+      }
+      if (!warehouseIndex[khoKey]) {
+        warehouseIndex[khoKey] = { khoKey: khoKey, khoLabel: khoLabel, khoRaw: rawKho, orderCount: 0 };
+      }
+      warehouseIndex[khoKey].orderCount++;
+
+      var hh = Utilities.formatDate(new Date(ord.createdAtMs), tz, "HH:mm");
+      byWh[khoKey].orders.push({
+        soPhieu: ord.soPhieu,
+        khoXuat: ord.khoXuat,
+        khoNhan: ord.khoNhan,
+        createdAt: ord.createdAtMs,
+        createdTime: hh,
+        thoiGian: formatOrderCreatedAtLabel_(ord.createdAtMs),
+        thoiGianPretty: formatOrderCreatedAtPretty_(ord.createdAtMs)
+      });
+    }
+
+    var warehouses = [];
+    for (var wk in byWh) {
+      if (!Object.prototype.hasOwnProperty.call(byWh, wk)) continue;
+      byWh[wk].orders.sort(function(a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+      warehouses.push(byWh[wk]);
+    }
+    warehouses.sort(function(a, b) {
+      return String(a.khoLabel || "").localeCompare(String(b.khoLabel || ""), "vi");
+    });
+
+    var dayOrderCount = 0;
+    for (var wi = 0; wi < warehouses.length; wi++) dayOrderCount += warehouses[wi].orders.length;
+
+    days.push({
+      date: dateStr,
+      dateLabel: dateLabel,
+      weekday: weekdayNames[d],
+      isToday: false,
+      orderCount: dayOrderCount,
+      warehouses: warehouses
+    });
+  }
+
+  var todayStr = Utilities.formatDate(getScriptTodayStart_() || new Date(), tz, "yyyy-MM-dd");
+  for (var ti = 0; ti < days.length; ti++) {
+    if (days[ti].date === todayStr) days[ti].isToday = true;
+  }
+
+  var warehousesAll = [];
+  for (var wkey in warehouseIndex) {
+    if (Object.prototype.hasOwnProperty.call(warehouseIndex, wkey)) warehousesAll.push(warehouseIndex[wkey]);
+  }
+  warehousesAll.sort(function(a, b) {
+    return String(a.khoLabel || "").localeCompare(String(b.khoLabel || ""), "vi");
+  });
+
+  return {
+    success: true,
+    weekStart: Utilities.formatDate(weekStart, tz, "yyyy-MM-dd"),
+    weekEnd: Utilities.formatDate(new Date(weekEnd.getTime() - 1), tz, "yyyy-MM-dd"),
+    weekLabel: Utilities.formatDate(weekStart, tz, "dd/MM") +
+      " → " + Utilities.formatDate(new Date(weekEnd.getTime() - 1), tz, "dd/MM/yyyy"),
+    days: days,
+    warehouses: warehousesAll,
+    totalOrders: Object.keys(map).length,
+    _debugTotalMs: Date.now() - t0,
+    _debugRun: "packing-week-calendar-v1-dynamic-wh"
+  };
+}

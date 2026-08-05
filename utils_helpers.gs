@@ -14,6 +14,117 @@ function normalizeDvtKey_(dvt) {
 
 
 /**
+ * Phần ĐVT trong Composite Catalog Key — trim + lower + NFC (giữ Đ/đ).
+ * Ví dụ: "Cái" → "cái"
+ */
+function normalizeCatalogDvtPart_(dvt) {
+  var s = String(dvt == null ? "" : dvt).trim().toLowerCase();
+  if (!s) return "";
+  try { s = s.normalize("NFC"); } catch (eNfc) {}
+  return s;
+}
+
+
+/**
+ * Composite Unique Key cho 1 quy cách (MaSP + ĐVT [+ MaVach khi cần]).
+ * Base: MaSP.trim() + "_" + DonViTinh.trim().toLowerCase()
+ * includeMaVach=true → thêm "_" + MaVach.trim() khi cùng MaSP+ĐVT khác barcode.
+ */
+function buildCatalogCompositeKey_(maHang, dvt, maVach, includeMaVach) {
+  var mh = String(maHang == null ? "" : maHang).trim();
+  var mv = String(maVach == null ? "" : maVach).trim();
+  try { mh = mh.normalize("NFC"); } catch (e1) {}
+  try { mv = mv.normalize("NFC"); } catch (e2) {}
+  var dv = normalizeCatalogDvtPart_(dvt);
+  var base = mh + "_" + dv;
+  if (includeMaVach && mv) return base + "_" + mv;
+  return base;
+}
+
+
+/**
+ * Gán .key cho từng item theo quy tắc collision:
+ * - Mặc định MaSP_dvt
+ * - Nếu cùng MaSP+ĐVT mà khác MaVach → MaSP_dvt_MaVach
+ */
+function assignCatalogCompositeKeys_(items) {
+  var list = items || [];
+  var groups = {};
+  for (var i = 0; i < list.length; i++) {
+    var it = list[i];
+    if (!it) continue;
+    var mh = String(it.maHang || it.mh || "").trim();
+    var dv = normalizeCatalogDvtPart_(it.dvt || it.d || "");
+    var base = mh + "_" + dv;
+    if (!groups[base]) groups[base] = [];
+    groups[base].push(it);
+  }
+  for (var baseKey in groups) {
+    if (!Object.prototype.hasOwnProperty.call(groups, baseKey)) continue;
+    var bucket = groups[baseKey];
+    var mvSeen = {};
+    var distinctMv = 0;
+    for (var j = 0; j < bucket.length; j++) {
+      var mvj = String(bucket[j].maVach || bucket[j].mv || "").trim();
+      if (!Object.prototype.hasOwnProperty.call(mvSeen, mvj)) {
+        mvSeen[mvj] = true;
+        distinctMv++;
+      }
+    }
+    var needMv = distinctMv > 1;
+    for (var k = 0; k < bucket.length; k++) {
+      var row = bucket[k];
+      var mhK = String(row.maHang || row.mh || "").trim();
+      var dvtK = row.dvt || row.d || "";
+      var mvK = String(row.maVach || row.mv || "").trim();
+      row.key = buildCatalogCompositeKey_(mhK, dvtK, mvK, needMv);
+    }
+  }
+  return list;
+}
+
+
+/**
+ * Mở rộng entry import: mỗi ĐVT (d / d2) → 1 dòng quy cách độc lập.
+ * Giữ tonKho nếu có — không ép = 0.
+ */
+function expandCatalogEntriesByDvt_(entries) {
+  var out = [];
+  for (var i = 0; i < (entries || []).length; i++) {
+    var e = entries[i];
+    if (!e) continue;
+    var mh = String(e.mh || e.maHang || "").trim();
+    var mv = String(e.mv || e.maVach || "").trim();
+    var th = String(e.th || e.tenHang || "").trim();
+    var p = String(e.p || e.parentSku || "").trim();
+    var d = sanitizeImportDvt_(e.d || e.dvt || "");
+    var d2 = sanitizeImportDvt_(e.d2 || e.dvt2 || "");
+    var ton = e.ton != null ? e.ton : (e.tonKho != null ? e.tonKho : e.q);
+    var hasTon = ton !== undefined && ton !== null && ton !== "";
+    var tonNum = hasTon ? Number(ton) : NaN;
+    if (!mh && !mv) continue;
+    if (d) {
+      var row1 = { mh: mh, mv: mv, th: th, d: d, dvt: d, p: p, maHang: mh, maVach: mv, tenHang: th, parentSku: p };
+      if (hasTon && !isNaN(tonNum)) row1.ton = tonNum;
+      out.push(row1);
+    }
+    if (d2 && normalizeCatalogDvtPart_(d2) !== normalizeCatalogDvtPart_(d)) {
+      var row2 = { mh: mh, mv: mv, th: th, d: d2, dvt: d2, p: p, maHang: mh, maVach: mv, tenHang: th, parentSku: p };
+      if (hasTon && !isNaN(tonNum)) row2.ton = tonNum;
+      out.push(row2);
+    }
+    if (!d && !d2) {
+      var row0 = { mh: mh, mv: mv, th: th, d: "", dvt: "", p: p, maHang: mh, maVach: mv, tenHang: th, parentSku: p };
+      if (hasTon && !isNaN(tonNum)) row0.ton = tonNum;
+      out.push(row0);
+    }
+  }
+  assignCatalogCompositeKeys_(out);
+  return out;
+}
+
+
+/**
  * Chuẩn hóa Key sheet tồn (TON_Q7 / lookup): giữ prefix MH:/MV:, BỎ hậu tố |DV: / |ĐVT.
  * ĐVT lưu cột Dvt riêng — tránh sinh 2 dòng MH:X và MH:X|DV:cai.
  */
@@ -939,8 +1050,14 @@ function extractCatalogEntriesFromMatrix_(rows) {
     if (dRaw && !d) skippedBadDvt++;
     if (d) withDvt++;
     if (d2) withDvt2++;
-    entries.push({ mh: mh, mv: mv, th: th, d: d, d2: d2, p: p });
+    var tonRaw = cols.tonKho >= 0 ? getCellValue(row, cols.tonKho, "") : "";
+    var tonNum = tonRaw === "" ? NaN : Number(String(tonRaw).replace(/,/g, ""));
+    var baseEntry = { mh: mh, mv: mv, th: th, d: d, d2: d2, p: p };
+    if (!isNaN(tonNum)) baseEntry.ton = tonNum;
+    var expanded = expandCatalogEntriesByDvt_([baseEntry]);
+    for (var ei = 0; ei < expanded.length; ei++) entries.push(expanded[ei]);
   }
+  assignCatalogCompositeKeys_(entries);
   return {
     entries: entries,
     meta: {
@@ -959,7 +1076,8 @@ function extractCatalogEntriesFromMatrix_(rows) {
       withDvt: withDvt,
       withDvt2: withDvt2,
       skippedBadDvt: skippedBadDvt,
-      skippedJunk: skippedJunk
+      skippedJunk: skippedJunk,
+      compositeKey: true
     }
   };
 }

@@ -1347,6 +1347,7 @@ function buildCatalogFromSheet_(ss) {
     if (!hK || hK.indexOf("isnew") !== -1 || hK.indexOf("moi") !== -1) isNewIdx = 10;
   }
   var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
+  var tonIdx = mappedCols.tonKho;
   for (var k = startRow; k < rawData.length; k++) {
     if (!rawData[k]) continue;
     if (maHangIdx < 0 || tenHangIdx < 0) continue;
@@ -1354,6 +1355,7 @@ function buildCatalogFromSheet_(ss) {
     var ten = getCellValue(rawData[k], tenHangIdx, "");
     if (ma !== "" && ten !== "") tenHangChuanTheoMa[ma] = ten;
   }
+  var collected = [];
   for (var i = startRow; i < rawData.length; i++) {
     if (!rawData[i]) continue;
     // MaVach/MaHang luôn String — không Number() (mất số 0 đầu barcode)
@@ -1364,37 +1366,49 @@ function buildCatalogFromSheet_(ss) {
     var dvt = sanitizeImportDvt_(dvtRaw);
     var dvt2 = dvt2Idx >= 0 ? sanitizeImportDvt_(getCellValue(rawData[i], dvt2Idx, "")) : "";
     var parentSku = parentSkuIdx !== -1 ? String(getCellValue(rawData[i], parentSkuIdx, "") || "").trim() : "";
+    var tonRaw = tonIdx >= 0 ? getCellValue(rawData[i], tonIdx, "") : "";
+    var tonNum = tonRaw === "" || tonRaw == null ? NaN : Number(String(tonRaw).replace(/,/g, ""));
     var isNewFlag = false;
     if (isNewIdx !== -1) {
       var flagRaw = String(rawData[i][isNewIdx] == null ? "" : rawData[i][isNewIdx]).trim().toLowerCase();
       isNewFlag = flagRaw === "1" || flagRaw === "true" || flagRaw === "yes" || flagRaw === "x" || flagRaw === "moi" || flagRaw === "new";
     }
     if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[String(maHang).toUpperCase()] || "";
-    // Chuẩn hóa MH/MV (NFC + giữ Đ/đ, xử lý .0 / scientific) — phục hồi quét mã vạch 893…
     var mhNorm = normalizeProductCode(maHang) || String(maHang || "").trim();
     var mvNorm = normalizeProductCode(maVach) || String(maVach || "").trim();
     if (!mhNorm && !mvNorm) continue;
     var parentNorm = normalizeProductCode(parentSku) || String(parentSku || "").trim();
-    var obj = {
-      maHang: String(mhNorm || maHang || ""),
-      maVach: String(mvNorm || maVach || ""),
-      tenHang: tenHang,
-      dvt: dvt || "",
-      dvt2: dvt2 || "",
-      parentSku: String(parentNorm || parentSku || ""),
-      isNew: isNewFlag,
-      isLocked: false,
-      isOutStock: false
-    };
-    // Primary key = Mã SP (maHang). Không để barcode ghi đè SKU của sản phẩm khác.
-    var mhU = mhNorm ? String(mhNorm).trim().toUpperCase() : "";
-    var mvU = mvNorm ? String(mvNorm).trim().toUpperCase() : "";
-    if (mhU) danhMucHangHoa[mhU] = obj;
-    if (mvU) {
-      var occupied = danhMucHangHoa[mvU];
-      if (!occupied || String(occupied.maHang || "").trim().toUpperCase() === mhU) {
-        danhMucHangHoa[mvU] = obj;
-      }
+
+    var units = [];
+    if (dvt) units.push(dvt);
+    if (dvt2 && normalizeCatalogDvtPart_(dvt2) !== normalizeCatalogDvtPart_(dvt)) units.push(dvt2);
+    if (!units.length) units.push("");
+
+    for (var u = 0; u < units.length; u++) {
+      var obj = {
+        maHang: String(mhNorm || maHang || ""),
+        maVach: String(mvNorm || maVach || ""),
+        tenHang: tenHang,
+        dvt: units[u] || "",
+        dvt2: "",
+        parentSku: String(parentNorm || parentSku || ""),
+        isNew: isNewFlag,
+        isLocked: false,
+        isOutStock: false
+      };
+      if (!isNaN(tonNum)) obj.tonKho = tonNum;
+      collected.push(obj);
+    }
+  }
+
+  assignCatalogCompositeKeys_(collected);
+  for (var c = 0; c < collected.length; c++) {
+    var item = collected[c];
+    if (!item || !item.key) continue;
+    danhMucHangHoa[item.key] = item;
+    var mvAlias = normalizeProductCode(item.maVach);
+    if (mvAlias && !danhMucHangHoa[mvAlias]) {
+      danhMucHangHoa[mvAlias] = item;
     }
   }
   return danhMucHangHoa;
@@ -1433,7 +1447,7 @@ function findCatalogMaHangColIdx_(headerRow, parentIdx) {
 
 
 function getCatalogLookup(ss) {
-  var lookup = { byMaHang: {}, byMaVach: {} };
+  var lookup = { byKey: {}, byMaHang: {}, byMaVach: {}, byMaHangList: {} };
   var catalogResult = getCatalogData();
   if (!catalogResult || !catalogResult.success || !catalogResult.danhMuc) return lookup;
 
@@ -1442,32 +1456,73 @@ function getCatalogLookup(ss) {
     if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
     var item = danhMuc[key];
     if (!item) continue;
+    var itemKey = item.key || key;
+    // Bỏ qua alias barcode thuần (trùng object đã index theo composite key)
+    if (item.key && key !== item.key && key === (normalizeProductCode(item.maVach) || "")) {
+      // alias MV — chỉ ghi byMaVach
+    } else {
+      lookup.byKey[itemKey] = item;
+    }
     var mhKey = normalizeProductCode(item.maHang) || String(item.maHang || "").trim().toUpperCase();
     var mvKey = normalizeProductCode(item.maVach) || String(item.maVach || "").trim().toUpperCase();
-    if (mhKey) lookup.byMaHang[mhKey] = item;
-    if (mvKey) lookup.byMaVach[mvKey] = item;
+    if (mhKey) {
+      lookup.byMaHang[mhKey] = item; // last wins (compat)
+      if (!lookup.byMaHangList[mhKey]) lookup.byMaHangList[mhKey] = [];
+      var already = false;
+      for (var li = 0; li < lookup.byMaHangList[mhKey].length; li++) {
+        if (lookup.byMaHangList[mhKey][li] === item || lookup.byMaHangList[mhKey][li].key === item.key) {
+          already = true; break;
+        }
+      }
+      if (!already) lookup.byMaHangList[mhKey].push(item);
+    }
+    if (mvKey && !lookup.byMaVach[mvKey]) lookup.byMaVach[mvKey] = item;
   }
   return lookup;
 }
 
 
-function resolveCatalogProduct(lookup, maHang, maVach) {
+function resolveCatalogProduct(lookup, maHang, maVach, dvt) {
   if (!lookup) return null;
-  var mh = normalizeProductCode(maHang) || String(maHang || "").trim().toUpperCase();
-  var mv = normalizeProductCode(maVach) || String(maVach || "").trim().toUpperCase();
-  // Ưu tiên Mã SP (primary key) khi có — tránh lệch tên/MV khi barcode trùng SKU khác
-  if (mh && lookup.byMaHang[mh]) return lookup.byMaHang[mh];
+  var mh = normalizeProductCode(maHang) || String(maHang || "").trim();
+  var mv = normalizeProductCode(maVach) || String(maVach || "").trim();
+  var dv = String(dvt || "").trim();
+
+  // 1) Composite Key exact
+  if (mh && dv && lookup.byKey) {
+    var k1 = buildCatalogCompositeKey_(mh, dv, mv, false);
+    var k2 = buildCatalogCompositeKey_(mh, dv, mv, true);
+    if (lookup.byKey[k1]) return lookup.byKey[k1];
+    if (lookup.byKey[k2]) return lookup.byKey[k2];
+  }
+  // 2) Cùng MaSP + ĐVT trong list
+  if (mh && dv && lookup.byMaHangList && lookup.byMaHangList[mh]) {
+    var list = lookup.byMaHangList[mh];
+    for (var i = 0; i < list.length; i++) {
+      if (normalizeCatalogDvtPart_(list[i].dvt) === normalizeCatalogDvtPart_(dv)) {
+        if (!mv || !list[i].maVach || normalizeProductCode(list[i].maVach) === mv) return list[i];
+      }
+    }
+  }
+  // 3) MaVach exact (quy cách scan)
   if (mv && lookup.byMaVach[mv]) return lookup.byMaVach[mv];
+  // 4) Compat: MaSP only (quy cách đầu / cuối)
+  if (mh && lookup.byMaHang[mh]) return lookup.byMaHang[mh];
   return null;
 }
 
 
 function resolveDvtValue(lookup, maHang, maVach, currentDvt) {
-  // Ép theo Data_Excel khi có ĐVT catalog — không giữ "Cái"/ĐVT sai đã lưu trên đơn
-  var catalogItem = resolveCatalogProduct(lookup, maHang, maVach);
-  var catalogDvt = catalogItem && catalogItem.dvt ? String(catalogItem.dvt).trim() : "";
-  if (catalogDvt) return catalogDvt;
-  return String(currentDvt || "").trim();
+  var cur = String(currentDvt || "").trim();
+  var catalogItem = resolveCatalogProduct(lookup, maHang, maVach, cur);
+  if (catalogItem && catalogItem.dvt) {
+    // Nếu current khớp quy cách → giữ; không ép ĐVT1 của mã khác
+    if (!cur || normalizeCatalogDvtPart_(cur) === normalizeCatalogDvtPart_(catalogItem.dvt)) {
+      return String(catalogItem.dvt).trim();
+    }
+  }
+  if (cur) return cur;
+  return catalogItem && catalogItem.dvt ? String(catalogItem.dvt).trim() : "";
 }
 
 
@@ -1722,13 +1777,26 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
   width = writeCols.width;
   values[0] = header;
 
-  var byMh = {};
-  var byMv = {};
+  // Index sheet rows by Composite Key (MaSP_ĐVT[_MaVach])
+  var existingItems = [];
   for (var r = 1; r < values.length; r++) {
-    var mh0 = String(values[r][mhIdx] == null ? "" : values[r][mhIdx]).trim().toUpperCase();
-    var mv0 = String(values[r][mvIdx] == null ? "" : values[r][mvIdx]).trim().toUpperCase();
-    if (mh0 && byMh[mh0] === undefined) byMh[mh0] = r + 1; // sheet row
-    if (mv0 && byMv[mv0] === undefined) byMv[mv0] = r + 1;
+    var mh0 = String(values[r][mhIdx] == null ? "" : values[r][mhIdx]).trim();
+    var mv0 = String(values[r][mvIdx] == null ? "" : values[r][mvIdx]).trim();
+    var dvt0 = sanitizeImportDvt_(values[r][dvtIdx]);
+    if (!mh0 && !mv0) continue;
+    existingItems.push({
+      maHang: mh0,
+      maVach: mv0,
+      dvt: dvt0,
+      _sheetRow: r + 1,
+      _memIdx: r
+    });
+  }
+  assignCatalogCompositeKeys_(existingItems);
+  var byKey = {};
+  for (var ei = 0; ei < existingItems.length; ei++) {
+    var ex = existingItems[ei];
+    if (ex && ex.key && byKey[ex.key] === undefined) byKey[ex.key] = ex;
   }
 
   var stamp = catalogNowStamp_();
@@ -1741,35 +1809,43 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
   var withParent = 0;
   var appendRows = [];
 
-  for (var i = 0; i < (entries || []).length; i++) {
-    var e = entries[i];
+  var upsertList = expandCatalogEntriesByDvt_(entries || []);
+  assignCatalogCompositeKeys_(upsertList);
+  var tonSyncEntries = [];
+
+  for (var i = 0; i < upsertList.length; i++) {
+    var e = upsertList[i];
     if (!e) continue;
     var mh = String(e.mh || e.maHang || "").trim();
     var mv = String(e.mv || e.maVach || "").trim();
     var th = String(e.th || e.tenHang || "").trim();
     var dRaw = String(e.d || e.dvt || "").trim();
     var d = sanitizeImportDvt_(dRaw);
-    var d2 = sanitizeImportDvt_(e.d2 || e.dvt2 || "");
     var pIn = String(e.p || e.parentSku || "").trim();
     if (!mh && !mv) continue;
     if (dRaw && !d) skippedBadDvt++;
     if (d) withDvt++;
-    if (d2) withDvt2++;
 
-    var mhU = mh.toUpperCase();
-    var mvU = mv.toUpperCase();
-    var sheetRow = (mhU && byMh[mhU]) ? byMh[mhU] : ((mvU && byMv[mvU]) ? byMv[mvU] : 0);
+    var rowKey = e.key || buildCatalogCompositeKey_(mh, d, mv, false);
+    var hit = byKey[rowKey];
+    if (!hit) {
+      var alt1 = buildCatalogCompositeKey_(mh, d, mv, true);
+      var alt2 = buildCatalogCompositeKey_(mh, d, mv, false);
+      hit = byKey[alt1] || byKey[alt2] || null;
+    }
+    var hasTon = e.ton !== undefined && e.ton !== null && e.ton !== "";
+    var tonNum = hasTon ? Number(e.ton) : NaN;
 
-    if (sheetRow > 1) {
-      var memIdx = sheetRow - 1;
+    if (hit && hit._sheetRow > 1) {
+      var sheetRow = hit._sheetRow;
+      var memIdx = hit._memIdx;
       var row = values[memIdx] ? values[memIdx].slice() : [];
       while (row.length < width) row.push("");
       var oldParent = String(row[parentIdx] == null ? "" : row[parentIdx]).trim();
       if (mh) row[mhIdx] = mh;
-      if (mv) row[mvIdx] = mv;
+      if (mv) row[mvIdx] = String(mv);
       if (th) row[thIdx] = th;
       if (d) row[dvtIdx] = d;
-      if (d2 && dvt2Idx >= 0) row[dvt2Idx] = d2;
       row[ngayIdx] = stamp.date;
       if (pIn) {
         row[parentIdx] = pIn;
@@ -1778,19 +1854,19 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
         row[parentIdx] = oldParent;
         preservedParent++;
       }
-      // Giữ IsNew nguyên
       sh.getRange(sheetRow, 1, 1, width).setValues([row]);
-      if (mhU) byMh[mhU] = sheetRow;
-      if (mvU) byMv[mvU] = sheetRow;
+      byKey[rowKey] = { key: rowKey, maHang: mh, maVach: mv, dvt: d, _sheetRow: sheetRow, _memIdx: memIdx };
       updated++;
+      if (hasTon && !isNaN(tonNum) && tonNum >= 0 && mh) {
+        tonSyncEntries.push({ maHang: mh, mv: mv, th: th, d: d, p: pIn || oldParent || "", q: tonNum });
+      }
     } else {
       var newRow = [];
       for (var c = 0; c < width; c++) newRow.push("");
       newRow[mhIdx] = mh;
-      newRow[mvIdx] = mv;
+      newRow[mvIdx] = String(mv);
       newRow[thIdx] = th;
       newRow[dvtIdx] = d;
-      if (d2 && dvt2Idx >= 0) newRow[dvt2Idx] = d2;
       newRow[ngayIdx] = stamp.date;
       if (pIn) {
         newRow[parentIdx] = pIn;
@@ -1798,6 +1874,10 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
       }
       appendRows.push(newRow);
       appended++;
+      byKey[rowKey] = { key: rowKey, maHang: mh, maVach: mv, dvt: d, _sheetRow: -1, _pending: true };
+      if (hasTon && !isNaN(tonNum) && tonNum >= 0 && mh) {
+        tonSyncEntries.push({ maHang: mh, mv: mv, th: th, d: d, p: pIn || "", q: tonNum });
+      }
     }
   }
 
@@ -1808,10 +1888,14 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
       sh.getRange(start, ngayIdx + 1, appendRows.length, 1).setNumberFormat("yyyy-mm-dd hh:mm:ss");
     } catch (eFmt) {}
   }
+  // Chỉ ghi tồn khi có số thực — KHÔNG gán đè = 0
+  if (tonSyncEntries.length) {
+    try { writeTonVariantEntriesToSheet_(ss, tonSyncEntries); } catch (eTonBatch) {}
+  }
   try { SpreadsheetApp.flush(); } catch (e) {}
 
   return {
-    rows: (entries || []).length,
+    rows: upsertList.length,
     updated: updated,
     appended: appended,
     preservedParent: preservedParent,
@@ -1819,10 +1903,11 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
     withDvt2: withDvt2,
     skippedBadDvt: skippedBadDvt,
     withParent: withParent,
+    tonSynced: tonSyncEntries.length,
     totalRows: Math.max(sh.getLastRow() - 1, 0),
     ms: Date.now() - t0,
     ngayTaoStamp: stamp.text,
-    mode: "upsert-merge-noclear"
+    mode: "upsert-composite-key"
   };
 }
 
@@ -1844,6 +1929,16 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
     ss = ss || getSS();
     var byKey = readTonVariantByKeyMap_(ss);
     var added = 0;
+    var collected = [];
+    var seenObj = {};
+    for (var mapKey in danhMuc) {
+      if (!Object.prototype.hasOwnProperty.call(danhMuc, mapKey)) continue;
+      var existingItem = danhMuc[mapKey];
+      if (!existingItem || !existingItem.key) continue;
+      if (seenObj[existingItem.key]) continue;
+      seenObj[existingItem.key] = true;
+      collected.push(existingItem);
+    }
     for (var k in byKey) {
       if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
       var row = byKey[k];
@@ -1851,24 +1946,33 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
       var mh = String(row.k || "").split("|")[0].trim();
       var mv = String(row.mv || "").trim();
       var parentSku = String(row.p || "").trim();
+      var dvt = String(row.d || "").trim();
       if (!mh && !mv) continue;
-      var mhU = mh.toUpperCase();
-      var mvU = mv.toUpperCase();
-      // Khớp theo MH trước — không lấy nhầm SP khác chỉ vì trùng barcode/SKU
-      var existing = (mhU && danhMuc[mhU]) || null;
-      if (!existing && mvU && danhMuc[mvU]) {
-        var byMv = danhMuc[mvU];
-        if (!mhU || String(byMv.maHang || "").trim().toUpperCase() === mhU) existing = byMv;
+      var ton = row.tonHienTai != null ? Number(row.tonHienTai) : NaN;
+
+      // Tìm quy cách khớp MaSP+ĐVT(+MV) đã có
+      var matched = null;
+      for (var dk in danhMuc) {
+        if (!Object.prototype.hasOwnProperty.call(danhMuc, dk)) continue;
+        var cur = danhMuc[dk];
+        if (!cur || !cur.key) continue;
+        if (normalizeProductCode(cur.maHang) !== normalizeProductCode(mh) &&
+            String(cur.maHang || "").trim().toUpperCase() !== String(mh || "").trim().toUpperCase()) continue;
+        if (dvt && normalizeCatalogDvtPart_(cur.dvt) !== normalizeCatalogDvtPart_(dvt)) continue;
+        if (mv && cur.maVach && normalizeProductCode(cur.maVach) !== normalizeProductCode(mv)) continue;
+        matched = cur;
+        break;
       }
-      if (existing) {
-        if (!existing.parentSku && parentSku) existing.parentSku = parentSku;
-        if (!existing.tenHang && row.th) existing.tenHang = row.th;
-        if (!existing.dvt && row.d) existing.dvt = row.d;
-        if (!existing.maVach && mv) existing.maVach = mv;
-        if (row.isLocked) existing.isLocked = true;
+      if (matched) {
+        if (!matched.parentSku && parentSku) matched.parentSku = parentSku;
+        if (!matched.tenHang && row.th) matched.tenHang = row.th;
+        if (!matched.dvt && dvt) matched.dvt = dvt;
+        if (!matched.maVach && mv) matched.maVach = mv;
+        if (!isNaN(ton)) matched.tonKho = ton;
+        if (row.isLocked) matched.isLocked = true;
         if (row.isOutStock) {
-          existing.isOutStock = true;
-          existing.isNew = false;
+          matched.isOutStock = true;
+          matched.isNew = false;
         }
         continue;
       }
@@ -1876,23 +1980,36 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
         maHang: mh,
         maVach: mv,
         tenHang: row.th || mh,
-        dvt: row.d || "",
+        dvt: dvt || "",
+        dvt2: "",
         parentSku: parentSku,
         isNew: false,
         isLocked: !!row.isLocked,
         isOutStock: !!row.isOutStock,
         fromTonVariant: true
       };
-      if (mhU) danhMuc[mhU] = obj;
-      if (mvU) {
-        var occupiedMv = danhMuc[mvU];
-        if (!occupiedMv || String(occupiedMv.maHang || "").trim().toUpperCase() === mhU) {
-          danhMuc[mvU] = obj;
-        }
-      }
+      if (!isNaN(ton)) obj.tonKho = ton;
+      collected.push(obj);
       added++;
     }
-    return { danhMuc: danhMuc, added: added };
+    assignCatalogCompositeKeys_(collected);
+    // Rebuild map theo composite key (giữ alias barcode nếu trống)
+    var rebuilt = {};
+    for (var ci = 0; ci < collected.length; ci++) {
+      var it = collected[ci];
+      if (!it || !it.key) continue;
+      rebuilt[it.key] = it;
+      var mvA = normalizeProductCode(it.maVach);
+      if (mvA && !rebuilt[mvA]) rebuilt[mvA] = it;
+    }
+    // Giữ các item cũ chưa nằm trong collected (alias-only keys đã có .key)
+    for (var oldK in danhMuc) {
+      if (!Object.prototype.hasOwnProperty.call(danhMuc, oldK)) continue;
+      var oldIt = danhMuc[oldK];
+      if (!oldIt || !oldIt.key) continue;
+      if (!rebuilt[oldIt.key]) rebuilt[oldIt.key] = oldIt;
+    }
+    return { danhMuc: rebuilt, added: added };
   } catch (e) {
     return { danhMuc: danhMuc, added: 0, error: e.message || String(e) };
   }

@@ -218,6 +218,7 @@
 
       <div id="ql-view-phieu" class="card" style="display:none; border: 2px solid #34a853;">
         <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
+        <p id="ql-order-meta-badge" style="font-size:13px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #93c5fd; border-radius:10px; padding:8px 10px;">Mã Đơn: — | Kho: — | Ngày Tạo: —</p>
         <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
         <div style="overflow-x: auto;">
           <table id="ql-table">
@@ -235,6 +236,13 @@
 
     <!-- TAB 3: SOẠN HÀNG MOBILE -->
     <div id="tab-soan-hang" class="tab-content">
+      <div class="card" style="border-left:4px solid #2563eb;">
+        <h3 style="margin-top:0; color:var(--primary);">📅 Bảng Lịch Gom Đơn Đa Kho</h3>
+        <p style="font-size:13px; color:#64748b; line-height:1.5; margin:0;">
+          Lịch tuần động (Thứ 2→CN), nhóm theo kho thực tế + In đơn ngày PDF nằm trên FE
+          <b>public/index.html</b> (Vercel). WebApp GAS này giữ soạn đơn cơ bản.
+        </p>
+      </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Giao diện Soạn Hàng</h3>
         <div class="form-row">
