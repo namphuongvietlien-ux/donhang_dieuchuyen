@@ -309,6 +309,60 @@
     var storeMap = {};
     var phieuData = []; var editRows = []; var currentPhieuObj = null; 
     var sessionUser = { user: "", role: "", store: "" };
+    var submitBusyMap_ = {};
+
+    function normalizeMisaCode_(value) {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'number' && isFinite(value)) {
+        if (Math.floor(value) === value && Math.abs(value) < 1e16) value = String(Math.round(value));
+      }
+      var text = String(value || '').trim();
+      if (!text) return '';
+      try { text = text.normalize('NFC'); } catch (eNfc) {}
+      if (text.charAt(0) === "'") text = text.slice(1);
+      text = text.replace(/\u00A0/g, '').replace(/\s+/g, '');
+      return text.replace(/[^a-zA-Z0-9Đđ]/g, '').trim().toUpperCase();
+    }
+    function cartCodesEqual_(a, b) {
+      var na = normalizeMisaCode_(a), nb = normalizeMisaCode_(b);
+      if (na && nb) return na === nb;
+      return String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase();
+    }
+    function ensureCartLineId_(it) {
+      if (!it) return '';
+      if (!it.lineId) it.lineId = 'ln-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+      return String(it.lineId);
+    }
+    function findCartItemByLineId_(list, lineId) {
+      var id = String(lineId || '');
+      if (!id || !list) return -1;
+      for (var i = 0; i < list.length; i++) if (list[i] && String(list[i].lineId || '') === id) return i;
+      return -1;
+    }
+    function beginSubmitBusy_(key, btnId, busyLabel) {
+      if (submitBusyMap_[key]) return false;
+      var btn = btnId ? document.getElementById(btnId) : null;
+      submitBusyMap_[key] = { btnId: btnId || '', prevHtml: btn ? btn.innerHTML : '' };
+      if (btn) { btn.disabled = true; if (busyLabel) btn.innerHTML = busyLabel; }
+      return true;
+    }
+    function endSubmitBusy_(key) {
+      var st = submitBusyMap_[key]; delete submitBusyMap_[key];
+      if (!st) return;
+      var btn = st.btnId ? document.getElementById(st.btnId) : null;
+      if (btn) { btn.disabled = false; if (st.prevHtml) btn.innerHTML = st.prevHtml; }
+    }
+    function resolveSelectedCatalogProduct_(maHang, maVach) {
+      var mh = normalizeMisaCode_(maHang), mv = normalizeMisaCode_(maVach);
+      if (mh && danhMucGoc[mh]) return danhMucGoc[mh];
+      if (mv && danhMucGoc[mv]) return danhMucGoc[mv];
+      for (var i = 0; i < danhMucArr.length; i++) {
+        var it = danhMucArr[i]; if (!it) continue;
+        if (mh && cartCodesEqual_(it.maHang, maHang)) return it;
+        if (mv && cartCodesEqual_(it.maVach, maVach)) return it;
+      }
+      return null;
+    }
 
     window.onload = function() {
       document.getElementById("loading-overlay").style.display = "none";
@@ -322,7 +376,8 @@
       if(!u || !p) return alert("Vui lòng nhập đủ thông tin!");
       
       showLoad("Đang xác thực...");
-      google.script.run.withSuccessHandler(function(res) {
+      google.script.run
+        .withSuccessHandler(function(res) {
         if(res.success) {
           sessionUser = { user: res.username, role: res.role, store: res.store };
           document.getElementById("lbl-username").innerText = sessionUser.user + " (" + sessionUser.role + ")";
@@ -332,13 +387,16 @@
         } else {
           hideLoad(); alert("❌ " + res.msg);
         }
-      }).loginUser(u, p);
+      })
+        .withFailureHandler(function(err) { hideLoad(); alert('Lỗi kết nối: ' + (err && err.message || err)); })
+        .loginUser(u, p);
     }
 
     function initSystemData() {
       showLoad("Đang tải dữ liệu hệ thống...");
       document.getElementById("ql-ngay").valueAsDate = new Date();
-      google.script.run.withSuccessHandler(function(res) {
+      google.script.run
+        .withSuccessHandler(function(res) {
         hideLoad();
         if(!res.success) { alert("Lỗi tải data: " + res.error); return; }
         gStores = res.stores; danhMucGoc = res.danhMuc; danhMucArr = Object.values(danhMucGoc);
@@ -352,7 +410,9 @@
 
         if (sessionUser.role === "Admin") { document.getElementById("nav-tab-admin").style.display = "block"; } 
         applyQuyenKho();
-      }).getInitialData();
+      })
+        .withFailureHandler(function(err) { hideLoad(); alert('Lỗi tải hệ thống: ' + (err && err.message || err)); })
+        .getInitialData();
     }
 
     function web_switchAdminTab_(id) {
@@ -402,17 +462,17 @@
       box.style.width = (inputEl.offsetWidth) + "px"; box.style.left = (inputEl.offsetLeft) + "px"; box.style.top = (inputEl.offsetTop + inputEl.offsetHeight) + "px";
 
       if (val.length < 2) { box.style.display = "none"; return; }
-      var kw = val.toUpperCase();
+      var kw = normalizeMisaCode_(val) || val.toUpperCase();
       
       if (e.key === "Enter") {
-        var exactMatch = danhMucGoc[kw];
-        if (exactMatch) chonSanPham(exactMatch);
+        var exact = resolveSelectedCatalogProduct_(val, val) || danhMucGoc[kw];
+        if (exact) chonSanPhamByMaSP_(exact.maHang, exact.maVach);
         else {
           var matched = filterProducts(kw);
-          if (matched.length > 0) chonSanPham(matched[0]); 
-          else { arrItems.unshift({ maHang: "LỖI MÃ", maVach: val, tenHang: "❌ Không tồn tại", dvt: "Lỗi", sl: "1" }); renderTable(); }
+          if (matched.length > 0) chonSanPhamByMaSP_(matched[0].maHang, matched[0].maVach);
+          else { arrItems.unshift({ lineId: ensureCartLineId_({}), maHang: "LỖI MÃ", maVach: String(val), tenHang: "❌ Không tồn tại", dvt: "Lỗi", selectedDVT: "Lỗi", sl: "1" }); renderTable(); }
         }
-        inputEl.value = ""; box.style.display = "none"; return;
+        inputEl.value = ""; box.style.display = "none"; inputEl.focus(); return;
       }
 
       var results = filterProducts(kw);
@@ -420,61 +480,127 @@
 
       var html = "";
       results.slice(0, 10).forEach(function(item) {
-        var itemStr = encodeURIComponent(JSON.stringify(item));
-        html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc">Mã: <b>' + item.maHang + '</b> | Vạch: <b>' + item.maVach + '</b></div></div>';
+        var mhEnc = encodeURIComponent(String(item.maHang || ''));
+        var mvEnc = encodeURIComponent(String(item.maVach || ''));
+        html += '<div class="suggest-item" onclick="chonSanPhamByMaSP_(\'' + mhEnc + '\',\'' + mvEnc + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc">Mã: <b>' + item.maHang + '</b> | Vạch: <b>' + item.maVach + '</b></div></div>';
       });
       box.innerHTML = html; box.style.display = "block";
     }
 
     function filterProducts(kw) {
+      var q = normalizeMisaCode_(kw) || String(kw || '').toUpperCase();
       return danhMucArr.filter(function(it) {
-        var maH = it.maHang ? it.maHang.toUpperCase() : ""; var maV = it.maVach ? it.maVach.toUpperCase() : ""; var tenH = it.tenHang ? it.tenHang.toUpperCase() : "";
+        var maH = normalizeMisaCode_(it.maHang); var maV = normalizeMisaCode_(it.maVach);
+        var tenH = String(it.tenHang || '').toUpperCase();
         var s6Vach = maV.length >= 6 ? maV.substring(maV.length - 6) : maV;
-        return maH.indexOf(kw) !== -1 || maV.indexOf(kw) !== -1 || tenH.indexOf(kw) !== -1 || s6Vach.indexOf(kw) !== -1;
+        return (maH && maH.indexOf(q) !== -1) || (maV && maV.indexOf(q) !== -1) || tenH.indexOf(String(kw || '').toUpperCase()) !== -1 || (s6Vach && s6Vach.indexOf(q) !== -1);
       });
     }
 
+    function chonSanPhamByMaSP_(maHang, maVach) {
+      var mh = (typeof maHang === 'string' && maHang.indexOf('%') !== -1) ? decodeURIComponent(maHang) : maHang;
+      var mv = (typeof maVach === 'string' && maVach.indexOf('%') !== -1) ? decodeURIComponent(maVach) : maVach;
+      var product = resolveSelectedCatalogProduct_(mh, mv);
+      if (!product) return alert('Không tìm thấy sản phẩm [' + (mh || mv || '?') + ']');
+      chonSanPham(product);
+      var input = document.getElementById("input-scan");
+      var box = document.getElementById("suggest-box");
+      if (input) { input.value = ""; input.focus(); }
+      if (box) box.style.display = "none";
+    }
+
     function chonSanPhamFromSuggest(itemStr) {
-      chonSanPham(JSON.parse(decodeURIComponent(itemStr)));
-      document.getElementById("input-scan").value = ""; document.getElementById("suggest-box").style.display = "none"; document.getElementById("input-scan").focus();
+      try {
+        var parsed = JSON.parse(decodeURIComponent(itemStr));
+        chonSanPhamByMaSP_(parsed.maHang, parsed.maVach);
+      } catch (e) { alert('Không đọc được sản phẩm đã chọn.'); }
     }
 
     function chonSanPham(it) {
-      var existingIndex = arrItems.findIndex(x => x.maVach === it.maVach && x.maHang !== "LỖI MÃ");
-      if(existingIndex !== -1) { arrItems[existingIndex].sl = Number(arrItems[existingIndex].sl) + 1; arrItems[existingIndex].highlight = true; } 
-      else { arrItems.unshift({ maHang: it.maHang, maVach: it.maVach, tenHang: it.tenHang, dvt: it.dvt, sl: "1", highlight: true }); }
+      var resolved = resolveSelectedCatalogProduct_(it && it.maHang, it && it.maVach) || it;
+      if (!resolved) return;
+      var dvt = String(resolved.selectedDVT || resolved.dvt || '').trim();
+      var existingIndex = arrItems.findIndex(function(x) {
+        return x.maHang !== "LỖI MÃ" && cartCodesEqual_(x.maHang, resolved.maHang) && cartCodesEqual_(x.maVach, resolved.maVach);
+      });
+      if (existingIndex !== -1) {
+        arrItems[existingIndex].sl = Number(arrItems[existingIndex].sl) + 1;
+        arrItems[existingIndex].highlight = true;
+        arrItems[existingIndex].dvt = dvt || arrItems[existingIndex].dvt;
+        arrItems[existingIndex].selectedDVT = arrItems[existingIndex].dvt;
+        ensureCartLineId_(arrItems[existingIndex]);
+      } else {
+        var row = { maHang: String(resolved.maHang || ''), maVach: String(resolved.maVach || ''), tenHang: resolved.tenHang, dvt: dvt, selectedDVT: dvt, dvt2: resolved.dvt2 || '', sl: "1", highlight: true };
+        ensureCartLineId_(row);
+        arrItems.unshift(row);
+      }
       renderTable();
     }
     
     document.addEventListener("click", function(event) { var box = document.getElementById("suggest-box"); var input = document.getElementById("input-scan"); if (event.target !== box && event.target !== input && !box.contains(event.target)) box.style.display = "none"; });
 
-    function thayDoiSoLuong(index, delta) { var currentSl = Number(arrItems[index].sl) || 0; var newSl = currentSl + delta; if (newSl > 0) { arrItems[index].sl = newSl; renderTable(); } }
+    function thayDoiSoLuong(lineId, delta) {
+      var index = findCartItemByLineId_(arrItems, lineId);
+      if (index < 0) return;
+      var currentSl = Number(arrItems[index].sl) || 0; var newSl = currentSl + delta;
+      if (newSl > 0) { arrItems[index].sl = newSl; renderTable(); }
+    }
+    function onChangeUnit(lineId, newDvt) {
+      var index = findCartItemByLineId_(arrItems, lineId);
+      if (index < 0) return;
+      arrItems[index].dvt = String(newDvt || '').trim();
+      arrItems[index].selectedDVT = arrItems[index].dvt;
+    }
+    function removeCartItemByLineId_(lineId) {
+      var index = findCartItemByLineId_(arrItems, lineId);
+      if (index < 0) return;
+      arrItems.splice(index, 1); renderTable();
+    }
 
     function renderTable() {
       var tbody = document.getElementById("tbody-items"); tbody.innerHTML = ""; var tongSl = 0;
-      arrItems.forEach((it, i) => {
+      arrItems.forEach(function(it, i) {
+        var lineId = ensureCartLineId_(it);
         var isErr = (it.maHang === "LỖI MÃ" || isNaN(Number(it.sl))); tongSl += (Number(it.sl) || 0);
-        var trClass = isErr ? 'row-error' : (it.highlight ? 'scan-highlight' : ''); it.highlight = false; 
-        tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>' + it.maVach + '</b><br><small style="color:gray;">' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + '</td><td>' + it.dvt + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="arrItems[' + i + '].sl=this.value; renderTable();"><button class="qty-btn" onclick="thayDoiSoLuong(' + i + ', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="arrItems.splice(' + i + ',1); renderTable();">×</button></td></tr>');
+        var trClass = isErr ? 'row-error' : (it.highlight ? 'scan-highlight' : ''); it.highlight = false;
+        var dvtShow = it.selectedDVT || it.dvt || '';
+        var dvtCell = dvtShow;
+        if (!isErr && it.dvt2 && String(it.dvt2).trim() && String(it.dvt2).toUpperCase() !== String(dvtShow).toUpperCase()) {
+          dvtCell = '<select onchange="onChangeUnit(\'' + lineId + '\', this.value)">' +
+            '<option value="' + dvtShow + '" selected>' + dvtShow + '</option>' +
+            '<option value="' + it.dvt2 + '">' + it.dvt2 + '</option></select>';
+        }
+        var lid = String(lineId).replace(/'/g, "\\'");
+        tbody.insertAdjacentHTML('beforeend', '<tr class="' + trClass + '"><td>' + (arrItems.length - i) + '</td><td><b>' + it.maVach + '</b><br><small style="color:gray;">' + it.maHang + '</small></td><td style="font-weight:500;">' + it.tenHang + '</td><td>' + dvtCell + '</td><td><div class="qty-control"><button class="qty-btn" onclick="thayDoiSoLuong(\'' + lid + '\', -1)">-</button><input type="number" class="qty-input" value="' + it.sl + '" onchange="var ix=findCartItemByLineId_(arrItems,\'' + lid + '\'); if(ix>=0){arrItems[ix].sl=this.value; renderTable();}"><button class="qty-btn" onclick="thayDoiSoLuong(\'' + lid + '\', 1)">+</button></div></td><td style="text-align:center;"><button style="color:#d93025; border:none; background:none; font-weight:bold; cursor:pointer; font-size:18px;" onclick="removeCartItemByLineId_(\'' + lid + '\')">×</button></td></tr>');
       });
       document.getElementById("lbl-tong-sl").innerText = tongSl;
     }
 
     function submitPhieuMoi() {
       if(arrItems.length === 0) return alert("Chưa có hàng!");
+      if (!beginSubmitBusy_('submitPhieuMoi', null, null)) return;
       showLoad("Đang tạo đơn...");
       var lPhieu = document.querySelector('input[name="loaiPhieu"]:checked').value;
       var khoXuat = document.getElementById("select-kho-xuat").value;
       var khoNhan = document.getElementById("select-kho-nhan").value;
+      var itemsToSave = arrItems.map(function(it) {
+        return { maHang: String(it.maHang || ''), maVach: String(it.maVach || ''), tenHang: it.tenHang, dvt: it.selectedDVT || it.dvt, sl: it.sl };
+      });
 
-      google.script.run.withSuccessHandler(function(res) {
+      google.script.run
+        .withSuccessHandler(function(res) {
         hideLoad();
+        endSubmitBusy_('submitPhieuMoi');
         if(res.coLoi) { alert("⚠️ Có mã lỗi. Sửa trong tab Quản lý!"); arrItems = []; renderTable(); } 
         else {
            currentPhieuObj = { soPhieu: res.soPhieu, khoXuat: khoXuat, khoNhan: khoNhan };
            document.getElementById("modal-sophieu").innerText = res.soPhieu; document.getElementById("modal-action").style.display = "flex";
+           arrItems = []; renderTable();
+           var scan = document.getElementById("input-scan"); if (scan) scan.focus();
         }
-      }).luuPhieuTuWebApp({ loaiPhieu: lPhieu, khoXuat: khoXuat, khoNhan: khoNhan, items: arrItems });
+      })
+        .withFailureHandler(function(err) { hideLoad(); endSubmitBusy_('submitPhieuMoi'); alert('Lỗi: ' + (err && err.message || err)); })
+        .luuPhieuTuWebApp({ loaiPhieu: lPhieu, khoXuat: khoXuat, khoNhan: khoNhan, items: itemsToSave });
     }
 
     function actionPrintNew() { executePrintWeb(currentPhieuObj.soPhieu, currentPhieuObj.khoXuat, currentPhieuObj.khoNhan, arrItems); }

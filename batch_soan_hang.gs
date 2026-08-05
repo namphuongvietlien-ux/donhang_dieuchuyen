@@ -147,8 +147,9 @@ function getKhoNhanBySoPhieu(soPhieu) {
   if (!historySheet) return "";
   var data = historySheet.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
-    if (data[i][1] && data[i][1].toString().trim().toLowerCase() === soPhieu.toString().trim().toLowerCase()) {
-      return data[i][3] ? data[i][3].toString().trim() : "";
+    // Exact 1:1 sau chuẩn hóa — không substring (Q4 ≠ Q4-275)
+    if (data[i][1] && orderKeysMatch_(data[i][1], soPhieu)) {
+      return data[i][3] ? String(data[i][3]).trim() : "";
     }
   }
   return "";
@@ -826,11 +827,12 @@ function getDisplayOrderStatus(rowStatus, slThucTe, slSoan) {
 
 function getOrderState(soPhieu, historySheet, dataRows) {
   var data = dataRows || historySheet.getDataRange().getValues();
-  var target = String(soPhieu || "").trim().toLowerCase();
+  var target = String(soPhieu || "").trim();
   var state = { isPacked: false, isConfirmed: false, stores: [] };
   if (!target) return state;
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1] || "").trim().toLowerCase() !== target) continue;
+    // Exact 1:1 (NFC + giữ Đ/đ) — không dùng indexOf/substring
+    if (!orderKeysMatch_(data[i][1], target)) continue;
     var rowStatus = String(data[i][12] || "").trim();
     var slThucTe = data[i][8];
     var khoXuat = String(data[i][2] || "").trim();
@@ -906,13 +908,12 @@ function logOrderChange(ss, soPhieu, action, actor, maHang, maVach, oldValue, ne
 function hasDuplicateItemInOrder(historySheet, soPhieu, item, dataRows) {
   if (!historySheet || !soPhieu || !item) return false;
   var data = dataRows || historySheet.getDataRange().getValues();
-  var target = String(soPhieu).trim().toLowerCase();
-  var itemMaHang = String(item.maHang || "").trim().toUpperCase();
-  var itemMaVach = String(item.maVach || "").trim().toUpperCase();
+  var itemMaHang = normalizeProductCode(item.maHang);
+  var itemMaVach = normalizeProductCode(item.maVach);
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1]).trim().toLowerCase() !== target) continue;
-    var existingMaHang = String(data[i][4] || "").trim().toUpperCase();
-    var existingMaVach = String(data[i][5] || "").trim().toUpperCase();
+    if (!orderKeysMatch_(data[i][1], soPhieu)) continue;
+    var existingMaHang = normalizeProductCode(data[i][4]);
+    var existingMaVach = normalizeProductCode(data[i][5]);
     if (itemMaHang && existingMaHang && itemMaHang === existingMaHang) return true;
     if (itemMaVach && existingMaVach && itemMaVach === existingMaVach) return true;
   }
@@ -923,13 +924,12 @@ function hasDuplicateItemInOrder(historySheet, soPhieu, item, dataRows) {
 function isOrderConfirmedForEditing(soPhieu, historySheet, dataRows) {
   if (!soPhieu || !historySheet) return false;
   var data = dataRows || historySheet.getDataRange().getValues();
-  var target = String(soPhieu).trim().toLowerCase();
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][1]).trim().toLowerCase() === target) {
-      var status = String(data[i][12] || "").trim();
-      if (status === "Đã xác nhận nhận hàng") {
-        return true;
-      }
+    // Exact 1:1 — không substring
+    if (!orderKeysMatch_(data[i][1], soPhieu)) continue;
+    var status = String(data[i][12] || "").trim();
+    if (status === "Đã xác nhận nhận hàng") {
+      return true;
     }
   }
   return false;
@@ -1889,9 +1889,9 @@ function debugOrderInfo_(key) {
   for (var i = 0; i < values.length; i++) {
     var sp = values[i][1] != null ? String(values[i][1]).trim() : "";
     if (!sp) continue;
-    var hit = false;
-    if (key && (sp.indexOf(key) !== -1 || orderKeysMatch_(sp, key))) hit = true;
-    if (!hit && digits && sp.indexOf(digits) !== -1) hit = true;
+    // Exact only — tuyệt đối không indexOf (tránh Q4 khớp nhầm Q4-275)
+    var hit = !!(key && orderKeysMatch_(sp, key));
+    if (!hit && digits && orderKeysMatch_(sp, digits)) hit = true;
     if (!hit) continue;
     var createdMs = toHoChiMinhMillis_(values[i][0]);
     if (!isNaN(createdMs) && (isNaN(minCreatedMs) || createdMs < minCreatedMs)) minCreatedMs = createdMs;

@@ -1356,31 +1356,32 @@ function buildCatalogFromSheet_(ss) {
   }
   for (var i = startRow; i < rawData.length; i++) {
     if (!rawData[i]) continue;
-    var maHang = maHangIdx >= 0 ? getCellValue(rawData[i], maHangIdx, "") : "";
-    var maVach = maVachIdx >= 0 ? getCellValue(rawData[i], maVachIdx, "") : "";
-    var tenHang = tenHangIdx >= 0 ? getCellValue(rawData[i], tenHangIdx, "") : "";
+    // MaVach/MaHang luôn String — không Number() (mất số 0 đầu barcode)
+    var maHang = maHangIdx >= 0 ? String(getCellValue(rawData[i], maHangIdx, "") || "").trim() : "";
+    var maVach = maVachIdx >= 0 ? String(getCellValue(rawData[i], maVachIdx, "") || "").trim() : "";
+    var tenHang = tenHangIdx >= 0 ? String(getCellValue(rawData[i], tenHangIdx, "") || "").trim() : "";
     var dvtRaw = dvtIdx >= 0 ? getCellValue(rawData[i], dvtIdx, "") : "";
     var dvt = sanitizeImportDvt_(dvtRaw);
     var dvt2 = dvt2Idx >= 0 ? sanitizeImportDvt_(getCellValue(rawData[i], dvt2Idx, "")) : "";
-    var parentSku = parentSkuIdx !== -1 ? getCellValue(rawData[i], parentSkuIdx, "") : "";
+    var parentSku = parentSkuIdx !== -1 ? String(getCellValue(rawData[i], parentSkuIdx, "") || "").trim() : "";
     var isNewFlag = false;
     if (isNewIdx !== -1) {
       var flagRaw = String(rawData[i][isNewIdx] == null ? "" : rawData[i][isNewIdx]).trim().toLowerCase();
       isNewFlag = flagRaw === "1" || flagRaw === "true" || flagRaw === "yes" || flagRaw === "x" || flagRaw === "moi" || flagRaw === "new";
     }
-    if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
-    // Chuẩn hóa MH/MV (giữ Đ/đ, xử lý .0 / scientific) — phục hồi quét mã vạch 893…
+    if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[String(maHang).toUpperCase()] || "";
+    // Chuẩn hóa MH/MV (NFC + giữ Đ/đ, xử lý .0 / scientific) — phục hồi quét mã vạch 893…
     var mhNorm = normalizeProductCode(maHang) || String(maHang || "").trim();
     var mvNorm = normalizeProductCode(maVach) || String(maVach || "").trim();
     if (!mhNorm && !mvNorm) continue;
     var parentNorm = normalizeProductCode(parentSku) || String(parentSku || "").trim();
     var obj = {
-      maHang: mhNorm || maHang,
-      maVach: mvNorm || maVach,
+      maHang: String(mhNorm || maHang || ""),
+      maVach: String(mvNorm || maVach || ""),
       tenHang: tenHang,
       dvt: dvt || "",
       dvt2: dvt2 || "",
-      parentSku: parentNorm || parentSku || "",
+      parentSku: String(parentNorm || parentSku || ""),
       isNew: isNewFlag,
       isLocked: false,
       isOutStock: false
@@ -1592,6 +1593,102 @@ function writeMisaImportSheet_(ss, entries, reset) {
 
 
 /**
+ * Xác định cột ghi Data_Excel theo TÊN header.
+ * Thiếu cột → ghi vào vị trí chuẩn NẾU ô header trống/đúng vai trò; không thì APPEND cột mới.
+ * Tuyệt đối không ghi đè cột đang mang dữ liệu vai trò khác (tránh lệch ĐVT/Tên/MV).
+ */
+function resolveCatalogWriteColMap_(sh, header, width) {
+  header = header || [];
+  width = Math.max(Number(width) || 0, header.length, CATALOG_COL_COUNT);
+  var mapped = mapImportHeaderColumns_(header);
+  var colMap = {
+    maHang: mapped.maHang,
+    maVach: mapped.maVach,
+    tenHang: mapped.tenHang,
+    dvt: mapped.dvt,
+    dvt2: mapped.dvt2,
+    parent: mapped.parentSku >= 0 ? mapped.parentSku : findCatalogParentColIdx_(header),
+    ngay: findColumnIndexByAliases(header, ["ngaytao", "createdat", "created"]),
+    isNew: findColumnIndexByAliases(header, ["isnew", "trangthaimoi", "hangmoi", "newflag"]),
+    width: width
+  };
+
+  var CANON = { maHang: 0, maVach: 2, tenHang: 5, dvt: 7, ngay: 8, parent: 9, isNew: 10, dvt2: 11 };
+  var LABELS = {
+    maHang: "Mã hàng",
+    maVach: "Mã vạch",
+    tenHang: "Tên hàng hóa",
+    dvt: "ĐVT",
+    dvt2: CATALOG_DVT2_HEADER,
+    ngay: "Ngày tạo",
+    parent: CATALOG_PARENT_HEADER,
+    isNew: CATALOG_ISNEW_HEADER
+  };
+
+  function roleScoreAt_(idx, roleKey) {
+    if (idx < 0 || idx >= header.length) return 0;
+    var n = normalizeHeaderText(header[idx]);
+    if (!n) return 0;
+    if (roleKey === "parent") return scoreImportHeaderRole_(n, "parentSku");
+    if (roleKey === "ngay") {
+      if (n.indexOf("ngaytao") !== -1 || n.indexOf("created") !== -1) return 90;
+      return 0;
+    }
+    if (roleKey === "isNew") {
+      if (n.indexOf("isnew") !== -1 || n === "moi" || n.indexOf("hangmoi") !== -1) return 90;
+      return 0;
+    }
+    return scoreImportHeaderRole_(n, roleKey);
+  }
+
+  function ensureCol_(roleKey) {
+    if (colMap[roleKey] >= 0 && roleScoreAt_(colMap[roleKey], roleKey) >= 70) return;
+    if (colMap[roleKey] >= 0 && String(header[colMap[roleKey]] || "").trim() === "") {
+      // giữ index đã map nhưng header trống — gắn nhãn
+      try {
+        sh.getRange(1, colMap[roleKey] + 1).setValue(LABELS[roleKey]).setFontWeight("bold").setBackground("#d9ead3");
+      } catch (eL) {}
+      header[colMap[roleKey]] = LABELS[roleKey];
+      return;
+    }
+    var canon = CANON[roleKey];
+    var hAtCanon = String(header[canon] == null ? "" : header[canon]).trim();
+    if (!hAtCanon || roleScoreAt_(canon, roleKey) >= 70) {
+      colMap[roleKey] = canon;
+      if (!hAtCanon) {
+        try {
+          sh.getRange(1, canon + 1).setValue(LABELS[roleKey]).setFontWeight("bold").setBackground("#d9ead3");
+        } catch (eC) {}
+        while (header.length <= canon) header.push("");
+        header[canon] = LABELS[roleKey];
+      }
+      colMap.width = Math.max(colMap.width, canon + 1);
+      return;
+    }
+    // Cột chuẩn đang bị chiếm bởi dữ liệu khác → append cột mới
+    var newIdx = colMap.width;
+    colMap[roleKey] = newIdx;
+    colMap.width = newIdx + 1;
+    while (header.length <= newIdx) header.push("");
+    header[newIdx] = LABELS[roleKey];
+    try {
+      sh.getRange(1, newIdx + 1).setValue(LABELS[roleKey]).setFontWeight("bold").setBackground("#d9ead3");
+    } catch (eA) {}
+  }
+
+  ensureCol_("maHang");
+  ensureCol_("maVach");
+  ensureCol_("tenHang");
+  ensureCol_("dvt");
+  ensureCol_("dvt2");
+  ensureCol_("ngay");
+  ensureCol_("parent");
+  ensureCol_("isNew");
+  return colMap;
+}
+
+
+/**
  * UPSERT Data_Excel từ MISA: cập nhật tên/ĐVT/MV; GIỮ Parent_SKU + IsNew + mã con không có trong file.
  * Không xóa dòng hiện có — chỉ setValues từng dòng / append.
  */
@@ -1612,48 +1709,18 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
   }
   var values = sh.getRange(1, 1, lastRow, width).getValues();
   var header = values[0] || [];
-  var mappedSheet = mapImportHeaderColumns_(header);
-  var parentIdx = mappedSheet.parentSku;
-  if (parentIdx === -1) parentIdx = findCatalogParentColIdx_(header);
-  if (parentIdx === -1) parentIdx = 9;
-  var mhIdx = mappedSheet.maHang;
-  if (mhIdx === -1) mhIdx = findCatalogMaHangColIdx_(header, parentIdx);
-  if (mhIdx === -1) mhIdx = 0;
-  var mvIdx = mappedSheet.maVach;
-  if (mvIdx === -1) mvIdx = findColumnIndexByAliases(header, ["mavach", "barcode", "barcodeid"]);
-  if (mvIdx === -1) mvIdx = 2;
-  var thIdx = mappedSheet.tenHang;
-  if (thIdx === -1) thIdx = findColumnIndexByAliases(header, ["tenhanghoa", "tenhang", "tensanpham", "description"]);
-  if (thIdx === -1) thIdx = 5;
-  var dvtIdx = mappedSheet.dvt;
-  if (dvtIdx === -1) dvtIdx = findColumnIndexByAliases(header, ["donvitinh", "dvtinh", "tendvt", "dvtchinh", "dvt"]);
-  if (dvtIdx === -1) dvtIdx = 7;
-  var dvt2Idx = mappedSheet.dvt2;
-  if (dvt2Idx === -1) dvt2Idx = findColumnIndexByAliases(header, ["donvitinh2", "dvt2", "donviquydoi", "dvtphu"]);
-  if (dvt2Idx === -1) dvt2Idx = 11;
-  var ngayIdx = findColumnIndexByAliases(header, ["ngaytao", "createdat", "created"]);
-  if (ngayIdx === -1) ngayIdx = 8;
-  var isNewIdx = findColumnIndexByAliases(header, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
-  if (isNewIdx === -1) isNewIdx = 10;
-
-  width = Math.max(width, CATALOG_COL_COUNT, parentIdx + 1, isNewIdx + 1, dvt2Idx + 1);
-  try {
-    if (!String(sh.getRange(1, parentIdx + 1).getValue() || "").trim()) {
-      sh.getRange(1, parentIdx + 1).setValue(CATALOG_PARENT_HEADER).setFontWeight("bold").setBackground("#d9ead3");
-    }
-    if (!String(sh.getRange(1, isNewIdx + 1).getValue() || "").trim()) {
-      sh.getRange(1, isNewIdx + 1).setValue(CATALOG_ISNEW_HEADER).setFontWeight("bold").setBackground("#d9ead3");
-    }
-    if (!String(sh.getRange(1, ngayIdx + 1).getValue() || "").trim()) {
-      sh.getRange(1, ngayIdx + 1).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
-    }
-    if (!String(sh.getRange(1, dvtIdx + 1).getValue() || "").trim()) {
-      sh.getRange(1, dvtIdx + 1).setValue("ĐVT").setFontWeight("bold").setBackground("#d9ead3");
-    }
-    if (!String(sh.getRange(1, dvt2Idx + 1).getValue() || "").trim()) {
-      sh.getRange(1, dvt2Idx + 1).setValue(CATALOG_DVT2_HEADER).setFontWeight("bold").setBackground("#d9ead3");
-    }
-  } catch (eH) {}
+  // Map cột theo TÊN header — không fallback hardcode vào cột sai
+  var writeCols = resolveCatalogWriteColMap_(sh, header, width);
+  var mhIdx = writeCols.maHang;
+  var mvIdx = writeCols.maVach;
+  var thIdx = writeCols.tenHang;
+  var dvtIdx = writeCols.dvt;
+  var dvt2Idx = writeCols.dvt2;
+  var ngayIdx = writeCols.ngay;
+  var parentIdx = writeCols.parent;
+  var isNewIdx = writeCols.isNew;
+  width = writeCols.width;
+  values[0] = header;
 
   var byMh = {};
   var byMv = {};
@@ -2004,12 +2071,14 @@ function getStockSheetConfig(stockData) {
   // Xác định trước các cột đã có ý nghĩa rõ ràng (mã hàng, mã vạch, tồn kho, tên hàng, đvt)
   // để loại trừ chúng (và các cột báo cáo biến động như "Nhập kho"/"Xuất kho") khỏi danh sách
   // cột được đoán là "cửa hàng/kho" chỉ vì chứa chữ "kho".
-  var maHangIdx = findColumnIndexByAliases(header, ['mahang', 'mahanghoa', 'sku', 'mahh', 'code', 'itemcode']);
-  var maVachIdx = findColumnIndexByAliases(header, ['mavach', 'barcode', 'ean', 'barcodeid']);
-  var tonKhoIdx = findColumnIndexByAliases(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'qty', 'cuoiky']);
-  var tenHangIdx = findColumnIndexByAliases(header, ['tenhang', 'tenhanghoa', 'name', 'description']);
-  var dvtIdx = findColumnIndexByAliases(header, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
-  var claimedIndexes = [maHangIdx, maVachIdx, tonKhoIdx, tenHangIdx, dvtIdx];
+  // Score-based map — không dùng alias "code" (khớp nhầm barcode)
+  var stockMap = mapImportHeaderColumns_(header);
+  var maHangIdx = stockMap.maHang;
+  var maVachIdx = stockMap.maVach;
+  var tonKhoIdx = stockMap.tonKho;
+  var tenHangIdx = stockMap.tenHang;
+  var dvtIdx = stockMap.dvt;
+  var claimedIndexes = [maHangIdx, maVachIdx, tonKhoIdx, tenHangIdx, dvtIdx, stockMap.dvt2];
 
   var storeIndexes = findAllColumnIndicesByAliases(header, ['kho', 'cuahang', 'chinhanh', 'store', 'tenkho']).filter(function (idx) {
     if (claimedIndexes.indexOf(idx) !== -1) return false;
@@ -2041,9 +2110,10 @@ function getStockSheetConfig(stockData) {
     headerIndex: headerIndex,
     storeIndexes: storeIndexes.length ? storeIndexes : [0, 7],
     storeHeaderIndexes: storeHeaderIndexes,
-    maHangIdx: maHangIdx === -1 ? 1 : maHangIdx,
-    maVachIdx: maVachIdx === -1 ? 2 : maVachIdx,
-    tonKhoIdx: tonKhoIdx === -1 ? 6 : tonKhoIdx,
+    // Không fallback hardcode 1/2/6 khi không nhận diện được — tránh lệch cột
+    maHangIdx: maHangIdx,
+    maVachIdx: maVachIdx,
+    tonKhoIdx: tonKhoIdx,
     dvtIdx: dvtIdx,
     tenHangIdx: tenHangIdx,
     requireStoreRowPrefix: isSummaryStockLayout
@@ -2090,33 +2160,37 @@ function getRowStoreNames(row, stockConfig) {
 
 
 function parseImportRows(importData) {
-  var headerIndex = findHeaderRowIndex(importData, 10);
+  var headerIndex = findImportHeaderRowIndex_(importData, 15);
+  if (headerIndex < 0) headerIndex = findHeaderRowIndex(importData, 10);
   if (headerIndex < 0) throw new Error("Không tìm thấy dòng tiêu đề trong sheet nguồn nhập khẩu.");
   var header = importData[headerIndex];
-  var idxMaHang = findColumnIndexByAliases(header, ['mahang', 'sku', 'mahh', 'code', 'itemcode']);
-  var idxMaVach = findColumnIndexByAliases(header, ['mavach', 'barcode', 'ean', 'barcodeid']);
-  var idxTenHang = findColumnIndexByAliases(header, ['tenhang', 'tensanpham', 'name', 'description']);
-  var idxDvt = findColumnIndexByAliases(header, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
-  var idxTonKho = findColumnIndexByAliases(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'qty']);
+  var cols = mapImportHeaderColumns_(header);
+  var idxMaHang = cols.maHang;
+  var idxMaVach = cols.maVach;
+  var idxTenHang = cols.tenHang;
+  var idxDvt = cols.dvt;
+  var idxTonKho = cols.tonKho;
   var idxKho = findColumnIndexByAliases(header, ['kho', 'cuahang', 'chinhanh', 'store', 'tenkho']);
 
   if (idxMaHang === -1 && idxMaVach === -1) {
-    throw new Error("Sheet nguồn thiếu cột Mã hàng hoặc Mã vạch.");
+    throw new Error("Sheet nguồn thiếu cột Mã hàng hoặc Mã vạch (không nhận diện được theo tiêu đề).");
   }
 
   var parsed = [];
   for (var r = headerIndex + 1; r < importData.length; r++) {
     var row = importData[r];
     if (!row) continue;
-    var maHang = getCellValue(row, idxMaHang, "");
-    var maVach = getCellValue(row, idxMaVach, "");
-    var tenHang = getCellValue(row, idxTenHang, "");
-    var dvt = getCellValue(row, idxDvt, "");
-    var kho = getCellValue(row, idxKho, "");
+    if (isImportJunkDataRow_(row, cols)) continue;
+    var maHang = idxMaHang >= 0 ? getCellValue(row, idxMaHang, "") : "";
+    var maVach = idxMaVach >= 0 ? getCellValue(row, idxMaVach, "") : "";
+    var tenHang = idxTenHang >= 0 ? getCellValue(row, idxTenHang, "") : "";
+    var dvt = sanitizeImportDvt_(idxDvt >= 0 ? getCellValue(row, idxDvt, "") : "");
+    var kho = idxKho >= 0 ? getCellValue(row, idxKho, "") : "";
     var tonRaw = idxTonKho !== -1 ? row[idxTonKho] : "";
     var tonKho = (tonRaw === "" || tonRaw === null || tonRaw === undefined) ? "" : Number(tonRaw);
 
-    if (!maHang && !maVach && !tenHang) continue;
+    if (!maHang && !maVach) continue;
+    if (!normalizeProductCode(maHang) && !normalizeProductCode(maVach)) continue;
 
     parsed.push({
       maHang: maHang,

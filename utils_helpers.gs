@@ -489,7 +489,11 @@ function sanitizeFileNamePart(value) {
 
 function normalizeOrderCodeText(value) {
   // Giữ Đ/đ — MISA phân biệt HĐCXXX1007 ≠ HDCXXX1007 (không map Đ→D).
-  return String(value || "")
+  // NFC: tránh lệch so sánh Tiếng Việt (composed vs decomposed).
+  var text = String(value == null ? "" : value).trim();
+  if (!text) return "";
+  try { text = text.normalize("NFC"); } catch (eNfc) {}
+  return text
     .replace(/[^a-zA-Z0-9Đđ]/g, "")
     .trim()
     .toUpperCase();
@@ -631,7 +635,7 @@ function isImportDvt2HeaderNorm_(norm) {
   if (norm.indexOf("dvt2") !== -1 || norm.indexOf("donvi2") !== -1) return true;
   if (norm.indexOf("dvtphu") !== -1 || norm.indexOf("donviphu") !== -1) return true;
   if (norm.indexOf("unit2") !== -1 || norm.indexOf("altunit") !== -1) return true;
-  if (norm.indexOf("heso") !== -1 && norm.indexOf("dvt") !== -1) return true;
+  if (norm.indexOf("heso") !== -1 && (norm.indexOf("dvt") !== -1 || norm.indexOf("donvi") !== -1)) return true;
   return false;
 }
 
@@ -645,15 +649,92 @@ function isImportDvt1HeaderNorm_(norm) {
   if (norm.indexOf("donvitinh") !== -1) return true;
   if (norm.indexOf("dvtchinh") !== -1 || norm.indexOf("tendvt") !== -1) return true;
   if (norm.indexOf("basicunit") !== -1) return true;
-  // "dvt..." nhưng không phải dvt2/quydoi
   if (norm.indexOf("dvt") === 0 && norm.length <= 12) return true;
   return false;
 }
 
 
 /**
- * Map cột upload linh hoạt theo tiêu đề (KHÔNG hardcode index).
- * @returns {{maHang:number,tenHang:number,dvt:number,dvt2:number,maVach:number,parentSku:number,labels:Object}}
+ * Điểm khớp header → vai trò cột (cao hơn = chắc hơn).
+ * Tránh first-match: "barcode".indexOf("code"), "unitname".indexOf("name").
+ */
+function scoreImportHeaderRole_(norm, role) {
+  if (!norm) return 0;
+  if (role === "parentSku") {
+    if (norm === "parentsku" || norm === "parent" || norm === "manhomban") return 100;
+    if ((norm.indexOf("mahang") !== -1 || norm.indexOf("mahanghoa") !== -1) &&
+        (norm.indexOf("cha") !== -1 || norm.indexOf("parent") !== -1)) return 95;
+    if (norm.indexOf("parentsku") !== -1 || norm.indexOf("manhomban") !== -1) return 90;
+    return 0;
+  }
+  if (role === "dvt2") {
+    if (isImportDvt2HeaderNorm_(norm)) {
+      if (norm.indexOf("quydoi") !== -1) return 100;
+      if (norm.indexOf("dvt2") !== -1 || norm.indexOf("donvi2") !== -1) return 95;
+      return 85;
+    }
+    return 0;
+  }
+  if (role === "dvt") {
+    if (isImportDvt2HeaderNorm_(norm)) return 0;
+    if (norm.indexOf("price") !== -1 || norm.indexOf("gia") !== -1) return 0;
+    if (norm.indexOf("madvt") !== -1 || norm === "madvt") return 0; // mã ĐVT ≠ tên ĐVT
+    if (norm === "donvitinh" || norm === "dvtinh") return 100;
+    if (norm === "tendvt" || norm === "dvtchinh" || norm === "donvichinh") return 98;
+    if (norm === "dvt" || norm === "donvi") return 96;
+    if (norm === "basicunit" || norm === "unitname" || norm === "uom" || norm === "unit") return 88;
+    if (norm.indexOf("donvitinh") !== -1) return 94;
+    if (norm.indexOf("tendvt") !== -1 || norm.indexOf("dvtchinh") !== -1) return 92;
+    if (norm.indexOf("dvt") === 0 && norm.length <= 12) return 80;
+    return 0;
+  }
+  if (role === "maHang") {
+    if (norm.indexOf("cha") !== -1 || norm.indexOf("parent") !== -1) return 0;
+    if (norm.indexOf("mavach") !== -1 || norm.indexOf("barcode") !== -1) return 0;
+    if (norm === "mahanghoa" || norm === "masanpham") return 100;
+    if (norm === "masp" || norm === "mahang" || norm === "mahh") return 96;
+    if (norm === "itemcode" || norm === "article" || norm === "sku") return 90;
+    if (norm.indexOf("mahanghoa") !== -1 || norm.indexOf("masanpham") !== -1) return 94;
+    if (norm.indexOf("mahang") !== -1 && norm.indexOf("vach") === -1) return 88;
+    // KHÔNG dùng alias "code" — khớp nhầm barcode
+    return 0;
+  }
+  if (role === "maVach") {
+    if (norm === "mavach" || norm === "barcode" || norm === "barcodeid" || norm === "ean") return 100;
+    if (norm.indexOf("mavach") !== -1) return 95;
+    if (norm.indexOf("barcode") !== -1) return 90;
+    if (norm.indexOf("ean") !== -1 && norm.length <= 8) return 80;
+    return 0;
+  }
+  if (role === "tenHang") {
+    if (norm.indexOf("dvt") !== -1 || norm.indexOf("donvi") !== -1) return 0;
+    if (norm.indexOf("unit") !== -1) return 0;
+    if (norm === "tenhanghoa" || norm === "tensanpham") return 100;
+    if (norm === "tensp" || norm === "tenhang") return 96;
+    if (norm === "description") return 85;
+    if (norm === "name") return 70; // exact only — không contains
+    if (norm.indexOf("tenhanghoa") !== -1 || norm.indexOf("tensanpham") !== -1) return 94;
+    if (norm.indexOf("tenhang") !== -1 || norm.indexOf("tensp") !== -1) return 90;
+    return 0;
+  }
+  if (role === "tonKho") {
+    if (norm === "tonkho" || norm === "soluongton" || norm === "slton" || norm === "cuoiky") return 100;
+    if (norm === "soluong" || norm === "soton" || norm === "onhand" || norm === "stock") return 92;
+    if (norm.indexOf("tonkho") !== -1 || norm.indexOf("soluongton") !== -1) return 95;
+    if (norm.indexOf("soton") !== -1) return 90;
+    if (norm === "qty" || norm === "quantity") return 75;
+    if (norm.indexOf("soluong") !== -1 && norm.indexOf("quydoi") === -1) return 80;
+    // Tránh Nhập kho / Xuất kho
+    if (norm.indexOf("nhapkho") !== -1 || norm.indexOf("xuatkho") !== -1) return 0;
+    return 0;
+  }
+  return 0;
+}
+
+
+/**
+ * Map cột upload theo ĐIỂM SỐ tiêu đề (KHÔNG hardcode index, không first-match yếu).
+ * @returns {{maHang:number,tenHang:number,dvt:number,dvt2:number,maVach:number,parentSku:number,tonKho:number,labels:Object,scores:Object}}
  */
 function mapImportHeaderColumns_(headerRow) {
   var out = {
@@ -663,76 +744,45 @@ function mapImportHeaderColumns_(headerRow) {
     dvt2: -1,
     maVach: -1,
     parentSku: -1,
-    labels: {}
+    tonKho: -1,
+    labels: {},
+    scores: {}
   };
   if (!headerRow || !headerRow.length) return out;
 
+  var roles = ["parentSku", "dvt2", "dvt", "maHang", "maVach", "tenHang", "tonKho"];
+  var best = {};
+  var r;
+  for (r = 0; r < roles.length; r++) best[roles[r]] = { idx: -1, score: 0 };
+
   var c;
-  var norm;
-  // Parent trước — để loại khỏi MaSP
   for (c = 0; c < headerRow.length; c++) {
-    norm = normalizeHeaderText(headerRow[c]);
+    var norm = normalizeHeaderText(headerRow[c]);
     if (!norm) continue;
-    if (norm === "parentsku" || norm === "parent" || norm === "manhomban" || norm === "nhomban") {
-      out.parentSku = c; break;
-    }
-    if ((norm.indexOf("mahang") !== -1 || norm.indexOf("mahanghoa") !== -1) &&
-        (norm.indexOf("cha") !== -1 || norm.indexOf("parent") !== -1)) {
-      out.parentSku = c; break;
-    }
-    if (norm.indexOf("parentsku") !== -1) { out.parentSku = c; break; }
-  }
-
-  // ĐVT 2 trước — loại khỏi ĐVT 1
-  for (c = 0; c < headerRow.length; c++) {
-    norm = normalizeHeaderText(headerRow[c]);
-    if (isImportDvt2HeaderNorm_(norm)) { out.dvt2 = c; break; }
-  }
-
-  var exclude = {};
-  if (out.parentSku >= 0) exclude[out.parentSku] = true;
-  if (out.dvt2 >= 0) exclude[out.dvt2] = true;
-
-  // ĐVT 1: exact / ưu tiên mạnh trước
-  for (c = 0; c < headerRow.length; c++) {
-    if (exclude[c]) continue;
-    norm = normalizeHeaderText(headerRow[c]);
-    if (isImportDvt1HeaderNorm_(norm)) { out.dvt = c; break; }
-  }
-  if (out.dvt < 0) {
-    out.dvt = findColumnIndexByAliases(headerRow, [
-      "donvitinh", "dvtinh", "tendvt", "dvtchinh", "donvichinh", "basicunit", "unitname", "dvt", "donvi", "uom"
-    ], exclude);
-    // Tránh alias "unit" khớp unitprice / discountunit…
-    if (out.dvt >= 0) {
-      norm = normalizeHeaderText(headerRow[out.dvt]);
-      if (norm.indexOf("price") !== -1 || norm.indexOf("gia") !== -1 || isImportDvt2HeaderNorm_(norm)) {
-        exclude[out.dvt] = true;
-        out.dvt = findColumnIndexByAliases(headerRow, ["donvitinh", "dvtinh", "tendvt", "dvtchinh", "dvt"], exclude);
+    for (r = 0; r < roles.length; r++) {
+      var role = roles[r];
+      var sc = scoreImportHeaderRole_(norm, role);
+      if (sc > best[role].score) {
+        best[role] = { idx: c, score: sc };
       }
     }
   }
 
-  out.maHang = findColumnIndexByAliases(headerRow, [
-    "mahanghoa", "masanpham", "masp", "mahang", "itemcode", "article", "mahh", "sku"
-  ], exclude);
-  if (out.maHang >= 0) {
-    norm = normalizeHeaderText(headerRow[out.maHang]);
-    if (norm.indexOf("cha") !== -1 || norm.indexOf("parent") !== -1 || out.maHang === out.parentSku) {
-      exclude[out.maHang] = true;
-      out.maHang = findColumnIndexByAliases(headerRow, ["mahanghoa", "masanpham", "masp", "mahang", "sku", "mahh"], exclude);
-    }
-  }
-
-  out.maVach = findColumnIndexByAliases(headerRow, ["mavach", "barcodeid", "barcode", "ean"], exclude);
-  out.tenHang = findColumnIndexByAliases(headerRow, [
-    "tenhanghoa", "tensanpham", "tensp", "tenhang", "description"
-  ], exclude);
-  if (out.tenHang < 0) {
-    for (c = 0; c < headerRow.length; c++) {
-      if (exclude[c]) continue;
-      if (normalizeHeaderText(headerRow[c]) === "name") { out.tenHang = c; break; }
-    }
+  // Gán không trùng cột: ưu tiên điểm cao hơn khi xung đột
+  var taken = {};
+  var orderByPriority = ["parentSku", "dvt2", "maVach", "maHang", "dvt", "tenHang", "tonKho"];
+  // Sort roles by their best score desc for conflict resolution
+  var assignOrder = orderByPriority.slice().sort(function(a, b) {
+    return (best[b].score || 0) - (best[a].score || 0);
+  });
+  for (r = 0; r < assignOrder.length; r++) {
+    var roleA = assignOrder[r];
+    var cand = best[roleA];
+    if (!cand || cand.idx < 0 || cand.score < 70) continue; // ngưỡng tối thiểu
+    if (taken[cand.idx]) continue;
+    out[roleA] = cand.idx;
+    out.scores[roleA] = cand.score;
+    taken[cand.idx] = roleA;
   }
 
   out.labels = {
@@ -740,9 +790,39 @@ function mapImportHeaderColumns_(headerRow) {
     tenHang: out.tenHang >= 0 ? String(headerRow[out.tenHang] || "") : "",
     dvt: out.dvt >= 0 ? String(headerRow[out.dvt] || "") : "",
     dvt2: out.dvt2 >= 0 ? String(headerRow[out.dvt2] || "") : "",
-    maVach: out.maVach >= 0 ? String(headerRow[out.maVach] || "") : ""
+    maVach: out.maVach >= 0 ? String(headerRow[out.maVach] || "") : "",
+    tonKho: out.tonKho >= 0 ? String(headerRow[out.tonKho] || "") : "",
+    parentSku: out.parentSku >= 0 ? String(headerRow[out.parentSku] || "") : ""
   };
   return out;
+}
+
+
+/** Dòng rác / tiêu đề phụ / tổng cộng — bỏ khi import */
+function isImportJunkDataRow_(row, cols) {
+  if (!row) return true;
+  var cells = [];
+  var i;
+  for (i = 0; i < row.length; i++) {
+    var t = String(row[i] == null ? "" : row[i]).trim();
+    if (t) cells.push(t);
+  }
+  if (!cells.length) return true;
+  var joined = cells.join(" ").toLowerCase();
+  var joinedNorm = normalizeHeaderText(joined);
+  if (joinedNorm.indexOf("tongcong") !== -1 || joinedNorm === "tong" || joinedNorm.indexOf("total") === 0) return true;
+  if (joinedNorm.indexOf("congty") !== -1 && cells.length <= 3) return true;
+  if (joinedNorm.indexOf("baocao") !== -1 || joinedNorm.indexOf("phieukiem") !== -1) return true;
+  if (joinedNorm.indexOf("ngaylap") !== -1 || joinedNorm.indexOf("trang") === 0) return true;
+  // Dòng lặp lại header
+  if (cols) {
+    var lookLikeHeader = 0;
+    if (cols.maHang >= 0 && scoreImportHeaderRole_(normalizeHeaderText(row[cols.maHang]), "maHang") >= 70) lookLikeHeader++;
+    if (cols.dvt >= 0 && scoreImportHeaderRole_(normalizeHeaderText(row[cols.dvt]), "dvt") >= 70) lookLikeHeader++;
+    if (cols.tenHang >= 0 && scoreImportHeaderRole_(normalizeHeaderText(row[cols.tenHang]), "tenHang") >= 70) lookLikeHeader++;
+    if (lookLikeHeader >= 2) return true;
+  }
+  return false;
 }
 
 
@@ -782,29 +862,28 @@ function sanitizeImportDvt_(value) {
 }
 
 
-/** Tìm dòng header trong matrix upload (điểm theo alias MaSP/MV/Tên/ĐVT) */
+/** Tìm dòng header trong matrix upload (điểm theo score MaSP/MV/Tên/ĐVT) */
 function findImportHeaderRowIndex_(rows, maxScan) {
   if (!rows || !rows.length) return 0;
-  var limit = Math.min(rows.length, maxScan || 12);
+  var limit = Math.min(rows.length, maxScan || 15);
   var bestScore = -1;
   var best = 0;
   for (var hi = 0; hi < limit; hi++) {
     var row = rows[hi] || [];
+    var mapped = mapImportHeaderColumns_(row);
     var score = 0;
+    if (mapped.maHang >= 0) score += (mapped.scores.maHang || 80);
+    if (mapped.maVach >= 0) score += (mapped.scores.maVach || 70);
+    if (mapped.tenHang >= 0) score += (mapped.scores.tenHang || 70);
+    if (mapped.dvt >= 0) score += (mapped.scores.dvt || 80);
+    if (mapped.dvt2 >= 0) score += 20;
+    if (mapped.tonKho >= 0) score += 30;
+    // Cộng nhẹ số ô có chữ (tiêu đề thật thường dày)
     var nonEmpty = 0;
     for (var c = 0; c < row.length; c++) {
-      var cell = String(row[c] == null ? "" : row[c]).trim();
-      if (!cell) continue;
-      nonEmpty++;
-      var n = normalizeHeaderText(cell);
-      if (!n) continue;
-      if (n.indexOf("mahang") !== -1 || n === "sku" || n.indexOf("masp") !== -1 || n.indexOf("masanpham") !== -1) score += 6;
-      if (n.indexOf("mavach") !== -1 || n.indexOf("barcode") !== -1) score += 5;
-      if (n.indexOf("tenhang") !== -1 || n.indexOf("tensp") !== -1 || n.indexOf("tensanpham") !== -1) score += 4;
-      if (isImportDvt1HeaderNorm_(n)) score += 8;
-      if (isImportDvt2HeaderNorm_(n)) score += 2;
+      if (String(row[c] == null ? "" : row[c]).trim()) nonEmpty++;
     }
-    score += Math.min(nonEmpty, 6);
+    score += Math.min(nonEmpty, 8);
     if (score > bestScore) { bestScore = score; best = hi; }
   }
   return best;
@@ -817,16 +896,30 @@ function findImportHeaderRowIndex_(rows, maxScan) {
  */
 function extractCatalogEntriesFromMatrix_(rows) {
   if (!rows || rows.length < 2) return { entries: [], meta: { reason: "empty" } };
-  var headerIndex = findImportHeaderRowIndex_(rows, 12);
+  var headerIndex = findImportHeaderRowIndex_(rows, 15);
   var header = rows[headerIndex] || [];
   var cols = mapImportHeaderColumns_(header);
+  if (cols.maHang < 0 && cols.maVach < 0) {
+    return {
+      entries: [],
+      meta: {
+        reason: "missing_ma_sp_or_barcode",
+        headerIndex: headerIndex,
+        headerSample: (header || []).slice(0, 16),
+        labels: cols.labels,
+        entryCount: 0
+      }
+    };
+  }
   var entries = [];
   var withDvt = 0;
   var skippedBadDvt = 0;
   var withDvt2 = 0;
+  var skippedJunk = 0;
   for (var r = headerIndex + 1; r < rows.length; r++) {
     var row = rows[r];
     if (!row) continue;
+    if (isImportJunkDataRow_(row, cols)) { skippedJunk++; continue; }
     var mh = cols.maHang >= 0 ? getCellValue(row, cols.maHang, "") : "";
     var mv = cols.maVach >= 0 ? getCellValue(row, cols.maVach, "") : "";
     var th = cols.tenHang >= 0 ? getCellValue(row, cols.tenHang, "") : "";
@@ -837,7 +930,10 @@ function extractCatalogEntriesFromMatrix_(rows) {
     mv = String(mv || "").trim();
     th = String(th || "").trim();
     p = String(p || "").trim();
+    // Giữ nguyên Đ/đ / UTF-8 — chỉ trim, không fold
     if (!mh && !mv) continue;
+    // Bỏ dòng chỉ có số tồn / không có mã thật
+    if (!normalizeProductCode(mh) && !normalizeProductCode(mv)) continue;
     var d = sanitizeImportDvt_(dRaw);
     var d2 = sanitizeImportDvt_(d2Raw);
     if (dRaw && !d) skippedBadDvt++;
@@ -855,12 +951,15 @@ function extractCatalogEntriesFromMatrix_(rows) {
       tenHangIdx: cols.tenHang,
       dvtIdx: cols.dvt,
       dvt2Idx: cols.dvt2,
+      tonKhoIdx: cols.tonKho,
       parentIdx: cols.parentSku,
       labels: cols.labels,
+      scores: cols.scores,
       entryCount: entries.length,
       withDvt: withDvt,
       withDvt2: withDvt2,
-      skippedBadDvt: skippedBadDvt
+      skippedBadDvt: skippedBadDvt,
+      skippedJunk: skippedJunk
     }
   };
 }
@@ -1062,19 +1161,24 @@ function parseQuantityValue(value) {
 
 function normalizeProductCode(value) {
   if (value === null || value === undefined) return "";
-  // Số Excel thuần (barcode/SKU) — tránh String() ra dạng 8.93e+12
+  // Số Excel thuần (barcode/SKU) — giữ dạng String, tránh scientific notation
+  // Lưu ý: nếu Excel đã lưu barcode dạng Number thì số 0 đầu đã mất từ nguồn;
+  // ô text / apostrophe vẫn giữ nguyên qua String().trim().
   if (typeof value === "number" && isFinite(value)) {
     if (Math.floor(value) === value && Math.abs(value) < 1e16) {
       value = String(Math.round(value));
+    } else {
+      value = String(value);
     }
   }
   var text = String(value).trim();
   if (!text) return "";
+  try { text = text.normalize("NFC"); } catch (eNfc) {}
 
   if (text.charAt(0) === "'") text = text.slice(1);
   text = text.replace(/\u00A0/g, "").replace(/\s+/g, "");
 
-  // Excel scientific notation: 8.93E+12 / 8.93e+12
+  // Excel scientific notation: 8.93E+12 / 8.93e+12 — vẫn ra String digit, không Number() barcode thường
   if (/^[+-]?\d+(\.\d+)?e[+-]?\d+$/i.test(text)) {
     var sciNum = Number(text);
     if (isFinite(sciNum) && Math.abs(sciNum) < 1e16) {
@@ -1100,8 +1204,8 @@ function normalizeNumericCode(value) {
   var code = normalizeProductCode(value);
   if (!code) return "";
   if (!/^\d+$/.test(code)) return "";
-  var compact = code.replace(/^0+/, "");
-  return compact || "0";
+  // KHÔNG cắt số 0 đầu — barcode "0123" ≠ "123"
+  return code;
 }
 
 

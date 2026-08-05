@@ -1029,8 +1029,9 @@ function getInvoiceDetail_(soHoaDon, maPhieu) {
       var rowHd = row[1] != null ? String(row[1]).trim() : "";
       var rowMp = row[2] != null ? String(row[2]).trim() : "";
       var hit = false;
+      // Exact 1:1 sau chuẩn hóa — không substring / indexOf
       if (soHdRaw && rowHd && invoiceKeysMatch_(rowHd, soHdRaw)) hit = true;
-      if (!hit && maPhieuRaw && rowMp && String(rowMp).toUpperCase() === String(maPhieuRaw).toUpperCase()) hit = true;
+      if (!hit && maPhieuRaw && rowMp && orderKeysMatch_(rowMp, maPhieuRaw)) hit = true;
       if (!hit && soHdRaw && rowMp && invoiceKeysMatch_(rowMp, soHdRaw)) hit = true;
       if (!hit) continue;
 
