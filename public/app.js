@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-04-v71-q4-packing-header';
+var APP_BUILD = '2026-08-05-v72-select-by-masp';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -323,7 +323,8 @@ function dbgStatusBag_(status) {
   var el = document.getElementById('app-build-tag');
   if (el) el.textContent = 'build: ' + APP_BUILD;
 })();
-var danhMucGoc = {}; var danhMucArr = []; var arrItems = []; var gStores = [];
+var danhMucGoc = {}; var danhMucArr = []; var danhMucByMaHang_ = {}; var danhMucByMaVach_ = {};
+var arrItems = []; var gStores = [];
 var storeMap = {};
 var storeDetails = [];
 var storeDetailsByKey_ = {};
@@ -334,7 +335,7 @@ var variantPickerState = { open: false, mode: 'order', parentSku: '', qty: 1, va
 /** Snapshot dòng đơn vừa tạo — dùng In/Excel sau khi clear arrItems */
 var lastCreatedOrderItems_ = [];
 var catalogLoadState = { loading: false, ready: false, version: '' };
-var CATALOG_CACHE_KEY = 'donhang_catalog_v2';
+var CATALOG_CACHE_KEY = 'donhang_catalog_v3_masp';
 var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v2';
 var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v2';
 var CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -349,12 +350,76 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-/** Tra cứu sản phẩm trong Data_Excel (danhMucGoc đã load) */
+/** Clone nhẹ field sản phẩm đưa vào giỏ — tránh mutate object catalog dùng chung */
+function cloneCatalogProduct_(src) {
+  if (!src) return null;
+  return {
+    maHang: src.maHang || '',
+    maVach: src.maVach || '',
+    tenHang: src.tenHang || '',
+    dvt: src.dvt || '',
+    parentSku: src.parentSku || src.Parent_SKU || '',
+    isNew: !!src.isNew,
+    isLocked: !!src.isLocked
+  };
+}
+
+/**
+ * Tra cứu 1:1 theo Mã SP (primary) rồi mới tới Mã vạch.
+ * BẮT BUỘC dùng khi chọn từ gợi ý / thêm vào Bảng Tạm — không dùng index mảng đã filter.
+ */
+function resolveSelectedCatalogProduct_(maHang, maVach) {
+  var mh = String(maHang || '').trim();
+  var mv = String(maVach || '').trim();
+  var mhU = mh.toUpperCase();
+  var mvU = mv.toUpperCase();
+  var found = null;
+  if (mhU) {
+    if (danhMucByMaHang_[mhU]) found = danhMucByMaHang_[mhU];
+    if (!found && danhMucArr && danhMucArr.length) {
+      for (var i = 0; i < danhMucArr.length; i++) {
+        var it = danhMucArr[i];
+        if (!it) continue;
+        if (String(it.maHang || '').trim().toUpperCase() !== mhU) continue;
+        if (mvU && String(it.maVach || '').trim().toUpperCase() &&
+            String(it.maVach || '').trim().toUpperCase() !== mvU) continue;
+        found = it;
+        break;
+      }
+      if (!found) {
+        for (var j = 0; j < danhMucArr.length; j++) {
+          if (danhMucArr[j] && String(danhMucArr[j].maHang || '').trim().toUpperCase() === mhU) {
+            found = danhMucArr[j];
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (!found && mvU) {
+    if (danhMucByMaVach_[mvU]) found = danhMucByMaVach_[mvU];
+    else if (danhMucArr && danhMucArr.length) {
+      for (var k = 0; k < danhMucArr.length; k++) {
+        if (danhMucArr[k] && String(danhMucArr[k].maVach || '').trim().toUpperCase() === mvU) {
+          found = danhMucArr[k];
+          break;
+        }
+      }
+    }
+  }
+  if (!found && mhU && danhMucGoc[mhU]) found = danhMucGoc[mhU];
+  if (!found && mvU && danhMucGoc[mvU]) found = danhMucGoc[mvU];
+  return cloneCatalogProduct_(found);
+}
+
+/** Tra cứu sản phẩm trong Data_Excel — ưu tiên Mã SP */
 function lookupCatalogProductClient_(maHang, maVach) {
   var mv = String(maVach || '').trim().toUpperCase();
   var mh = String(maHang || '').trim().toUpperCase();
-  if (mv && danhMucGoc[mv]) return danhMucGoc[mv];
+  if (mh && danhMucByMaHang_[mh]) return danhMucByMaHang_[mh];
   if (mh && danhMucGoc[mh]) return danhMucGoc[mh];
+  if (mv && danhMucByMaVach_[mv]) return danhMucByMaVach_[mv];
+  if (mv && danhMucGoc[mv]) return danhMucGoc[mv];
   return null;
 }
 
@@ -454,6 +519,8 @@ function formatStockCellHtml_(stock, needQty) {
 
 function rebuildCatalogArray() {
   var seenCatalogKeys = {};
+  danhMucByMaHang_ = {};
+  danhMucByMaVach_ = {};
   danhMucArr = Object.values(danhMucGoc).filter(function(item) {
     if (!item) return false;
     var key = String(item.maHang || '').trim().toUpperCase() + '|' + String(item.maVach || '').trim().toUpperCase() + '|' + String(item.tenHang || '').trim().toUpperCase();
@@ -461,6 +528,14 @@ function rebuildCatalogArray() {
     seenCatalogKeys[key] = true;
     return true;
   });
+  for (var i = 0; i < danhMucArr.length; i++) {
+    var it = danhMucArr[i];
+    if (!it) continue;
+    var mhU = String(it.maHang || '').trim().toUpperCase();
+    var mvU = String(it.maVach || '').trim().toUpperCase();
+    if (mhU) danhMucByMaHang_[mhU] = it;
+    if (mvU && !danhMucByMaVach_[mvU]) danhMucByMaVach_[mvU] = it;
+  }
   rebuildVariantIndex_();
 }
 
@@ -750,14 +825,10 @@ function renderNewProductsHighlight() {
     var dvt = escapeHtml(item.dvt || 'Cái');
     var ngay = escapeHtml(item.ngayTao || '');
     var reasonBadge = '<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:800;background:#dbeafe;color:#1d4ed8;">ADMIN CHỌN</span>';
-    var payload = encodeURIComponent(JSON.stringify({
-      maHang: item.maHang || '',
-      maVach: item.maVach || '',
-      tenHang: item.tenHang || '',
-      dvt: item.dvt || ''
-    }));
+    var mhEnc = encodeURIComponent(String(item.maHang || ''));
+    var mvEnc = encodeURIComponent(String(item.maVach || ''));
     return '' +
-      '<button type="button" class="new-product-card" onclick="addNewProductToOrder(\'' + payload + '\')">' +
+      '<button type="button" class="new-product-card" onclick="switchTab(\'tab-tao-phieu\'); chonSanPhamByMaSP_(\'' + mhEnc + '\',\'' + mvEnc + '\');">' +
         '<div style="display:flex; justify-content:space-between; gap:8px; align-items:center; flex-wrap:wrap;">' +
           '<span class="badge-new">MỚI #' + (item.rank || (idx + 1)) + '</span>' +
           reasonBadge +
@@ -776,7 +847,10 @@ function addNewProductToOrder(encodedItem) {
   try {
     var item = JSON.parse(decodeURIComponent(encodedItem));
     switchTab('tab-tao-phieu');
-    chonSanPham(item);
+    chonSanPhamByMaSP_(
+      encodeURIComponent(String(item.maHang || '')),
+      encodeURIComponent(String(item.maVach || ''))
+    );
     var input = document.getElementById('input-scan');
     if (input) {
       input.value = '';
@@ -1394,11 +1468,13 @@ function handleSearchInput(e) {
 
   if (e && e.key === "Enter") {
     var exactKey = normalizeMisaCode_(val) || val.toUpperCase();
-    var exactMatch = danhMucGoc[exactKey] || danhMucGoc[val.toUpperCase()] || danhMucGoc[toSearchNfcLower_(val).toUpperCase()];
+    var exactMatch = resolveSelectedCatalogProduct_(exactKey, exactKey) ||
+      resolveSelectedCatalogProduct_(val.toUpperCase(), '') ||
+      resolveSelectedCatalogProduct_('', val.toUpperCase());
     if (exactMatch) chonSanPham(exactMatch);
     else {
       var matched = filterProducts(val);
-      if (matched.length > 0) chonSanPham(matched[0]);
+      if (matched.length > 0) chonSanPhamByMaSP_(matched[0].maHang, matched[0].maVach);
       else { arrItems.unshift({ maHang: "LỖI MÃ", maVach: val, tenHang: "❌ Không tồn tại", dvt: "Lỗi", sl: "1" }); renderTable(); }
     }
     inputEl.value = ""; box.style.display = "none"; return;
@@ -1413,10 +1489,11 @@ function handleSearchInput(e) {
 
   var html = "";
   results.slice(0, 12).forEach(function(item) {
-    var itemStr = encodeURIComponent(JSON.stringify(item));
+    var mhEnc = encodeURIComponent(String(item.maHang || ''));
+    var mvEnc = encodeURIComponent(String(item.maVach || ''));
     var newBadge = isNewProductItem_(item) ? ' <span class="badge-new">MỚI</span>' : '';
     var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
-    html += '<div class="suggest-item" onclick="chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + newBadge + groupBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + (item.parentSku ? (' · Parent: ' + escapeHtml(item.parentSku)) : '') + '</div></div>';
+    html += '<div class="suggest-item" onclick="chonSanPhamByMaSP_(\'' + mhEnc + '\',\'' + mvEnc + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + newBadge + groupBadge + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + (item.parentSku ? (' · Parent: ' + escapeHtml(item.parentSku)) : '') + '</div></div>';
   });
   box.innerHTML = html; box.style.display = "block";
 }
@@ -1485,9 +1562,10 @@ function ql_handleAddCodeInput(e) {
 
   var html = '';
   results.slice(0, 8).forEach(function(item) {
-    var itemStr = encodeURIComponent(JSON.stringify(item));
+    var mhEnc = encodeURIComponent(String(item.maHang || ''));
+    var mvEnc = encodeURIComponent(String(item.maVach || ''));
     var groupBadge = itemHasVariantGroup_(item) ? ' <span class="badge-group">NHÓM</span>' : '';
-    html += '<div class="suggest-item" onclick="ql_pickSuggestedItem(\'' + itemStr + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + groupBadge + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + (item.parentSku ? (' · Parent: ' + escapeHtml(item.parentSku)) : '') + '</div></div>';
+    html += '<div class="suggest-item" onclick="ql_pickSuggestedItemByMaSP_(\'' + mhEnc + '\',\'' + mvEnc + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + groupBadge + '</div><div class="sg-desc"><span style="color:#2563eb; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + (item.parentSku ? (' · Parent: ' + escapeHtml(item.parentSku)) : '') + '</div></div>';
   });
   box.innerHTML = html;
   box.style.display = "block";
@@ -1500,7 +1578,21 @@ function ql_handleAddQtyKeydown(e) {
 }
 
 function ql_pickSuggestedItem(itemStr) {
-  var item = JSON.parse(decodeURIComponent(itemStr));
+  // Legacy: JSON payload — resolve lại theo MaSP
+  try {
+    var parsed = JSON.parse(decodeURIComponent(itemStr));
+    ql_pickSuggestedItemByMaSP_(
+      encodeURIComponent(String(parsed.maHang || '')),
+      encodeURIComponent(String(parsed.maVach || ''))
+    );
+  } catch (e) {}
+}
+
+function ql_pickSuggestedItemByMaSP_(maHangEnc, maVachEnc) {
+  var mh = decodeURIComponent(String(maHangEnc || ''));
+  var mv = decodeURIComponent(String(maVachEnc || ''));
+  var item = resolveSelectedCatalogProduct_(mh, mv);
+  if (!item) return alert('Không tìm thấy sản phẩm [' + (mh || mv || '?') + '] trong danh mục.');
   var input = document.getElementById("ql-add-code");
   var box = document.getElementById("ql-suggest-box");
   var qtyInput = document.getElementById("ql-add-qty");
@@ -1513,9 +1605,33 @@ function ql_pickSuggestedItem(itemStr) {
   }
 }
 
+/** Chọn từ gợi ý theo MaSP (không dùng index mảng filter / JSON đầy đủ) */
+function chonSanPhamByMaSP_(maHangEnc, maVachEnc) {
+  var mh = decodeURIComponent(String(maHangEnc || ''));
+  var mv = decodeURIComponent(String(maVachEnc || ''));
+  var product = resolveSelectedCatalogProduct_(mh, mv);
+  if (!product) {
+    alert('Không tìm thấy sản phẩm [' + (mh || mv || '?') + '] trong danh mục. Hãy tải lại danh mục.');
+    return;
+  }
+  chonSanPham(product);
+  var input = document.getElementById("input-scan");
+  var box = document.getElementById("suggest-box");
+  if (input) { input.value = ""; input.focus(); }
+  if (box) box.style.display = "none";
+}
+
 function chonSanPhamFromSuggest(itemStr) {
-  chonSanPham(JSON.parse(decodeURIComponent(itemStr)));
-  document.getElementById("input-scan").value = ""; document.getElementById("suggest-box").style.display = "none"; document.getElementById("input-scan").focus();
+  // Legacy fallback
+  try {
+    var parsed = JSON.parse(decodeURIComponent(itemStr));
+    chonSanPhamByMaSP_(
+      encodeURIComponent(String(parsed.maHang || '')),
+      encodeURIComponent(String(parsed.maVach || ''))
+    );
+  } catch (e) {
+    alert('Không đọc được sản phẩm đã chọn.');
+  }
 }
 
 /** Hiển thị nhãn biến thể: `DC-BANH-DO - Banh gai màu đỏ` */
@@ -1579,12 +1695,14 @@ function openVariantPicker_(seedItem, mode, qty) {
       else if (stock <= 0) stockHtml = '<span class="badge-stock-zero">0</span>';
       else stockHtml = '<span class="badge-stock-ok">' + stock + '</span>';
       var zeroClass = (stock !== null && !isNaN(stock) && stock <= 0) ? ' zero' : '';
-      html += '<tr class="variant-pick-row' + zeroClass + '" data-vp-idx="' + idx + '">' +
+      var mhAttr = encodeURIComponent(String(v.maHang || ''));
+      var mvAttr = encodeURIComponent(String(v.maVach || ''));
+      html += '<tr class="variant-pick-row' + zeroClass + '" data-ma-hang="' + mhAttr + '" data-ma-vach="' + mvAttr + '">' +
         '<td style="font-weight:600;color:#0f172a;">' + escapeHtml(v.tenHang || '(Không tên)') + '</td>' +
         '<td><b style="color:#1a73e8;">' + escapeHtml(v.maHang || '-') + '</b></td>' +
         '<td>' + escapeHtml(v.maVach || '-') + '</td>' +
         '<td>' + stockHtml + '</td>' +
-        '<td><input type="number" class="vp-qty" id="vp-qty-' + idx + '" min="0" step="1" value="0" inputmode="numeric" onclick="event.stopPropagation()"></td>' +
+        '<td><input type="number" class="vp-qty" id="vp-qty-' + idx + '" data-ma-hang="' + mhAttr + '" data-ma-vach="' + mvAttr + '" min="0" step="1" value="0" inputmode="numeric" onclick="event.stopPropagation()"></td>' +
         '</tr>';
     });
     html += '</tbody></table>';
@@ -1608,7 +1726,7 @@ function openVariantPicker_(seedItem, mode, qty) {
   });
 }
 
-/** Gom các dòng có SL > 0 từ modal → đẩy vào đơn */
+/** Gom các dòng có SL > 0 từ modal → đẩy vào đơn (resolve theo MaSP, không tin index) */
 function confirmVariantPicker_() {
   var variants = variantPickerState.variants || [];
   if (!variants.length) return alert('Chưa có danh sách biến thể.');
@@ -1617,13 +1735,19 @@ function confirmVariantPicker_() {
     var qtyEl = document.getElementById('vp-qty-' + i);
     var qty = qtyEl ? Number(qtyEl.value) : 0;
     if (!qty || qty <= 0 || isNaN(qty)) continue;
-    var v = variants[i];
+    var mhFromEl = qtyEl ? decodeURIComponent(String(qtyEl.getAttribute('data-ma-hang') || '')) : '';
+    var mvFromEl = qtyEl ? decodeURIComponent(String(qtyEl.getAttribute('data-ma-vach') || '')) : '';
+    var v = variants[i] || {};
+    var mh = mhFromEl || v.maHang || '';
+    var mv = mvFromEl || v.maVach || '';
+    var resolved = resolveSelectedCatalogProduct_(mh, mv) || cloneCatalogProduct_(v);
+    if (!resolved) continue;
     picked.push({
-      maHang: v.maHang || '',
-      maVach: v.maVach || '',
-      tenHang: v.tenHang || '',
-      dvt: v.dvt || '',
-      parentSku: v.parentSku || variantPickerState.parentSku || '',
+      maHang: resolved.maHang || mh,
+      maVach: resolved.maVach || mv,
+      tenHang: resolved.tenHang || v.tenHang || '',
+      dvt: resolved.dvt || v.dvt || '',
+      parentSku: resolved.parentSku || v.parentSku || variantPickerState.parentSku || '',
       sl: qty
     });
   }
@@ -1658,25 +1782,29 @@ function pickVariantFromPicker_(payload) {
 
 function chonSanPhamDirect_(it, qty) {
   if (!it) return;
-  if (!guardProductNotLocked_(it, 'input-scan')) return;
+  // Luôn resolve lại theo MaSP trước khi ghi Bảng Tạm
+  var resolved = resolveSelectedCatalogProduct_(it.maHang, it.maVach) || cloneCatalogProduct_(it) || it;
+  if (!guardProductNotLocked_(resolved, 'input-scan')) return;
   var addQty = Number(qty);
   if (!addQty || addQty <= 0 || isNaN(addQty)) addQty = Number(it.sl) > 0 ? Number(it.sl) : 1;
   var existingIndex = arrItems.findIndex(function(x) {
     return x.maHang !== "LỖI MÃ" &&
-      String(x.maHang || '').trim().toUpperCase() === String(it.maHang || '').trim().toUpperCase() &&
-      String(x.maVach || '').trim().toUpperCase() === String(it.maVach || '').trim().toUpperCase();
+      String(x.maHang || '').trim().toUpperCase() === String(resolved.maHang || '').trim().toUpperCase() &&
+      String(x.maVach || '').trim().toUpperCase() === String(resolved.maVach || '').trim().toUpperCase();
   });
   if (existingIndex !== -1) {
     arrItems[existingIndex].sl = Number(arrItems[existingIndex].sl) + addQty;
     arrItems[existingIndex].highlight = true;
-    if (it.parentSku) arrItems[existingIndex].parentSku = it.parentSku;
+    arrItems[existingIndex].tenHang = resolved.tenHang || arrItems[existingIndex].tenHang;
+    arrItems[existingIndex].dvt = resolveDvtClient_(resolved.maHang, resolved.maVach, resolved.dvt) || arrItems[existingIndex].dvt;
+    if (resolved.parentSku) arrItems[existingIndex].parentSku = resolved.parentSku;
   } else {
     arrItems.unshift({
-      maHang: it.maHang,
-      maVach: it.maVach,
-      tenHang: it.tenHang,
-      dvt: resolveDvtClient_(it.maHang, it.maVach, it.dvt),
-      parentSku: it.parentSku || '',
+      maHang: resolved.maHang,
+      maVach: resolved.maVach,
+      tenHang: resolved.tenHang,
+      dvt: resolveDvtClient_(resolved.maHang, resolved.maVach, resolved.dvt),
+      parentSku: resolved.parentSku || '',
       sl: String(addQty),
       highlight: true
     });
@@ -1686,12 +1814,13 @@ function chonSanPhamDirect_(it, qty) {
 
 function chonSanPham(it) {
   if (!it) return;
-  if (!guardProductNotLocked_(it, 'input-scan')) return;
-  if (itemHasVariantGroup_(it)) {
-    openVariantPicker_(it, 'order', 1);
+  var resolved = resolveSelectedCatalogProduct_(it.maHang, it.maVach) || cloneCatalogProduct_(it) || it;
+  if (!guardProductNotLocked_(resolved, 'input-scan')) return;
+  if (itemHasVariantGroup_(resolved)) {
+    openVariantPicker_(resolved, 'order', 1);
     return;
   }
-  chonSanPhamDirect_(it);
+  chonSanPhamDirect_(resolved);
 }
 
 document.addEventListener("click", function(event) {
@@ -2691,6 +2820,7 @@ function ql_luuSua() {
 
 function ql_themMaHangDirect_(item, quantity) {
   if (!sessionUser.user) return alert("Vui lòng đăng nhập trước khi thao tác.");
+  item = resolveSelectedCatalogProduct_(item && item.maHang, item && item.maVach) || cloneCatalogProduct_(item) || item;
   if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
   if (!guardProductNotLocked_(item, 'ql-add-code')) return;
   quantity = Number(quantity);
@@ -2745,7 +2875,14 @@ function ql_themMaHang(itemOverride) {
   var code = (inputEl ? inputEl.value : "").trim().toUpperCase();
   var quantity = Number(document.getElementById("ql-add-qty").value);
   var selectedItem = qlSelectedSuggestedItem && ql_isItemMatchedWithCode(qlSelectedSuggestedItem, code) ? qlSelectedSuggestedItem : null;
-  var item = itemOverride || selectedItem || danhMucGoc[code] || filterProducts(code)[0];
+  var raw = itemOverride || selectedItem || null;
+  var item = raw
+    ? (resolveSelectedCatalogProduct_(raw.maHang, raw.maVach) || cloneCatalogProduct_(raw))
+    : (resolveSelectedCatalogProduct_(code, code) || resolveSelectedCatalogProduct_(code, '') || resolveSelectedCatalogProduct_('', code));
+  if (!item && code) {
+    var matched = filterProducts(code)[0];
+    if (matched) item = resolveSelectedCatalogProduct_(matched.maHang, matched.maVach);
+  }
   if (!item) return alert("Không tìm thấy mã hàng hóa hoặc mã vạch.");
   if (!guardProductNotLocked_(item, 'ql-add-code')) return;
   if (!quantity || quantity < 1) return alert("Số lượng phải lớn hơn 0.");
@@ -4251,10 +4388,22 @@ function imp_toggleImportButton() {
 
 function impFindColByAliases_(header, aliases) {
   if (!header) return -1;
-  for (var c = 0; c < header.length; c++) {
-    var n = impNormalizeText(header[c]).replace(/\s+/g, '');
+  var c;
+  var a;
+  var n;
+  // Exact trước — tránh barcode khớp "code", unitname khớp "name"
+  for (c = 0; c < header.length; c++) {
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
     if (!n) continue;
-    for (var a = 0; a < aliases.length; a++) {
+    for (a = 0; a < aliases.length; a++) {
+      if (n === aliases[a]) return c;
+    }
+  }
+  for (c = 0; c < header.length; c++) {
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (!n) continue;
+    for (a = 0; a < aliases.length; a++) {
+      if (!aliases[a] || aliases[a].length < 4) continue;
       if (n.indexOf(aliases[a]) !== -1) return c;
     }
   }
@@ -4320,10 +4469,15 @@ function extractCatalogEntriesFromRows_(rows) {
     if (score > bestScore) { bestScore = score; headerIndex = hi; }
   }
   var header = rows[headerIndex] || [];
-  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'sku', 'mahh', 'itemcode']);
+  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'itemcode', 'mahh', 'sku']);
   var maVachIdx = impFindColByAliases_(header, ['mavach', 'barcode', 'ean']);
-  var tenHangIdx = impFindColByAliases_(header, ['tenhanghoa', 'tenhang', 'name', 'description']);
-  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'unit', 'uom', 'basicunit', 'unitname']);
+  var tenHangIdx = impFindColByAliases_(header, ['tenhanghoa', 'tenhang', 'tensanpham', 'description']);
+  if (tenHangIdx < 0) {
+    for (var thExact = 0; thExact < header.length; thExact++) {
+      if (impNormalizeText(header[thExact]).replace(/\s+/g, '') === 'name') { tenHangIdx = thExact; break; }
+    }
+  }
+  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'uom', 'basicunit', 'unitname', 'unit']);
   if (dvtIdx < 0) {
     for (var dc = 0; dc < header.length; dc++) {
       var hn = impNormalizeText(header[dc]);
@@ -4916,11 +5070,13 @@ function xb_handleSearchInput(e) {
 
   if (e && e.key === "Enter") {
     var exactKey = normalizeMisaCode_(val) || val.toUpperCase();
-    var exactMatch = danhMucGoc[exactKey] || danhMucGoc[val.toUpperCase()];
+    var exactMatch = resolveSelectedCatalogProduct_(exactKey, exactKey) ||
+      resolveSelectedCatalogProduct_(val.toUpperCase(), '') ||
+      resolveSelectedCatalogProduct_('', val.toUpperCase());
     if (exactMatch) xb_chonSanPham(exactMatch);
     else {
       var matched = filterProducts(val);
-      if (matched.length > 0) xb_chonSanPham(matched[0]);
+      if (matched.length > 0) xb_chonSanPhamByMaSP_(matched[0].maHang, matched[0].maVach);
       else {
         xbItems.unshift({ maHang: "LỖI MÃ", maVach: val, tenHang: "❌ Không tồn tại", dvt: "Lỗi", sl: "1" });
         xb_renderTable();
@@ -4939,42 +5095,60 @@ function xb_handleSearchInput(e) {
   }
   var html = "";
   results.slice(0, 10).forEach(function(item) {
-    var itemStr = encodeURIComponent(JSON.stringify(item));
-    html += '<div class="suggest-item" onclick="xb_chonSanPhamFromSuggest(\'' + itemStr + '\')"><div class="sg-title">' + item.tenHang + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + item.maHang + '</span> · Mã vạch: ' + item.maVach + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + '</div></div>';
+    var mhEnc = encodeURIComponent(String(item.maHang || ''));
+    var mvEnc = encodeURIComponent(String(item.maVach || ''));
+    html += '<div class="suggest-item" onclick="xb_chonSanPhamByMaSP_(\'' + mhEnc + '\',\'' + mvEnc + '\')"><div class="sg-title">' + escapeHtml(item.tenHang) + '</div><div class="sg-desc"><span style="color:#1a73e8; font-weight:700;">Mã hàng: ' + escapeHtml(item.maHang) + '</span> · Mã vạch: ' + escapeHtml(item.maVach) + ' · ĐVT: ' + escapeHtml(formatDvtDisplay_(item.maHang, item.maVach, item.dvt)) + '</div></div>';
   });
   box.innerHTML = html;
   box.style.display = "block";
 }
 
-function xb_chonSanPhamFromSuggest(itemStr) {
-  xb_chonSanPham(JSON.parse(decodeURIComponent(itemStr)));
+function xb_chonSanPhamByMaSP_(maHangEnc, maVachEnc) {
+  var mh = decodeURIComponent(String(maHangEnc || ''));
+  var mv = decodeURIComponent(String(maVachEnc || ''));
+  var product = resolveSelectedCatalogProduct_(mh, mv);
+  if (!product) return alert('Không tìm thấy sản phẩm [' + (mh || mv || '?') + '] trong danh mục.');
+  xb_chonSanPham(product);
   var input = document.getElementById("xb-input-scan");
   var box = document.getElementById("xb-suggest-box");
   if (input) { input.value = ""; input.focus(); }
   if (box) box.style.display = "none";
 }
 
+function xb_chonSanPhamFromSuggest(itemStr) {
+  try {
+    var parsed = JSON.parse(decodeURIComponent(itemStr));
+    xb_chonSanPhamByMaSP_(
+      encodeURIComponent(String(parsed.maHang || '')),
+      encodeURIComponent(String(parsed.maVach || ''))
+    );
+  } catch (e) {
+    alert('Không đọc được sản phẩm đã chọn.');
+  }
+}
+
 function xb_chonSanPham(it) {
   if (!xbInvoiceLocked) return alert("Xác nhận số hóa đơn liên kết trước.");
-  if (!guardProductNotLocked_(it, 'xb-input-scan')) return;
-  if (itemHasVariantGroup_(it)) {
-    openVariantPicker_(it, 'xb', 1);
+  var resolved = resolveSelectedCatalogProduct_(it && it.maHang, it && it.maVach) || cloneCatalogProduct_(it) || it;
+  if (!guardProductNotLocked_(resolved, 'xb-input-scan')) return;
+  if (itemHasVariantGroup_(resolved)) {
+    openVariantPicker_(resolved, 'xb', 1);
     return;
   }
-  xb_chonSanPhamDirect_(it, 1);
+  xb_chonSanPhamDirect_(resolved, 1);
 }
 
 function xb_chonSanPhamDirect_(it, qty) {
   if (!xbInvoiceLocked) return alert("Xác nhận số hóa đơn liên kết trước.");
   if (!it) return;
-  if (!guardProductNotLocked_(it, 'xb-input-scan')) return;
+  var resolved = resolveSelectedCatalogProduct_(it.maHang, it.maVach) || cloneCatalogProduct_(it) || it;
+  if (!guardProductNotLocked_(resolved, 'xb-input-scan')) return;
   var addQty = Number(qty);
   if (!addQty || addQty <= 0 || isNaN(addQty)) addQty = Number(it.sl) > 0 ? Number(it.sl) : 1;
-  var cat = lookupCatalogProductClient_(it && it.maHang, it && it.maVach) || it || {};
-  var maHang = it.maHang || cat.maHang || "";
-  var maVach = it.maVach || cat.maVach || "";
-  var tenHang = it.tenHang || cat.tenHang || "";
-  var dvt = resolveDvtClient_(maHang, maVach, (it && it.dvt) || (cat && cat.dvt));
+  var maHang = resolved.maHang || "";
+  var maVach = resolved.maVach || "";
+  var tenHang = resolved.tenHang || "";
+  var dvt = resolveDvtClient_(maHang, maVach, resolved.dvt || it.dvt);
   var existingIndex = xbItems.findIndex(function(x) {
     return x.maHang !== "LỖI MÃ" &&
       String(x.maHang || '').trim().toUpperCase() === String(maHang || '').trim().toUpperCase() &&
@@ -4990,7 +5164,7 @@ function xb_chonSanPhamDirect_(it, qty) {
       maVach: maVach,
       tenHang: tenHang,
       dvt: dvt,
-      parentSku: it.parentSku || cat.parentSku || '',
+      parentSku: resolved.parentSku || it.parentSku || '',
       sl: String(addQty),
       highlight: true
     });

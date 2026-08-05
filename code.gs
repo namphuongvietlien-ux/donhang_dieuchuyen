@@ -35,7 +35,7 @@ var GUIDE_SHEET_NAME = "Hướng dẫn";
 
 var CACHE_STORES_KEY = "stores_registry_v3_q4moi_cu";
 
-var CACHE_CATALOG_PREFIX = "catalog_data_v2_";
+var CACHE_CATALOG_PREFIX = "catalog_data_v3_masp_";
 
 var CACHE_STOCK_INDEX_PREFIX = "stock_index_v1_";
 

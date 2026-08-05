@@ -596,10 +596,25 @@ function normalizeHeaderText(value) {
 
 function findColumnIndexByAliases(row, aliases) {
   if (!row) return -1;
-  for (var c = 0; c < row.length; c++) {
-    var normalized = normalizeHeaderText(row[c]);
-    for (var i = 0; i < aliases.length; i++) {
-      if (normalized.indexOf(aliases[i]) !== -1) return c;
+  var i;
+  var c;
+  var normalized;
+  // Pass 1: khớp exact header — tránh "barcode".indexOf("code") / "unitname".indexOf("name")
+  for (c = 0; c < row.length; c++) {
+    normalized = normalizeHeaderText(row[c]);
+    if (!normalized) continue;
+    for (i = 0; i < aliases.length; i++) {
+      if (normalized === aliases[i]) return c;
+    }
+  }
+  // Pass 2: contains, bỏ alias ngắn dễ đụng (code/name/sku đơn lẻ đã thử exact ở trên)
+  for (c = 0; c < row.length; c++) {
+    normalized = normalizeHeaderText(row[c]);
+    if (!normalized) continue;
+    for (i = 0; i < aliases.length; i++) {
+      var alias = aliases[i];
+      if (!alias || alias.length < 4) continue;
+      if (normalized.indexOf(alias) !== -1) return c;
     }
   }
   return -1;

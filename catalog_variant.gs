@@ -1295,10 +1295,16 @@ function buildCatalogFromSheet_(ss) {
   }
   var parentSkuIdx = findCatalogParentColIdx_(headerRow);
   var maHangIdx = findCatalogMaHangColIdx_(headerRow, parentSkuIdx);
-  if (maHangIdx === -1) maHangIdx = findColumnIndexByAliases(headerRow, ['mahang', 'sku', 'article', 'code']);
-  var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcode', 'barcodeid']);
-  var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhang', 'name', 'tênhang', 'description']);
-  var dvtIdx = findColumnIndexByAliases(headerRow, ['dvt', 'donvitinh', 'donvi', 'unit', 'uom']);
+  if (maHangIdx === -1) maHangIdx = findColumnIndexByAliases(headerRow, ['mahanghoa', 'mahang', 'itemcode', 'article', 'sku']);
+  var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcodeid', 'barcode', 'ean']);
+  // Không dùng alias "name" dạng contains — dễ khớp nhầm UnitName / BrandName
+  var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhanghoa', 'tenhang', 'tensanpham', 'tensp', 'description']);
+  if (tenHangIdx === -1 && headerRow) {
+    for (var thc = 0; thc < headerRow.length; thc++) {
+      if (normalizeHeaderText(headerRow[thc]) === "name") { tenHangIdx = thc; break; }
+    }
+  }
+  var dvtIdx = findColumnIndexByAliases(headerRow, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'uom', 'unit']);
   var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
   if (parentSkuIdx === -1 && headerRow && headerRow.length >= 10) {
     // Sheet chuẩn: cột J = Parent_SKU
@@ -1333,9 +1339,18 @@ function buildCatalogFromSheet_(ss) {
       if (fallbackDvt !== "") dvt = fallbackDvt;
     }
     if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
+    if (!maHang && !maVach) continue;
     var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "", parentSku: parentSku || "", isNew: isNewFlag, isLocked: false };
-    if (maVach !== "") danhMucHangHoa[maVach.toUpperCase()] = obj;
-    if (maHang !== "" && !danhMucHangHoa[maHang.toUpperCase()]) danhMucHangHoa[maHang.toUpperCase()] = obj;
+    // Primary key = Mã SP (maHang). Không để barcode ghi đè SKU của sản phẩm khác.
+    var mhU = maHang ? String(maHang).trim().toUpperCase() : "";
+    var mvU = maVach ? String(maVach).trim().toUpperCase() : "";
+    if (mhU) danhMucHangHoa[mhU] = obj;
+    if (mvU) {
+      var occupied = danhMucHangHoa[mvU];
+      if (!occupied || String(occupied.maHang || "").trim().toUpperCase() === mhU) {
+        danhMucHangHoa[mvU] = obj;
+      }
+    }
   }
   return danhMucHangHoa;
 }
@@ -1393,8 +1408,9 @@ function resolveCatalogProduct(lookup, maHang, maVach) {
   if (!lookup) return null;
   var mv = String(maVach || "").trim().toUpperCase();
   var mh = String(maHang || "").trim().toUpperCase();
-  if (mv && lookup.byMaVach[mv]) return lookup.byMaVach[mv];
+  // Ưu tiên Mã SP (primary key) khi có — tránh lệch tên/MV khi barcode trùng SKU khác
   if (mh && lookup.byMaHang[mh]) return lookup.byMaHang[mh];
+  if (mv && lookup.byMaVach[mv]) return lookup.byMaVach[mv];
   return null;
 }
 
@@ -1684,11 +1700,17 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
       if (!mh && !mv) continue;
       var mhU = mh.toUpperCase();
       var mvU = mv.toUpperCase();
-      var existing = (mvU && danhMuc[mvU]) || (mhU && danhMuc[mhU]) || null;
+      // Khớp theo MH trước — không lấy nhầm SP khác chỉ vì trùng barcode/SKU
+      var existing = (mhU && danhMuc[mhU]) || null;
+      if (!existing && mvU && danhMuc[mvU]) {
+        var byMv = danhMuc[mvU];
+        if (!mhU || String(byMv.maHang || "").trim().toUpperCase() === mhU) existing = byMv;
+      }
       if (existing) {
         if (!existing.parentSku && parentSku) existing.parentSku = parentSku;
         if (!existing.tenHang && row.th) existing.tenHang = row.th;
         if (!existing.dvt && row.d) existing.dvt = row.d;
+        if (!existing.maVach && mv) existing.maVach = mv;
         if (row.isLocked) existing.isLocked = true;
         continue;
       }
@@ -1702,8 +1724,13 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
         isLocked: !!row.isLocked,
         fromTonVariant: true
       };
-      if (mvU) danhMuc[mvU] = obj;
-      if (mhU && !danhMuc[mhU]) danhMuc[mhU] = obj;
+      if (mhU) danhMuc[mhU] = obj;
+      if (mvU) {
+        var occupiedMv = danhMuc[mvU];
+        if (!occupiedMv || String(occupiedMv.maHang || "").trim().toUpperCase() === mhU) {
+          danhMuc[mvU] = obj;
+        }
+      }
       added++;
     }
     return { danhMuc: danhMuc, added: added };
