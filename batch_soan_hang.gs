@@ -70,24 +70,29 @@ function taoPdfDonHangVaLayLink(soPhieu) {
     if (!rows.length) return "";
 
     var tempSheet = recreateTempSheet(ss, "__TMP_TELE_PDF_DON", ["Pdf_", "__TMP_TELE_PDF_DON"]);
-    // Header chuẩn: Số đơn nổi bật + Giờ tạo đơn (không dùng giờ in)
-    var createdInfo = extractOrderCreatedAtFromHistoryRows_(matchedHistoryRows, target);
-    if (createdInfo) {
-      if (!isNaN(createdInfo.ms)) createdAtMs = createdInfo.ms;
-      if (createdInfo.khoXuat) khoXuat = createdInfo.khoXuat;
-      if (createdInfo.khoNhan) khoNhan = createdInfo.khoNhan;
+    // Header: Đơn hàng + Ngày tạo | Cập nhật lần cuối + Kho (không banner trùng)
+    var stamps = extractOrderTimestampsFromHistoryRows_(matchedHistoryRows, target);
+    if (stamps) {
+      if (!isNaN(stamps.createdMs)) createdAtMs = stamps.createdMs;
+      if (stamps.khoXuat) khoXuat = stamps.khoXuat;
+      if (stamps.khoNhan) khoNhan = stamps.khoNhan;
     }
-    var ngayText = !isNaN(createdAtMs) ? formatOrderCreatedAtPretty_(createdAtMs) : "";
+    var auditMs = getLatestOrderAuditMs_(ss, target);
+    var updatedAtMs = stamps ? stamps.updatedMs : createdAtMs;
+    if (!isNaN(auditMs) && (isNaN(updatedAtMs) || auditMs > updatedAtMs)) updatedAtMs = auditMs;
+    var createdText = !isNaN(createdAtMs) ? formatOrderTimestampUi_(createdAtMs) : "";
+    var updatedText = !isNaN(updatedAtMs) ? formatOrderTimestampUi_(updatedAtMs) : createdText;
     tempSheet.getRange("A1:H1").merge()
       .setValue("Đơn hàng: " + target)
-      .setFontSize(16).setFontWeight("bold").setHorizontalAlignment("center");
+      .setFontSize(16).setFontWeight("bold").setHorizontalAlignment("left");
     tempSheet.getRange("A2:H2").merge()
-      .setValue(ngayText ? ("Giờ tạo đơn: " + ngayText) : "Giờ tạo đơn: —")
-      .setFontSize(12).setFontWeight("bold").setHorizontalAlignment("center");
+      .setValue("Ngày tạo: " + (createdText || "—") + "  |  Cập nhật lần cuối: " + (updatedText || "—"))
+      .setFontSize(11).setFontWeight("bold").setHorizontalAlignment("left");
     tempSheet.getRange("A3:H3").merge().setValue(
       "Kho xuất: " + (formatStorePrintLabel_(khoXuat) || khoXuat) +
-      " | Kho nhận: " + (formatStorePrintLabel_(khoNhan) || khoNhan)
-    ).setFontStyle("italic");
+      "\nKho nhận / Chi nhánh: " + (formatStorePrintLabel_(khoNhan) || khoNhan)
+    ).setFontStyle("italic").setWrap(true);
+    tempSheet.setRowHeight(3, 36);
 
     var headers = [["STT", "Mã Parent (kệ)", "Mã vạch", "Tên / Phân loại biến thể", "ĐVT", "SL Giao (Soạn)", "SL Thực Nhận", "Trạng thái dòng"]];
     tempSheet.getRange(5, 1, 1, 8).setValues(headers).setFontWeight("bold").setBackground("#d9ead3").setHorizontalAlignment("center");
@@ -174,16 +179,29 @@ function getThongTinPhieu(soPhieu) {
       rows.push(data[i]);
     }
     if (!rows.length) return null;
-    // Thống nhất với bảng soạn: thời gian tạo = mốc sớm nhất trên mọi dòng của đơn
-    var created = extractOrderCreatedAtFromHistoryRows_(rows, soPhieu);
+    // createdAt = MIN cột A (cố định); updatedAt = MAX cột A ∪ audit
+    var stamps = extractOrderTimestampsFromHistoryRows_(rows, soPhieu);
     var first = rows[0];
+    var createdMs = stamps ? stamps.createdMs : toHoChiMinhMillis_(first[0]);
+    var updatedMs = stamps ? stamps.updatedMs : createdMs;
+    var auditMs = getLatestOrderAuditMs_(ss, soPhieu);
+    if (!isNaN(auditMs) && (isNaN(updatedMs) || auditMs > updatedMs)) updatedMs = auditMs;
+    var timeFields = buildOrderTimeFields_(createdMs, updatedMs);
     return {
-      soPhieu: (created && created.soPhieu) || String(first[1]).trim(),
-      khoXuat: (created && created.khoXuat) || (first[2] ? String(first[2]).trim() : ""),
-      khoNhan: (created && created.khoNhan) || (first[3] ? String(first[3]).trim() : ""),
-      thoiGian: (created && created.label) || formatOrderCreatedAtLabel_(first[0]) || "",
-      thoiGianPretty: formatOrderCreatedAtPretty_(created ? created.ms : first[0]) || "",
-      thoiGianMs: created ? created.ms : toHoChiMinhMillis_(first[0])
+      soPhieu: (stamps && stamps.soPhieu) || String(first[1]).trim(),
+      khoXuat: (stamps && stamps.khoXuat) || (first[2] ? String(first[2]).trim() : ""),
+      khoNhan: (stamps && stamps.khoNhan) || (first[3] ? String(first[3]).trim() : ""),
+      thoiGian: timeFields.thoiGian,
+      thoiGianPretty: timeFields.thoiGianPretty,
+      thoiGianMs: timeFields.thoiGianMs,
+      thoiGianTao: timeFields.thoiGianTao,
+      thoiGianTaoPretty: timeFields.thoiGianTaoPretty,
+      thoiGianTaoMs: timeFields.thoiGianTaoMs,
+      createdAt: timeFields.createdAt,
+      thoiGianCapNhat: timeFields.thoiGianCapNhat,
+      thoiGianCapNhatPretty: timeFields.thoiGianCapNhatPretty,
+      thoiGianCapNhatMs: timeFields.thoiGianCapNhatMs,
+      updatedAt: timeFields.updatedAt
     };
   } catch (e) {
     Logger.log("getThongTinPhieu error: " + (e.message || e));
@@ -240,8 +258,16 @@ function getOrderDetail(soPhieu) {
       khoXuat: info.khoXuat || "",
       khoNhan: info.khoNhan || "",
       thoiGian: info.thoiGian || "",
-      thoiGianPretty: info.thoiGianPretty || formatOrderCreatedAtPretty_(info.thoiGianMs || info.thoiGian) || "",
-      thoiGianMs: info.thoiGianMs || null,
+      thoiGianPretty: info.thoiGianPretty || info.thoiGianTao || "",
+      thoiGianMs: info.thoiGianMs || info.thoiGianTaoMs || null,
+      thoiGianTao: info.thoiGianTao || info.thoiGianPretty || "",
+      thoiGianTaoPretty: info.thoiGianTaoPretty || info.thoiGianTao || "",
+      thoiGianTaoMs: info.thoiGianTaoMs || info.thoiGianMs || null,
+      createdAt: info.createdAt || info.thoiGianTaoMs || info.thoiGianMs || null,
+      thoiGianCapNhat: info.thoiGianCapNhat || "",
+      thoiGianCapNhatPretty: info.thoiGianCapNhatPretty || info.thoiGianCapNhat || "",
+      thoiGianCapNhatMs: info.thoiGianCapNhatMs || null,
+      updatedAt: info.updatedAt || info.thoiGianCapNhatMs || null,
       items: items,
       itemCount: items.length
     };
@@ -449,6 +475,8 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
             soPhieu: rowSoPhieu,
             khoXuat: rowKhoXuat,
             khoNhan: rowKhoNhan,
+            createdAtMs: thoiGian || 0,
+            updatedAtMs: thoiGian || 0,
             thoiGian: thoiGian,
             trangThai: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus
           };
@@ -456,7 +484,10 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
           if (displayStatus === "Đã hủy") entry.trangThai = "Đã hủy";
           else if (displayStatus === "Đã xác nhận" && entry.trangThai !== "Đã hủy") entry.trangThai = "Đã xác nhận";
           else if (displayStatus === "Đã soạn" && entry.trangThai !== "Đã hủy" && entry.trangThai !== "Đã xác nhận") entry.trangThai = "Đã soạn";
-          if (thoiGian && thoiGian > (entry.thoiGian || 0)) entry.thoiGian = thoiGian;
+          if (thoiGian && (!entry.createdAtMs || thoiGian < entry.createdAtMs)) entry.createdAtMs = thoiGian;
+          if (thoiGian && thoiGian > (entry.updatedAtMs || 0)) entry.updatedAtMs = thoiGian;
+          // thoiGian giữ = created (cố định) — không đè bằng giờ sửa
+          entry.thoiGian = entry.createdAtMs || entry.thoiGian;
         }
       }
 
@@ -476,9 +507,30 @@ function layDanhSachPhieuTheoFilter(khoNhan, ngayYYYYMMDD, userRole, userStore) 
     // Gom kết quả bằng vòng for (nhanh hơn map/filter trên GAS với dataset lớn)
     var res = [];
     for (var key in map) {
-      if (Object.prototype.hasOwnProperty.call(map, key)) res.push(map[key]);
+      if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+      var e = map[key];
+      var cMs = e.createdAtMs || e.thoiGian || 0;
+      var uMs = e.updatedAtMs || cMs;
+      var tf = buildOrderTimeFields_(cMs, uMs);
+      res.push({
+        soPhieu: e.soPhieu,
+        khoXuat: e.khoXuat,
+        khoNhan: e.khoNhan,
+        trangThai: e.trangThai,
+        thoiGian: tf.thoiGianMs || cMs,
+        thoiGianPretty: tf.thoiGianPretty,
+        thoiGianMs: tf.thoiGianMs,
+        thoiGianTao: tf.thoiGianTao,
+        thoiGianTaoPretty: tf.thoiGianTaoPretty,
+        thoiGianTaoMs: tf.thoiGianTaoMs,
+        createdAt: tf.createdAt,
+        thoiGianCapNhat: tf.thoiGianCapNhat,
+        thoiGianCapNhatPretty: tf.thoiGianCapNhatPretty,
+        thoiGianCapNhatMs: tf.thoiGianCapNhatMs,
+        updatedAt: tf.updatedAt
+      });
     }
-    res.sort(function(a, b) { return (b.thoiGian || 0) - (a.thoiGian || 0); });
+    res.sort(function(a, b) { return (b.thoiGianCapNhatMs || b.thoiGianMs || 0) - (a.thoiGianCapNhatMs || a.thoiGianMs || 0); });
     return {
       data: res,
       _debugTotalMs: Date.now() - t0,
@@ -617,6 +669,7 @@ function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
             soPhieu: rowSoPhieu,
             khoXuat: rowKhoXuat,
             khoNhan: rowKhoNhan,
+            createdAtMs: rowMs || 0,
             thoiGian: rowNgay,
             thoiGianMs: rowMs || 0,
             status: displayStatus === "Đã hủy dòng" ? "Mới" : displayStatus,
@@ -631,6 +684,7 @@ function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
         else if (entry.status !== "Đã hủy" && entry.status !== "Đã soạn" && entry.status !== "Đã xác nhận") entry.status = "Mới";
 
         entry.count += 1;
+        if (rowMs && (!entry.createdAtMs || rowMs < entry.createdAtMs)) entry.createdAtMs = rowMs;
         if (rowMs && rowMs > (entry.thoiGianMs || 0)) {
           entry.thoiGian = rowNgay;
           entry.thoiGianMs = rowMs;
@@ -670,12 +724,18 @@ function getDashboardSummary(userRole, userStore, timeline, fromDate, toDate) {
     var recentLimit = Math.min(8, orders.length);
     for (var r = 0; r < recentLimit; r++) {
       var order = orders[r];
+      var createdUi = formatOrderTimestampUi_(order.createdAtMs || order.thoiGianMs) || "";
+      var updatedUi = formatOrderTimestampUi_(order.thoiGianMs || order.createdAtMs) || "";
       recentOrders.push({
         soPhieu: order.soPhieu,
         khoXuat: order.khoXuat,
         khoNhan: order.khoNhan,
         status: order.status,
-        thoiGian: formatOrderCreatedAtLabel_(order.thoiGianMs || order.thoiGian) || formatDateTime(order.thoiGian)
+        thoiGian: createdUi || formatOrderCreatedAtLabel_(order.createdAtMs || order.thoiGianMs) || formatDateTime(order.thoiGian),
+        thoiGianTao: createdUi,
+        thoiGianCapNhat: updatedUi,
+        thoiGianMs: order.createdAtMs || order.thoiGianMs || null,
+        thoiGianCapNhatMs: order.thoiGianMs || order.createdAtMs || null
       });
     }
 
@@ -2117,6 +2177,13 @@ function luuSoSoanHangVaAnh(payload) {
             break;
           }
         }
+      }
+
+      // Ghi audit "Soạn hàng" → cập nhật thoiGianCapNhat (không đụng cột A = Ngày Tạo)
+      if (soPhieu && updates && updates.length) {
+        try {
+          logOrderChange(ss, soPhieu, "Soạn hàng", actor, "", "", "", updates.length, "Lưu kết quả soạn hàng");
+        } catch (eAuditPack) {}
       }
 
       var khoXuat = "";

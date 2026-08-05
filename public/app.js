@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-05-v81-dynamic-wh-calendar';
+var APP_BUILD = '2026-08-05-v82-created-updated-header';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -1447,10 +1447,12 @@ function loadDashboardSummary() {
       var kn = formatStoreShortLabel_(order.khoNhan);
       var so = String(order.soPhieu || '');
       var soAttr = encodeURIComponent(so);
-      return '<tr><td><a href="javascript:void(0)" class="order-pdf-link" onclick="openOrderPdfView(\'' + soAttr + '\')">' + escapeHtml(so) + '</a></td><td>' + kx + '</td><td>' + kn + '</td><td><span style="display:inline-block; padding:4px 8px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:700;">' + order.status + '</span></td><td>' + (order.thoiGian || '-') + '</td></tr>';
+      var created = formatOrderTimestampUiClient_(order.thoiGianTao || order.thoiGian) || order.thoiGian || '-';
+      var updated = formatOrderTimestampUiClient_(order.thoiGianCapNhat) || created;
+      return '<tr><td><a href="javascript:void(0)" class="order-pdf-link" onclick="openOrderPdfView(\'' + soAttr + '\')">' + escapeHtml(so) + '</a></td><td>' + kx + '</td><td>' + kn + '</td><td><span style="display:inline-block; padding:4px 8px; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:700;">' + order.status + '</span></td><td style="font-size:12px;line-height:1.35;"><div>Tạo: ' + escapeHtml(created) + '</div><div style="color:#64748b;">Sửa: ' + escapeHtml(updated) + '</div></td></tr>';
     }).join('');
 
-    recent.innerHTML = '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;"><thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Số phiếu</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho xuất</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho nhận</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Trạng thái</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Cập nhật</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    recent.innerHTML = '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse;"><thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Số phiếu</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho xuất</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Kho nhận</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Trạng thái</th><th style="text-align:left; padding:8px; border-bottom:1px solid #e2e8f0;">Ngày tạo / Lần sửa</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }).catch(function(err){ hideLoad(); console.error(err); });
 }
 
@@ -2280,9 +2282,16 @@ function submitPhieuMoi() {
     endSubmitBusy_('submitPhieuMoi');
     if(res.coLoi) { alert("⚠️ Có mã lỗi. Sửa trong tab Quản lý!"); arrItems = []; renderTable(); }
     else {
-       currentPhieuObj = { soPhieu: res.soPhieu, khoXuat: khoXuat, khoNhan: khoNhan, thoiGianPretty: formatOrderCreatedAtPrettyClient_(new Date()) };
+       currentPhieuObj = {
+         soPhieu: res.soPhieu,
+         khoXuat: khoXuat,
+         khoNhan: khoNhan,
+         thoiGianPretty: formatOrderTimestampUiClient_(new Date()),
+         thoiGianTao: formatOrderTimestampUiClient_(new Date()),
+         thoiGianCapNhat: formatOrderTimestampUiClient_(new Date())
+       };
        document.getElementById("modal-sophieu").innerText = res.soPhieu;
-       setOrderMetaBadgeEl_('modal-order-meta', res.soPhieu, khoNhan, khoXuat, currentPhieuObj.thoiGianPretty);
+       setOrderMetaBadgeEl_('modal-order-meta', res.soPhieu, khoNhan, khoXuat, currentPhieuObj.thoiGianTao, currentPhieuObj.thoiGianCapNhat);
        var modalTip = document.getElementById('modal-timeline-tip');
        if (modalTip) {
          var savedTip = getPackingTimelineInfo(new Date());
@@ -2330,7 +2339,7 @@ function getPdfWindowSharedCss_() {
     '.btn-success{background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);box-shadow:0 8px 18px rgba(22,163,74,.22);}' +
     '.btn-muted{background:linear-gradient(135deg,#64748b 0%,#475569 100%);}' +
     '.order-code{margin:0 0 6px;font-size:22px;font-weight:800;color:#0f172a;letter-spacing:.01em;}' +
-    '.created-time{margin:0 0 14px;font-size:15px;font-weight:700;color:#1d4ed8;}' +
+    '.created-time{margin:0 0 14px;font-size:14px;font-weight:700;color:#1d4ed8;line-height:1.5;}' +
     '.meta{line-height:1.7;margin:0 0 18px;color:#334155;}' +
     'table{width:100%;border-collapse:collapse;} th,td{border:1px solid #cbd5e1;padding:8px 10px;font-size:13px;vertical-align:top;}' +
     'th{background:#f1f5f9;text-align:left;} .code,.code-cell{font-weight:700;font-size:15px;} .qty,.qty-cell{font-weight:800;text-align:center;font-size:15px;}' +
@@ -2340,7 +2349,7 @@ function getPdfWindowSharedCss_() {
     '@media (max-width:600px){body{padding:12px;} .sheet{padding:16px;} .btn-submit{width:100%;}}';
 }
 
-/** Giờ tạo đơn dạng 10:15 - 05/08/2026 (không dùng giờ in) */
+/** Giờ tạo đơn dạng 10:15 - 05/08/2026 (tương thích cũ) */
 function formatOrderCreatedAtPrettyClient_(value) {
   if (value == null || value === '') return '';
   var d = null;
@@ -2355,11 +2364,44 @@ function formatOrderCreatedAtPrettyClient_(value) {
       var mPretty = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
       if (mPretty) return pad2_(Number(mPretty[1])) + ':' + pad2_(Number(mPretty[2])) + ' - ' +
         pad2_(Number(mPretty[3])) + '/' + pad2_(Number(mPretty[4])) + '/' + mPretty[5];
+      var mUi = s.match(/^(\d{1,2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (mUi) return pad2_(Number(mUi[1])) + ':' + pad2_(Number(mUi[2])) + ' - ' +
+        pad2_(Number(mUi[3])) + '/' + pad2_(Number(mUi[4])) + '/' + mUi[5];
       d = new Date(s);
     }
   }
   if (!d || isNaN(d.getTime())) return String(value);
   return pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()) + ' - ' +
+    pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear();
+}
+
+/** Nhãn UI: HH:mm dd/MM/yyyy (vd: 17:32 04/08/2026) */
+function formatOrderTimestampUiClient_(value) {
+  if (value == null || value === '') return '';
+  var d = null;
+  if (value instanceof Date) d = value;
+  else if (typeof value === 'number' && isFinite(value)) d = new Date(value);
+  else {
+    var s = String(value).trim();
+    var mUi = s.match(/^(\d{1,2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mUi) {
+      return pad2_(Number(mUi[1])) + ':' + pad2_(Number(mUi[2])) + ' ' +
+        pad2_(Number(mUi[3])) + '/' + pad2_(Number(mUi[4])) + '/' + mUi[5];
+    }
+    var mPretty = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (mPretty) {
+      return pad2_(Number(mPretty[1])) + ':' + pad2_(Number(mPretty[2])) + ' ' +
+        pad2_(Number(mPretty[3])) + '/' + pad2_(Number(mPretty[4])) + '/' + mPretty[5];
+    }
+    var mVn = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (mVn) {
+      d = new Date(Number(mVn[3]), Number(mVn[2]) - 1, Number(mVn[1]), Number(mVn[4] || 0), Number(mVn[5] || 0), Number(mVn[6] || 0));
+    } else {
+      d = new Date(s);
+    }
+  }
+  if (!d || isNaN(d.getTime())) return String(value);
+  return pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()) + ' ' +
     pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear();
 }
 
@@ -2369,25 +2411,32 @@ function resolveOrderKhoLabel_(khoNhan, khoXuat) {
     String(khoNhan || khoXuat || '').trim() || '—';
 }
 
-/** Text thống nhất: Mã Đơn | Kho | Ngày Tạo */
-function buildOrderMetaBadgeText_(soPhieu, khoLabel, createdPretty) {
-  return 'Mã Đơn: ' + (soPhieu || '—') +
-    ' | Kho: ' + (khoLabel || '—') +
-    ' | Ngày Tạo: ' + (createdPretty || '—');
+function pickOrderCreatedRaw_(obj) {
+  if (!obj) return '';
+  return obj.thoiGianTao || obj.thoiGianTaoPretty || obj.thoiGianPretty || obj.thoiGian ||
+    obj.thoiGianTaoMs || obj.thoiGianMs || obj.createdAt || '';
 }
 
-function buildOrderMetaBadgeHtml_(soPhieu, khoLabel, createdPretty) {
-  return '<span class="om-k">Mã Đơn:</span> ' + escapeHtml(soPhieu || '—') +
-    '<span class="om-sep">|</span><span class="om-k">Kho:</span> ' + escapeHtml(khoLabel || '—') +
-    '<span class="om-sep">|</span><span class="om-k">Ngày Tạo:</span> ' + escapeHtml(createdPretty || '—');
+function pickOrderUpdatedRaw_(obj) {
+  if (!obj) return '';
+  return obj.thoiGianCapNhat || obj.thoiGianCapNhatPretty || obj.thoiGianCapNhatMs ||
+    obj.updatedAt || '';
 }
 
-function setOrderMetaBadgeEl_(elId, soPhieu, khoNhan, khoXuat, thoiGianRaw) {
+/** HTML badge 2 dòng: Mã|Kho + [Ngày Tạo] - [Lần sửa cuối] */
+function buildOrderMetaBadgeHtml_(soPhieu, khoLabel, createdRaw, updatedRaw) {
+  var created = formatOrderTimestampUiClient_(createdRaw) || String(createdRaw || '').trim() || '—';
+  var updated = formatOrderTimestampUiClient_(updatedRaw) || String(updatedRaw || '').trim() || created;
+  return '<div class="om-line1"><span class="om-k">Mã Đơn:</span> ' + escapeHtml(soPhieu || '—') +
+    '<span class="om-sep">|</span><span class="om-k">Kho:</span> ' + escapeHtml(khoLabel || '—') + '</div>' +
+    '<div class="om-line2">[Ngày Tạo: ' + escapeHtml(created) + '] - [Lần sửa cuối: ' + escapeHtml(updated) + ']</div>';
+}
+
+function setOrderMetaBadgeEl_(elId, soPhieu, khoNhan, khoXuat, createdRaw, updatedRaw) {
   var el = document.getElementById(elId);
   if (!el) return;
   var kho = resolveOrderKhoLabel_(khoNhan, khoXuat);
-  var tg = formatOrderCreatedAtPrettyClient_(thoiGianRaw) || String(thoiGianRaw || '').trim() || '—';
-  el.innerHTML = buildOrderMetaBadgeHtml_(soPhieu, kho, tg);
+  el.innerHTML = buildOrderMetaBadgeHtml_(soPhieu, kho, createdRaw, updatedRaw);
   el.style.display = '';
 }
 
@@ -2397,28 +2446,38 @@ function refreshCreateOrderMetaBadge_() {
   var kx = document.getElementById('select-kho-xuat');
   var kn = document.getElementById('select-kho-nhan');
   var khoLabel = resolveOrderKhoLabel_(kn && kn.value, kx && kx.value);
-  var nowPretty = formatOrderCreatedAtPrettyClient_(new Date());
-  el.innerHTML = buildOrderMetaBadgeHtml_('(chưa lưu)', khoLabel, nowPretty);
+  var nowUi = formatOrderTimestampUiClient_(new Date());
+  el.innerHTML = buildOrderMetaBadgeHtml_('(chưa lưu)', khoLabel, nowUi, '—');
 }
 
-function buildOrderPdfHeaderHtml_(soPhieu, thoiGianRaw, khoXuat, khoNhan) {
+/**
+ * Header PDF sạch — KHÔNG banner xanh trùng.
+ * 1) Đơn hàng  2) Ngày tạo | Cập nhật lần cuối  3) Kho xuất/nhận + địa chỉ
+ */
+function buildOrderPdfHeaderHtml_(soPhieu, thoiGianTaoRaw, khoXuat, khoNhan, thoiGianCapNhatRaw) {
   var so = escapeHtml(soPhieu || '');
-  var tg = escapeHtml(formatOrderCreatedAtPrettyClient_(thoiGianRaw) || thoiGianRaw || '—');
+  var tgTao = escapeHtml(formatOrderTimestampUiClient_(thoiGianTaoRaw) || thoiGianTaoRaw || '—');
+  var tgCap = escapeHtml(
+    formatOrderTimestampUiClient_(thoiGianCapNhatRaw) || thoiGianCapNhatRaw ||
+    formatOrderTimestampUiClient_(thoiGianTaoRaw) || thoiGianTaoRaw || '—'
+  );
   var kx = escapeHtml(formatStorePrintLabel_(khoXuat) || khoXuat || '-');
   var kn = escapeHtml(formatStorePrintLabel_(khoNhan) || khoNhan || '-');
-  var khoBadge = escapeHtml(resolveOrderKhoLabel_(khoNhan, khoXuat));
   return '' +
-    '<div class="order-meta-line" style="margin:0 0 12px;padding:10px 12px;border-radius:10px;background:#eff6ff;border:1px solid #93c5fd;font-size:14px;font-weight:700;line-height:1.45;">' +
-      'Mã Đơn: ' + so + ' | Kho: ' + khoBadge + ' | Ngày Tạo: ' + tg +
-    '</div>' +
     '<div class="order-code">Đơn hàng: ' + so + '</div>' +
-    '<div class="created-time">Giờ tạo đơn: ' + tg + '</div>' +
+    '<div class="created-time">Ngày tạo: ' + tgTao + ' &nbsp;|&nbsp; Cập nhật lần cuối: ' + tgCap + '</div>' +
     '<div class="meta"><b>Kho xuất:</b> ' + kx + '<br><b>Kho nhận / Chi nhánh:</b> ' + kn + '</div>';
 }
 
 // ================= IN WEB (IFRAME ẨN) & XUẤT EXCEL =================
 function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
-  var headerHtml = buildOrderPdfHeaderHtml_(soPhieu, (itemsArray && itemsArray._thoiGian) || '', khoXuat, khoNhan);
+  var headerHtml = buildOrderPdfHeaderHtml_(
+    soPhieu,
+    (itemsArray && (itemsArray._thoiGianTao || itemsArray._thoiGian)) || '',
+    khoXuat,
+    khoNhan,
+    (itemsArray && itemsArray._thoiGianCapNhat) || ''
+  );
   var htmlStr = '<div class="sheet">' + headerHtml;
   htmlStr += '<table><thead><tr><th>STT</th><th>Mã Parent (kệ)</th><th>Tên hàng / Phân loại</th><th>ĐVT</th><th>Số lượng (Soạn)</th><th class="note-cell"></th></tr></thead><tbody>';
   var stt = 1;
@@ -2864,11 +2923,25 @@ function confirm_onSelectPhieu() {
       val,
       confirmInfo.khoNhan || '',
       confirmInfo.khoXuat || '',
-      confirmInfo.thoiGianPretty || confirmInfo.thoiGian || confirmInfo.thoiGianMs || ''
+      pickOrderCreatedRaw_(confirmInfo),
+      pickOrderUpdatedRaw_(confirmInfo)
     );
     currentConfirmPhieuObj.khoNhan = confirmInfo.khoNhan || '';
     currentConfirmPhieuObj.khoXuat = confirmInfo.khoXuat || '';
-    currentConfirmPhieuObj.thoiGianPretty = confirmInfo.thoiGianPretty || confirmInfo.thoiGian || '';
+    currentConfirmPhieuObj.thoiGianPretty = pickOrderCreatedRaw_(confirmInfo);
+    currentConfirmPhieuObj.thoiGianCapNhat = pickOrderUpdatedRaw_(confirmInfo);
+    // Làm mới 2 mốc từ getThongTinPhieu (có audit soạn/sửa)
+    apiGet('getThongTinPhieu', { soPhieu: val }, { timeoutMs: 20000 }).then(function(info) {
+      if (!info || !info.soPhieu) return;
+      setOrderMetaBadgeEl_(
+        'confirm-order-meta-badge',
+        val,
+        info.khoNhan || confirmInfo.khoNhan,
+        info.khoXuat || confirmInfo.khoXuat,
+        pickOrderCreatedRaw_(info),
+        pickOrderUpdatedRaw_(info)
+      );
+    }).catch(function() {});
     var serverMs = parsed.meta && parsed.meta._debugTotalMs;
     var metaText = "Đã tải " + activeRows.length + " dòng";
     if (confirmedCount > 0) metaText += " · " + confirmedCount + " dòng đã xác nhận (chỉ lưu các dòng còn lại)";
@@ -3040,8 +3113,32 @@ function ql_hienThiChiTiet(phieu, options) {
       currentPhieuObj.soPhieu,
       currentPhieuObj.khoNhan,
       currentPhieuObj.khoXuat,
-      currentPhieuObj.thoiGianPretty || currentPhieuObj.thoiGian || currentPhieuObj.thoiGianMs || ''
+      pickOrderCreatedRaw_(currentPhieuObj),
+      pickOrderUpdatedRaw_(currentPhieuObj)
     );
+    apiGet('getThongTinPhieu', { soPhieu: currentPhieuObj.soPhieu }, { timeoutMs: 20000 }).then(function(info) {
+      if (!info || !info.soPhieu) return;
+      currentPhieuObj.thoiGian = info.thoiGian || currentPhieuObj.thoiGian;
+      currentPhieuObj.thoiGianPretty = info.thoiGianPretty || info.thoiGianTao || currentPhieuObj.thoiGianPretty;
+      currentPhieuObj.thoiGianMs = info.thoiGianMs || info.thoiGianTaoMs || currentPhieuObj.thoiGianMs;
+      currentPhieuObj.thoiGianTao = info.thoiGianTao || info.thoiGianPretty;
+      currentPhieuObj.thoiGianCapNhat = info.thoiGianCapNhat || '';
+      currentPhieuObj.thoiGianCapNhatMs = info.thoiGianCapNhatMs || null;
+      currentPhieuObj.createdAt = info.createdAt || info.thoiGianTaoMs;
+      currentPhieuObj.updatedAt = info.updatedAt || info.thoiGianCapNhatMs;
+      if (info.khoXuat) currentPhieuObj.khoXuat = info.khoXuat;
+      if (info.khoNhan) currentPhieuObj.khoNhan = info.khoNhan;
+      document.getElementById("ql-lbl-khoxuat").innerText = formatStoreShortLabel_(currentPhieuObj.khoXuat);
+      document.getElementById("ql-lbl-khonhan").innerText = formatStoreShortLabel_(currentPhieuObj.khoNhan);
+      setOrderMetaBadgeEl_(
+        'ql-order-meta-badge',
+        currentPhieuObj.soPhieu,
+        currentPhieuObj.khoNhan,
+        currentPhieuObj.khoXuat,
+        pickOrderCreatedRaw_(currentPhieuObj),
+        pickOrderUpdatedRaw_(currentPhieuObj)
+      );
+    }).catch(function() {});
 
     var lowStockCount = 0;
     var packedLineCount = 0;
@@ -3431,7 +3528,9 @@ function layItemsForOutput() {
     if (Number(sl) > 0) pushOut_(row, sl);
   });
   if (currentPhieuObj) {
-    items._thoiGian = currentPhieuObj.thoiGianPretty || currentPhieuObj.thoiGian || currentPhieuObj.thoiGianMs || '';
+    items._thoiGian = pickOrderCreatedRaw_(currentPhieuObj);
+    items._thoiGianTao = pickOrderCreatedRaw_(currentPhieuObj);
+    items._thoiGianCapNhat = pickOrderUpdatedRaw_(currentPhieuObj);
   }
   return items;
 }
@@ -3574,7 +3673,8 @@ function sh_pickOrderFromCalendar_(soPhieuEncoded) {
     soPhieu,
     hit && hit.khoNhan,
     hit && hit.khoXuat,
-    hit && (hit.thoiGianPretty || hit.thoiGian || hit.createdAt)
+    hit && (hit.thoiGianTao || hit.thoiGianPretty || hit.thoiGian || hit.createdAt),
+    hit && (hit.thoiGianCapNhat || hit.updatedAt)
   );
   var sel = document.getElementById('sh-phieu');
   if (sel) {
@@ -3763,8 +3863,9 @@ function openMultiOrderPdfWindow_(detailsList) {
 
 function buildOrderPdfSheetInnerHtml_(detail) {
   var soRaw = String((detail && detail.soPhieu) || '').trim();
-  var tgRaw = (detail && (detail.thoiGianPretty || detail.thoiGian || detail.thoiGianMs)) || '';
-  var headerHtml = buildOrderPdfHeaderHtml_(soRaw, tgRaw, detail && detail.khoXuat, detail && detail.khoNhan);
+  var tgTao = pickOrderCreatedRaw_(detail);
+  var tgCap = pickOrderUpdatedRaw_(detail);
+  var headerHtml = buildOrderPdfHeaderHtml_(soRaw, tgTao, detail && detail.khoXuat, detail && detail.khoNhan, tgCap);
   var rowsHtml = '';
   var stt = 1;
   (detail.items || []).forEach(function(it) {
@@ -3856,7 +3957,7 @@ function sh_chonDonMobile() {
   var opt = document.getElementById("sh-phieu");
   var selectedOpt = opt && opt.options[opt.selectedIndex] ? opt.options[opt.selectedIndex] : null;
   var hintKho = selectedOpt ? String(selectedOpt.textContent || '') : '';
-  setOrderMetaBadgeEl_('sh-order-meta-badge', sp, hintKho, '', '—');
+  setOrderMetaBadgeEl_('sh-order-meta-badge', sp, hintKho, '', '—', '—');
   apiGet('getChiTietDonHangMobile', { soPhieu: sp }, { directOnly: true, timeoutMs: 60000 }).then(function(items) {
     // Fallback nếu API mobile trả rỗng / lỗi hình dạng
     if (!Array.isArray(items) || !items.length) {
@@ -3874,17 +3975,30 @@ function sh_chonDonMobile() {
       document.getElementById("sh-footer").style.display = "none";
       return;
     }
-    // Đồng bộ header từ lịch tuần / getOrderDetail nếu có
+    // Đồng bộ header: ưu tiên getOrderDetail (có createdAt + updatedAt/audit)
     var calHit = sh_findOrderInWeekCal_(sp);
     if (calHit) {
-      setOrderMetaBadgeEl_('sh-order-meta-badge', sp, calHit.khoNhan, calHit.khoXuat, calHit.thoiGianPretty || calHit.thoiGian || calHit.createdAt);
-    } else {
-      apiGet('getOrderDetail', { soPhieu: sp }, { timeoutMs: 30000 }).then(function(det) {
-        if (det && det.success) {
-          setOrderMetaBadgeEl_('sh-order-meta-badge', det.soPhieu || sp, det.khoNhan, det.khoXuat, det.thoiGianPretty || det.thoiGian || det.thoiGianMs);
-        }
-      }).catch(function() {});
+      setOrderMetaBadgeEl_(
+        'sh-order-meta-badge',
+        sp,
+        calHit.khoNhan,
+        calHit.khoXuat,
+        calHit.thoiGianTao || calHit.thoiGianPretty || calHit.thoiGian || calHit.createdAt,
+        calHit.thoiGianCapNhat || calHit.updatedAt
+      );
     }
+    apiGet('getOrderDetail', { soPhieu: sp }, { timeoutMs: 30000 }).then(function(det) {
+      if (det && det.success) {
+        setOrderMetaBadgeEl_(
+          'sh-order-meta-badge',
+          det.soPhieu || sp,
+          det.khoNhan,
+          det.khoXuat,
+          pickOrderCreatedRaw_(det),
+          pickOrderUpdatedRaw_(det)
+        );
+      }
+    }).catch(function() {});
     (items || []).forEach(function(it, j) {
       var stockDisplay = (it.stock !== undefined && it.stock !== null && it.stock !== "") ? Number(it.stock) : "";
       // Ưu tiên SL đã soạn (slSoan / cột 16); không dùng lại SL đặt khi đã soạn trước đó

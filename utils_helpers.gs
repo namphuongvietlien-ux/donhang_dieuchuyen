@@ -1626,7 +1626,7 @@ function formatOrderCreatedAtLabel_(valueOrMs) {
 
 
 /**
- * Nhãn giờ tạo đơn cho header PDF / mẫu in.
+ * Nhãn giờ tạo đơn cho header PDF / mẫu in (giữ tương thích cũ).
  * Format: HH:mm - dd/MM/yyyy (vd: 10:15 - 05/08/2026).
  */
 function formatOrderCreatedAtPretty_(valueOrMs) {
@@ -1642,6 +1642,22 @@ function formatOrderCreatedAtPretty_(valueOrMs) {
 
 
 /**
+ * Nhãn UI thống nhất cho Ngày Tạo / Lần sửa cuối.
+ * Format: HH:mm dd/MM/yyyy (vd: 17:32 04/08/2026).
+ */
+function formatOrderTimestampUi_(valueOrMs) {
+  var ms = toHoChiMinhMillis_(valueOrMs);
+  if (isNaN(ms)) return "";
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+  try {
+    return Utilities.formatDate(new Date(ms), tz, "HH:mm dd/MM/yyyy");
+  } catch (e) {
+    return "";
+  }
+}
+
+
+/**
  * Từ các dòng lịch sử cùng số phiếu → mốc tạo đơn = thời gian sớm nhất (cột A).
  * Dùng chung cho bảng soạn hàng + click số phiếu / PDF — tránh lệch giờ dòng sửa sau.
  * @param {Array} rows mảng dòng sheet (mỗi row là array) hoặc {row: array}
@@ -1649,9 +1665,29 @@ function formatOrderCreatedAtPretty_(valueOrMs) {
  * @returns {{ms:number, label:string, soPhieu:string, khoXuat:string, khoNhan:string}|null}
  */
 function extractOrderCreatedAtFromHistoryRows_(rows, soPhieuHint) {
+  var stamps = extractOrderTimestampsFromHistoryRows_(rows, soPhieuHint);
+  if (!stamps) return null;
+  return {
+    ms: stamps.createdMs,
+    label: stamps.createdLabel,
+    soPhieu: stamps.soPhieu,
+    khoXuat: stamps.khoXuat,
+    khoNhan: stamps.khoNhan
+  };
+}
+
+
+/**
+ * Tách rõ 2 mốc từ lịch sử xuất kho (cột A):
+ * - createdMs = MIN (cố định lúc tạo đơn)
+ * - updatedMs = MAX (dòng thêm/sửa gần nhất trên sheet lịch sử)
+ * @returns {{createdMs:number, updatedMs:number, createdLabel:string, updatedLabel:string, createdUi:string, updatedUi:string, soPhieu:string, khoXuat:string, khoNhan:string}|null}
+ */
+function extractOrderTimestampsFromHistoryRows_(rows, soPhieuHint) {
   if (!rows || !rows.length) return null;
   var hintNorm = normalizeOrderCodeText(String(soPhieuHint || "").trim());
-  var bestMs = NaN;
+  var createdMs = NaN;
+  var updatedMs = NaN;
   var soPhieu = String(soPhieuHint || "").trim();
   var khoXuat = "";
   var khoNhan = "";
@@ -1664,23 +1700,84 @@ function extractOrderCreatedAtFromHistoryRows_(rows, soPhieuHint) {
     if (hintNorm && normalizeOrderCodeText(sp) !== hintNorm) continue;
     var ms = toHoChiMinhMillis_(row[0]);
     if (isNaN(ms)) continue;
-    if (isNaN(bestMs) || ms < bestMs) {
-      bestMs = ms;
+    if (isNaN(createdMs) || ms < createdMs) {
+      createdMs = ms;
       soPhieu = sp;
       if (row[2]) khoXuat = String(row[2]).trim();
       if (row[3]) khoNhan = String(row[3]).trim();
-    } else if (ms === bestMs) {
+    } else if (ms === createdMs) {
       if (!khoXuat && row[2]) khoXuat = String(row[2]).trim();
       if (!khoNhan && row[3]) khoNhan = String(row[3]).trim();
     }
+    if (isNaN(updatedMs) || ms > updatedMs) updatedMs = ms;
   }
-  if (isNaN(bestMs)) return null;
+  if (isNaN(createdMs)) return null;
+  if (isNaN(updatedMs)) updatedMs = createdMs;
   return {
-    ms: bestMs,
-    label: formatOrderCreatedAtLabel_(bestMs),
+    createdMs: createdMs,
+    updatedMs: updatedMs,
+    createdLabel: formatOrderCreatedAtLabel_(createdMs),
+    updatedLabel: formatOrderCreatedAtLabel_(updatedMs),
+    createdUi: formatOrderTimestampUi_(createdMs),
+    updatedUi: formatOrderTimestampUi_(updatedMs),
     soPhieu: soPhieu,
     khoXuat: khoXuat,
     khoNhan: khoNhan
+  };
+}
+
+
+/**
+ * Lần thay đổi cuối từ sheet audit (Soạn / Sửa / Hủy / Xác nhận…).
+ * Quét tối đa ~2500 dòng gần nhất để tránh full-scan.
+ */
+function getLatestOrderAuditMs_(ss, soPhieu) {
+  try {
+    if (!ss || !soPhieu) return NaN;
+    var sheet = ss.getSheetByName("Lịch Sử Thay Đổi Đơn");
+    if (!sheet) return NaN;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return NaN;
+    var maxScan = 2500;
+    var start = Math.max(2, lastRow - maxScan + 1);
+    var num = lastRow - start + 1;
+    var values = sheet.getRange(start, 1, num, 2).getValues();
+    var target = normalizeOrderCodeText(String(soPhieu).trim());
+    var best = NaN;
+    for (var i = 0; i < values.length; i++) {
+      var sp = values[i][1] != null ? String(values[i][1]).trim() : "";
+      if (!sp || normalizeOrderCodeText(sp) !== target) continue;
+      var ms = toHoChiMinhMillis_(values[i][0]);
+      if (isNaN(ms)) continue;
+      if (isNaN(best) || ms > best) best = ms;
+    }
+    return best;
+  } catch (e) {
+    return NaN;
+  }
+}
+
+
+/**
+ * Gộp created/updated từ lịch sử + audit thành object chuẩn cho API.
+ */
+function buildOrderTimeFields_(createdMs, updatedMs) {
+  var cMs = toHoChiMinhMillis_(createdMs);
+  var uMs = toHoChiMinhMillis_(updatedMs);
+  if (isNaN(uMs) && !isNaN(cMs)) uMs = cMs;
+  if (!isNaN(cMs) && !isNaN(uMs) && uMs < cMs) uMs = cMs;
+  return {
+    thoiGian: !isNaN(cMs) ? formatOrderCreatedAtLabel_(cMs) : "",
+    thoiGianPretty: !isNaN(cMs) ? formatOrderTimestampUi_(cMs) : "",
+    thoiGianMs: !isNaN(cMs) ? cMs : null,
+    thoiGianTao: !isNaN(cMs) ? formatOrderTimestampUi_(cMs) : "",
+    thoiGianTaoPretty: !isNaN(cMs) ? formatOrderTimestampUi_(cMs) : "",
+    thoiGianTaoMs: !isNaN(cMs) ? cMs : null,
+    createdAt: !isNaN(cMs) ? cMs : null,
+    thoiGianCapNhat: !isNaN(uMs) ? formatOrderTimestampUi_(uMs) : "",
+    thoiGianCapNhatPretty: !isNaN(uMs) ? formatOrderTimestampUi_(uMs) : "",
+    thoiGianCapNhatMs: !isNaN(uMs) ? uMs : null,
+    updatedAt: !isNaN(uMs) ? uMs : null
   };
 }
 
