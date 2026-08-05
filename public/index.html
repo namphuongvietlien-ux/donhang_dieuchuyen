@@ -78,10 +78,28 @@
     th { background: #f8fafc; font-weight: 700; color: #475569; }
     .row-error { background-color: #fef2f2; }
 
-    .btn-submit { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; border: none; padding: 12px 18px; font-size: 15px; font-weight: 700; border-radius: 999px; cursor: pointer; width: 100%; box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16); transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease; letter-spacing: 0.02em; }
-    .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(37, 99, 235, 0.2); filter: brightness(1.02); }
-    .btn-success { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); }
+    /* Bộ nút đồng bộ với trang xem PDF Đơn hàng */
+    .btn-submit, .btn-app, button.btn-submit {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      color: #fff; border: none; padding: 11px 18px; font-size: 14px; font-weight: 700;
+      border-radius: 12px; cursor: pointer; width: 100%;
+      box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+      letter-spacing: 0.01em; line-height: 1.2; text-decoration: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-submit:hover, .btn-app:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(37, 99, 235, 0.28); filter: brightness(1.03); }
+    .btn-submit:active, .btn-app:active { transform: translateY(0); filter: brightness(0.98); }
+    .btn-submit:disabled, .btn-app:disabled { opacity: 0.55; cursor: not-allowed; transform: none; box-shadow: none; }
+    .btn-success, .btn-submit.btn-success { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); box-shadow: 0 8px 18px rgba(22, 163, 74, 0.22); }
+    .btn-warn, .btn-submit.btn-warn { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #111827; box-shadow: 0 8px 18px rgba(245, 158, 11, 0.22); }
+    .btn-danger, .btn-submit.btn-danger { background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); box-shadow: 0 8px 18px rgba(239, 68, 68, 0.22); }
+    .btn-muted, .btn-submit.btn-muted { background: linear-gradient(135deg, #64748b 0%, #475569 100%); box-shadow: 0 8px 18px rgba(100, 116, 139, 0.18); }
+    .btn-teal, .btn-submit.btn-teal { background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%); box-shadow: 0 8px 18px rgba(13, 148, 136, 0.22); }
+    .btn-compact, .btn-submit.btn-compact { width: auto; padding: 8px 14px; font-size: 13px; border-radius: 10px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.16); }
     .btn-action-group { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+    .btn-action-group .btn-submit, .btn-action-group .btn-app { width: auto; min-width: 140px; flex: 1; }
 
     #loading-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(248, 250, 252, 0.94); z-index: 9999; display: flex; justify-content: center; align-items: center; font-size: 18px; font-weight: bold; color: var(--primary); flex-direction: column; }
     #login-screen { position: fixed; top:0; left:0; right:0; bottom:0; background: radial-gradient(circle at top left, #ffffff 0%, #eff6ff 45%, #eef2ff 100%); z-index: 5000; display: flex; justify-content: center; align-items: center; padding: 20px; box-sizing:border-box; }
@@ -230,7 +248,7 @@
       <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
         <button class="btn-submit" onclick="actionPrintNew()">🖨️ IN ĐƠN (WEB)</button>
         <button class="btn-submit btn-success" onclick="actionExportNew()">📥 XUẤT RA FILE EXCEL</button>
-        <button class="btn-submit" style="background:#5f6368;" onclick="actionCloseModal()">➕ Đóng & Tạo đơn khác</button>
+        <button class="btn-submit btn-muted" onclick="actionCloseModal()">➕ Đóng & Tạo đơn khác</button>
       </div>
     </div>
   </div>
@@ -243,7 +261,7 @@
       <div id="variant-picker-list" style="max-height:52vh; overflow:auto; border:1px solid #e2e8f0; border-radius:12px;"></div>
       <div style="display:flex; gap:10px; margin-top:16px; flex-wrap:wrap;">
         <button type="button" class="btn-submit btn-success" style="flex:1; min-width:180px;" onclick="confirmVariantPicker_()">✅ Xác nhận chọn</button>
-        <button type="button" class="btn-submit" style="flex:1; min-width:140px; background:#64748b;" onclick="closeVariantPicker_()">Đóng</button>
+        <button type="button" class="btn-submit btn-muted" style="flex:1; min-width:140px;" onclick="closeVariantPicker_()">Đóng</button>
       </div>
     </div>
   </div>
@@ -266,7 +284,7 @@
       <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
         <button type="button" class="btn-submit" style="width:auto; padding:10px 14px;" onclick="vm_addEmptyRow_()">＋ Thêm mã con</button>
         <button type="button" class="btn-submit btn-success" style="flex:1; min-width:160px;" onclick="vm_save_()">💾 Lưu biến thể</button>
-        <button type="button" class="btn-submit" style="flex:1; min-width:120px; background:#64748b;" onclick="vm_close_()">Đóng</button>
+        <button type="button" class="btn-submit btn-muted" style="flex:1; min-width:120px;" onclick="vm_close_()">Đóng</button>
       </div>
     </div>
   </div>
@@ -276,7 +294,7 @@
     <div class="modal-box" style="max-width:520px; width:100%; text-align:left;">
       <h3 style="margin:0 0 8px; color:#b91c1c;">🔒 Sản phẩm đã khóa đặt hàng</h3>
       <p id="product-locked-msg" style="margin:0 0 16px; color:#334155; font-size:14px; line-height:1.55;"></p>
-      <button type="button" class="btn-submit" style="width:100%; background:#b91c1c;" onclick="closeProductLockedModal_()">Đã hiểu — chọn mã khác</button>
+      <button type="button" class="btn-submit btn-danger" style="width:100%;" onclick="closeProductLockedModal_()">Đã hiểu — chọn mã khác</button>
     </div>
   </div>
 
@@ -288,7 +306,7 @@
       <div id="branch-merge-list" style="max-height:240px; overflow:auto; border:1px solid #fed7aa; border-radius:10px; background:#fff7ed; padding:10px; font-size:13px;"></div>
       <div style="display:flex; gap:10px; margin-top:16px; flex-wrap:wrap;">
         <button type="button" class="btn-submit btn-success" style="flex:1; min-width:180px;" onclick="sh_confirmBranchMerge_()">✅ Xác nhận gộp</button>
-        <button type="button" class="btn-submit" style="flex:1; min-width:140px; background:#64748b;" onclick="sh_skipBranchMerge_()">Giữ riêng từng đơn</button>
+        <button type="button" class="btn-submit btn-muted" style="flex:1; min-width:140px;" onclick="sh_skipBranchMerge_()">Giữ riêng từng đơn</button>
       </div>
     </div>
   </div>
@@ -439,7 +457,7 @@
           </div>
           <div class="form-group" style="max-width:180px;">
             <label>Danh mục</label>
-            <button class="btn-submit" type="button" onclick="reloadCatalogNow_()" style="padding:10px 12px; width:100%; border-radius:12px; background:#0f766e; box-shadow:none;">↻ Tải lại danh mục</button>
+            <button class="btn-submit btn-teal" type="button" onclick="reloadCatalogNow_()" style="padding:10px 12px; width:100%;">↻ Tải lại danh mục</button>
           </div>
         </div>
         
@@ -564,10 +582,10 @@
         </div>
         <br>
         <div class="btn-action-group">
-          <button class="btn-submit" id="ql-btn-save" onclick="ql_luuSua()" style="background:#f29900; color:black;">💾 LƯU SỬA ĐỔI</button>
+          <button class="btn-submit btn-warn" id="ql-btn-save" onclick="ql_luuSua()">💾 LƯU SỬA ĐỔI</button>
           <button class="btn-submit" id="ql-btn-print" onclick="ql_inWeb_FromEdit()">🖨️ XUẤT IN</button>
           <button class="btn-submit btn-success" id="ql-btn-excel" onclick="ql_xuatExcel_FromEdit()">📥 EXCEL</button>
-          <button class="btn-submit" id="ql-btn-cancel-order" onclick="ql_huyPhieu()" style="display:none; background:#d93025;">HỦY TOÀN BỘ ĐƠN</button>
+          <button class="btn-submit btn-danger" id="ql-btn-cancel-order" onclick="ql_huyPhieu()" style="display:none;">HỦY TOÀN BỘ ĐƠN</button>
         </div>
       </div>
     </div>
@@ -636,9 +654,9 @@
               <div id="sh-order-picker-summary" style="font-size:12px; color:#64748b; margin-top:2px;"></div>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
-              <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; border-radius:10px; box-shadow:none;" onclick="sh_chonTatCaDonSoan(true)">Chọn tất cả</button>
-              <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; border-radius:10px; box-shadow:none; background:#64748b;" onclick="sh_chonTatCaDonSoan(false)">Bỏ chọn</button>
-              <button type="button" class="btn-submit btn-success" style="width:auto; padding:8px 14px; border-radius:10px; box-shadow:none;" onclick="sh_taoBangSoanTuDonDaChon()">Xuất bảng theo đơn đã chọn</button>
+              <button type="button" class="btn-submit btn-compact" onclick="sh_chonTatCaDonSoan(true)">Chọn tất cả</button>
+              <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_chonTatCaDonSoan(false)">Bỏ chọn</button>
+              <button type="button" class="btn-submit btn-success btn-compact" onclick="sh_taoBangSoanTuDonDaChon()">Xuất bảng theo đơn đã chọn</button>
             </div>
           </div>
           <div style="margin:0 0 10px; padding:10px 12px; border:1px dashed #93c5fd; border-radius:10px; background:#eff6ff;">
@@ -673,7 +691,7 @@
                   <th>Kho xuất</th>
                   <th>Kho nhận</th>
                   <th style="width:150px;">Trạng thái</th>
-                  <th style="width:120px;">Giờ đặt</th>
+                  <th style="width:140px;">Thời gian tạo</th>
                   <th style="width:88px; text-align:center;">In đơn</th>
                 </tr>
               </thead>
@@ -754,8 +772,8 @@
             </div>
           </div>
           <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
-            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#2563eb;" onclick="adm_setVisibleNewProductFlags(true)">☑ CheckAll (đang hiện)</button>
-            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#64748b;" onclick="adm_setVisibleNewProductFlags(false)">☐ UncheckAll (đang hiện)</button>
+            <button type="button" class="btn-submit btn-compact" onclick="adm_setVisibleNewProductFlags(true)">☑ CheckAll (đang hiện)</button>
+            <button type="button" class="btn-submit btn-muted btn-compact" onclick="adm_setVisibleNewProductFlags(false)">☐ UncheckAll (đang hiện)</button>
             <div id="adm-new-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách.</div>
           </div>
           <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
@@ -796,8 +814,8 @@
             </div>
           </div>
           <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
-            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#b91c1c;" onclick="adm_setVisibleProductLocks_(true)">☑ Khóa all (đang hiện)</button>
-            <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; box-shadow:none; background:#64748b;" onclick="adm_setVisibleProductLocks_(false)">☐ Mở all (đang hiện)</button>
+            <button type="button" class="btn-submit btn-danger btn-compact" onclick="adm_setVisibleProductLocks_(true)">☑ Khóa all (đang hiện)</button>
+            <button type="button" class="btn-submit btn-muted btn-compact" onclick="adm_setVisibleProductLocks_(false)">☐ Mở all (đang hiện)</button>
             <div id="adm-lock-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách.</div>
           </div>
           <div style="overflow-x:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:10px;">
@@ -865,13 +883,13 @@
             <p style="font-size:12px; color:#64748b; margin:0 0 8px;">
               Nếu sheet còn 2 dòng Key trùng (<code>AKV001</code> và <code>AKV001|cai</code>), bấm dọn một lần:
             </p>
-            <button type="button" class="btn-submit" style="background:#0f766e;" onclick="adm_removeDuplicateStockRows()">🧹 DỌN KEY TRÙNG TỒN (TON_VARIANT / TON_Q7)</button>
+            <button type="button" class="btn-submit btn-teal" onclick="adm_removeDuplicateStockRows()">🧹 DỌN KEY TRÙNG TỒN (TON_VARIANT / TON_Q7)</button>
           </div>
         </div>
         <div class="card" style="border-left: 4px solid #0f766e;">
           <h3 style="margin-top:0;">Tải lại danh mục</h3>
           <p style="font-size:13px; color:#64748b; margin-top:-4px;">Làm mới Data_Excel + mã con từ TON_VARIANT (kèm IsLocked) trên trình duyệt.</p>
-          <button type="button" class="btn-submit" style="background:#0f766e;" onclick="reloadCatalogNow_()">↻ Tải lại danh mục ngay</button>
+          <button type="button" class="btn-submit btn-teal" onclick="reloadCatalogNow_()">↻ Tải lại danh mục ngay</button>
         </div>
       </div>
 
@@ -928,6 +946,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260805v72-select-by-masp"></script>
+  <script src="app.js?v=20260805v74-pdf-btn-sync"></script>
 </body>
 </html>

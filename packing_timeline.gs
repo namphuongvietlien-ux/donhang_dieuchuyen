@@ -273,7 +273,6 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
   }
 
   var orders = [];
-  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
   var storesWithMain = {};
   for (var key in map) {
     var item = map[key];
@@ -293,7 +292,9 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
       khoXuat: item.khoXuat,
       khoNhan: item.khoNhan,
       createdAt: item.createdAtMs,
-      thoiGianDat: Utilities.formatDate(new Date(item.createdAtMs), tz, "dd/MM/yyyy HH:mm"),
+      // Cùng hàm format với getThongTinPhieu / PDF — luôn là thời gian tạo đơn (mốc sớm nhất)
+      thoiGianDat: formatOrderCreatedAtLabel_(item.createdAtMs),
+      thoiGian: formatOrderCreatedAtLabel_(item.createdAtMs),
       thoiGianDatMillis: item.createdAtMs,
       packingBucket: bucket,
       packingBucketLabel: bucketLabel,

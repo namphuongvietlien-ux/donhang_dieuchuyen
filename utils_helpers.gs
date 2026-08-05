@@ -744,11 +744,13 @@ function getDashboardTimelineBounds_(timeline, fromDate, toDate) {
 
 function formatDateTime(value) {
   if (!value) return "";
+  // Thống nhất với bảng soạn / PDF: dd/MM/yyyy HH:mm (không dùng toLocaleString lệch TZ)
+  var label = formatOrderCreatedAtLabel_(value);
+  if (label) return label;
   try {
-    var d = value instanceof Date ? value : new Date(value);
-    return d.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    return String(value);
   } catch (e) {
-    return value;
+    return "";
   }
 }
 
@@ -1117,6 +1119,82 @@ function toHoChiMinhMillis_(value) {
 
 function toMillisSafe_(value) {
   return toHoChiMinhMillis_(value);
+}
+
+
+/**
+ * Nhãn thời gian tạo đơn thống nhất trên UI / bảng soạn.
+ * Format: dd/MM/yyyy HH:mm (Asia/Ho_Chi_Minh).
+ */
+function formatOrderCreatedAtLabel_(valueOrMs) {
+  var ms = toHoChiMinhMillis_(valueOrMs);
+  if (isNaN(ms)) return "";
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+  try {
+    return Utilities.formatDate(new Date(ms), tz, "dd/MM/yyyy HH:mm");
+  } catch (e) {
+    return "";
+  }
+}
+
+
+/**
+ * Nhãn giờ tạo đơn cho header PDF / mẫu in.
+ * Format: HH:mm - dd/MM/yyyy (vd: 10:15 - 05/08/2026).
+ */
+function formatOrderCreatedAtPretty_(valueOrMs) {
+  var ms = toHoChiMinhMillis_(valueOrMs);
+  if (isNaN(ms)) return "";
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+  try {
+    return Utilities.formatDate(new Date(ms), tz, "HH:mm - dd/MM/yyyy");
+  } catch (e) {
+    return "";
+  }
+}
+
+
+/**
+ * Từ các dòng lịch sử cùng số phiếu → mốc tạo đơn = thời gian sớm nhất (cột A).
+ * Dùng chung cho bảng soạn hàng + click số phiếu / PDF — tránh lệch giờ dòng sửa sau.
+ * @param {Array} rows mảng dòng sheet (mỗi row là array) hoặc {row: array}
+ * @param {string=} soPhieuHint
+ * @returns {{ms:number, label:string, soPhieu:string, khoXuat:string, khoNhan:string}|null}
+ */
+function extractOrderCreatedAtFromHistoryRows_(rows, soPhieuHint) {
+  if (!rows || !rows.length) return null;
+  var hintNorm = normalizeOrderCodeText(String(soPhieuHint || "").trim());
+  var bestMs = NaN;
+  var soPhieu = String(soPhieuHint || "").trim();
+  var khoXuat = "";
+  var khoNhan = "";
+  for (var i = 0; i < rows.length; i++) {
+    var raw = rows[i];
+    var row = raw && raw.row ? raw.row : raw;
+    if (!row) continue;
+    var sp = row[1] != null ? String(row[1]).trim() : "";
+    if (!sp) continue;
+    if (hintNorm && normalizeOrderCodeText(sp) !== hintNorm) continue;
+    var ms = toHoChiMinhMillis_(row[0]);
+    if (isNaN(ms)) continue;
+    if (isNaN(bestMs) || ms < bestMs) {
+      bestMs = ms;
+      soPhieu = sp;
+      if (row[2]) khoXuat = String(row[2]).trim();
+      if (row[3]) khoNhan = String(row[3]).trim();
+    } else if (ms === bestMs) {
+      if (!khoXuat && row[2]) khoXuat = String(row[2]).trim();
+      if (!khoNhan && row[3]) khoNhan = String(row[3]).trim();
+    }
+  }
+  if (isNaN(bestMs)) return null;
+  return {
+    ms: bestMs,
+    label: formatOrderCreatedAtLabel_(bestMs),
+    soPhieu: soPhieu,
+    khoXuat: khoXuat,
+    khoNhan: khoNhan
+  };
 }
 
 

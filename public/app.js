@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-05-v72-select-by-masp';
+var APP_BUILD = '2026-08-05-v74-pdf-btn-sync';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -1923,13 +1923,70 @@ function actionExportNew() {
 }
 function actionCloseModal() { document.getElementById("modal-action").style.display = "none"; arrItems = []; renderTable(); }
 
+/** CSS nút + sheet dùng chung cho cửa sổ PDF / in web */
+function getPdfWindowSharedCss_() {
+  return '' +
+    'body{font-family:"Segoe UI",Arial,sans-serif;margin:0;padding:24px;color:#0f172a;background:#f8fafc;}' +
+    '.sheet{max-width:920px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px 32px;box-shadow:0 8px 24px rgba(15,23,42,.06);}' +
+    '.toolbar{display:flex;gap:10px;justify-content:flex-end;margin-bottom:16px;flex-wrap:wrap;}' +
+    '.btn-submit,.btn-app,button.btn-submit{' +
+      'display:inline-flex;align-items:center;justify-content:center;gap:6px;' +
+      'background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);color:#fff;border:none;' +
+      'padding:11px 18px;font-size:14px;font-weight:700;border-radius:12px;cursor:pointer;' +
+      'box-shadow:0 8px 18px rgba(37,99,235,.22);letter-spacing:.01em;line-height:1.2;' +
+    '}' +
+    '.btn-submit:hover{filter:brightness(1.03);transform:translateY(-1px);}' +
+    '.btn-success{background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);box-shadow:0 8px 18px rgba(22,163,74,.22);}' +
+    '.btn-muted{background:linear-gradient(135deg,#64748b 0%,#475569 100%);}' +
+    '.order-code{margin:0 0 6px;font-size:22px;font-weight:800;color:#0f172a;letter-spacing:.01em;}' +
+    '.created-time{margin:0 0 14px;font-size:15px;font-weight:700;color:#1d4ed8;}' +
+    '.meta{line-height:1.7;margin:0 0 18px;color:#334155;}' +
+    'table{width:100%;border-collapse:collapse;} th,td{border:1px solid #cbd5e1;padding:8px 10px;font-size:13px;vertical-align:top;}' +
+    'th{background:#f1f5f9;text-align:left;} .code,.code-cell{font-weight:700;font-size:15px;} .qty,.qty-cell{font-weight:800;text-align:center;font-size:15px;}' +
+    '.note,.note-cell{width:72px;} .variant-line{margin-top:4px;font-size:11px;color:#475569;}' +
+    '.signs{display:flex;justify-content:space-between;margin-top:48px;text-align:center;}' +
+    '@media print{.toolbar{display:none!important;} body{background:#fff;padding:0;} .sheet{box-shadow:none;border:none;border-radius:0;max-width:none;padding:0;} @page{margin:10mm;size:auto;}}' +
+    '@media (max-width:600px){body{padding:12px;} .sheet{padding:16px;} .btn-submit{width:100%;}}';
+}
+
+/** Giờ tạo đơn dạng 10:15 - 05/08/2026 (không dùng giờ in) */
+function formatOrderCreatedAtPrettyClient_(value) {
+  if (value == null || value === '') return '';
+  var d = null;
+  if (value instanceof Date) d = value;
+  else if (typeof value === 'number' && isFinite(value)) d = new Date(value);
+  else {
+    var s = String(value).trim();
+    var mVn = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (mVn) {
+      d = new Date(Number(mVn[3]), Number(mVn[2]) - 1, Number(mVn[1]), Number(mVn[4] || 0), Number(mVn[5] || 0), Number(mVn[6] || 0));
+    } else {
+      var mPretty = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (mPretty) return pad2_(Number(mPretty[1])) + ':' + pad2_(Number(mPretty[2])) + ' - ' +
+        pad2_(Number(mPretty[3])) + '/' + pad2_(Number(mPretty[4])) + '/' + mPretty[5];
+      d = new Date(s);
+    }
+  }
+  if (!d || isNaN(d.getTime())) return String(value);
+  return pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()) + ' - ' +
+    pad2_(d.getDate()) + '/' + pad2_(d.getMonth() + 1) + '/' + d.getFullYear();
+}
+
+function buildOrderPdfHeaderHtml_(soPhieu, thoiGianRaw, khoXuat, khoNhan) {
+  var so = escapeHtml(soPhieu || '');
+  var tg = escapeHtml(formatOrderCreatedAtPrettyClient_(thoiGianRaw) || thoiGianRaw || '—');
+  var kx = escapeHtml(formatStorePrintLabel_(khoXuat) || khoXuat || '-');
+  var kn = escapeHtml(formatStorePrintLabel_(khoNhan) || khoNhan || '-');
+  return '' +
+    '<div class="order-code">Đơn hàng: ' + so + '</div>' +
+    '<div class="created-time">Giờ tạo đơn: ' + tg + '</div>' +
+    '<div class="meta"><b>Kho xuất:</b> ' + kx + '<br><b>Kho nhận / Chi nhánh:</b> ' + kn + '</div>';
+}
+
 // ================= IN WEB (IFRAME ẨN) & XUẤT EXCEL =================
 function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
-  var styleStr = 'body{font-family: Arial, sans-serif; padding:20px; font-size:12px;} table{width:100%; border-collapse:collapse; margin-top:12px;} th,td{border:1px solid #000; padding:7px; text-align:left; vertical-align:top;} th{background:#f0f0f0;} .title{font-size:16px; font-weight:bold; margin-bottom:8px;} .meta{margin-bottom:8px;} .code-cell{font-size:16px; font-weight:700;} .qty-cell{font-size:16px; font-weight:700; text-align:center;} .note-cell{width:72px;} .variant-line{font-size:11px;color:#475569;margin-top:3px;} @media print { @page { margin: 10mm; } }';
-
-  var htmlStr = '<div class="title">Số: ' + escapeHtml(soPhieu) + '</div><div class="meta"><b>Kho xuất:</b> ' +
-    escapeHtml(formatStorePrintLabel_(khoXuat)) + '<br><b>Kho nhận / Chi nhánh:</b> ' +
-    escapeHtml(formatStorePrintLabel_(khoNhan)) + '</div>';
+  var headerHtml = buildOrderPdfHeaderHtml_(soPhieu, (itemsArray && itemsArray._thoiGian) || '', khoXuat, khoNhan);
+  var htmlStr = '<div class="sheet">' + headerHtml;
   htmlStr += '<table><thead><tr><th>STT</th><th>Mã Parent (kệ)</th><th>Tên hàng / Phân loại</th><th>ĐVT</th><th>Số lượng (Soạn)</th><th class="note-cell"></th></tr></thead><tbody>';
   var stt = 1;
   (itemsArray || []).forEach(function(it) {
@@ -1948,16 +2005,17 @@ function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
         '</td><td class="qty-cell">' + it.sl + '</td><td class="note-cell"></td></tr>';
     }
   });
-  htmlStr += '</tbody></table><div style="display:flex; justify-content:space-between; margin-top:40px; text-align:center;"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div>';
+  htmlStr += '</tbody></table><div class="signs"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div></div>';
 
   var iframe = document.createElement('iframe');
   iframe.style.display = 'none';
   document.body.appendChild(iframe);
 
   var iframeDoc = iframe.contentWindow.document;
-  iframeDoc.title = '';
-  var styleEl = iframeDoc.createElement('style'); styleEl.innerHTML = styleStr; iframeDoc.head.appendChild(styleEl);
-  iframeDoc.body.innerHTML = htmlStr;
+  iframeDoc.open();
+  iframeDoc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Đơn hàng ' + escapeHtml(soPhieu || '') + '</title><style>' +
+    getPdfWindowSharedCss_() + '</style></head><body>' + htmlStr + '</body></html>');
+  iframeDoc.close();
 
   setTimeout(function() {
     iframe.contentWindow.focus(); iframe.contentWindow.print();
@@ -2021,10 +2079,10 @@ function openOrderPdfWindow_(detail) {
 }
 
 function buildOrderPdfHtml_(detail) {
-  var so = escapeHtml(detail.soPhieu || '');
-  var kx = escapeHtml(formatStorePrintLabel_(detail.khoXuat) || detail.khoXuat || '-');
-  var kn = escapeHtml(formatStorePrintLabel_(detail.khoNhan) || detail.khoNhan || '-');
-  var tg = escapeHtml(detail.thoiGian || '-');
+  var soRaw = String((detail && detail.soPhieu) || '').trim();
+  var so = escapeHtml(soRaw);
+  var tgRaw = (detail && (detail.thoiGianPretty || detail.thoiGian || detail.thoiGianMs)) || '';
+  var headerHtml = buildOrderPdfHeaderHtml_(soRaw, tgRaw, detail && detail.khoXuat, detail && detail.khoNhan);
   var rowsHtml = '';
   var stt = 1;
   (detail.items || []).forEach(function(it) {
@@ -2046,21 +2104,10 @@ function buildOrderPdfHtml_(detail) {
       '</td><td class="qty">' + sl + '</td><td class="note"></td></tr>';
   });
   if (!rowsHtml) rowsHtml = '<tr><td colspan="6" style="text-align:center;color:#64748b;">Không có dòng hàng hợp lệ.</td></tr>';
-  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Phiếu ' + so + '</title>' +
-    '<style>' +
-    'body{font-family:"Segoe UI",Arial,sans-serif;margin:0;padding:24px;color:#0f172a;background:#f8fafc;}' +
-    '.sheet{max-width:920px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px 32px;box-shadow:0 8px 24px rgba(15,23,42,.06);}' +
-    '.toolbar{display:flex;gap:10px;justify-content:flex-end;margin-bottom:16px;}' +
-    '.toolbar button{border:none;background:#1a73e8;color:#fff;font-weight:700;padding:10px 16px;border-radius:8px;cursor:pointer;}' +
-    'h1{margin:0 0 6px;font-size:22px;} .meta{line-height:1.6;margin:12px 0 18px;color:#334155;}' +
-    'table{width:100%;border-collapse:collapse;} th,td{border:1px solid #cbd5e1;padding:8px 10px;font-size:13px;vertical-align:top;}' +
-    'th{background:#f1f5f9;text-align:left;} .code{font-weight:700;font-size:15px;} .qty{font-weight:800;text-align:center;font-size:15px;}' +
-    '.note{width:72px;} .variant-line{margin-top:4px;font-size:11px;color:#475569;} .signs{display:flex;justify-content:space-between;margin-top:48px;text-align:center;}' +
-    '@media print{.toolbar{display:none!important;} body{background:#fff;padding:0;} .sheet{box-shadow:none;border:none;border-radius:0;max-width:none;padding:0;} @page{margin:10mm;}}' +
-    '</style></head><body><div class="toolbar"><button type="button" onclick="window.print()">🖨️ In PDF</button></div>' +
-    '<div class="sheet"><h1>PHIẾU XUẤT / SOẠN HÀNG</h1>' +
-    '<div class="meta"><b>Mã phiếu:</b> ' + so + '<br><b>Kho xuất:</b> ' + kx + '<br><b>Kho nhận / Chi nhánh:</b> ' + kn +
-    '<br><b>Thời gian:</b> ' + tg + '</div>' +
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Đơn hàng ' + so + '</title>' +
+    '<style>' + getPdfWindowSharedCss_() + '</style></head><body>' +
+    '<div class="toolbar"><button type="button" class="btn-submit" onclick="window.print()">🖨️ In PDF</button></div>' +
+    '<div class="sheet">' + headerHtml +
     '<table><thead><tr><th>STT</th><th>Mã Parent (kệ)</th><th>Tên hàng / Phân loại</th><th>ĐVT</th><th>SL</th><th class="note"></th></tr></thead><tbody>' +
     rowsHtml + '</tbody></table>' +
     '<div class="signs"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div>' +
@@ -3249,9 +3296,9 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
       '<td>' + formatPackingStoreCellHtml_(order.khoXuat) + '</td>' +
       '<td>' + formatPackingStoreCellHtml_(order.khoNhan) + '</td>' +
       '<td>' + sh_statusBadgeHtml_(order) + '</td>' +
-      '<td>' + escapeHtml(order.thoiGianDat || '-') + '</td>' +
+      '<td>' + escapeHtml(order.thoiGianDat || order.thoiGian || '-') + '</td>' +
       '<td style="text-align:center;">' +
-        '<button type="button" class="btn-submit" style="width:auto; padding:6px 10px; border-radius:8px; box-shadow:none; background:#0f766e; font-size:12px;" onclick="sh_inDonTuBangSoan(\'' + soPhieuSafe + '\')">🖨️ In</button>' +
+        '<button type="button" class="btn-submit btn-teal btn-compact" onclick="sh_inDonTuBangSoan(\'' + soPhieuSafe + '\')">🖨️ In</button>' +
       '</td>' +
       '</tr>';
   });
@@ -5386,25 +5433,17 @@ function buildInvoicePdfHtml_(detail) {
   var tongAll = formatMoneyVn_(detail.tongTien);
 
   return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hóa đơn ' + so + '</title>' +
-    "<style>" +
-    'body{font-family:"Segoe UI",Arial,sans-serif;margin:0;padding:24px;color:#0f172a;background:#f8fafc;}' +
-    ".sheet{max-width:960px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px 32px;box-shadow:0 8px 24px rgba(15,23,42,.06);}" +
-    ".toolbar{display:flex;gap:10px;justify-content:flex-end;margin-bottom:16px;}" +
-    ".toolbar button{border:none;background:#1a73e8;color:#fff;font-weight:700;padding:10px 16px;border-radius:8px;cursor:pointer;}" +
-    "h1{margin:0 0 6px;font-size:22px;} h2{margin:22px 0 8px;font-size:15px;color:#1e40af;}" +
-    ".meta{line-height:1.7;margin:12px 0 8px;color:#334155;}" +
-    "table{width:100%;border-collapse:collapse;margin-top:8px;} th,td{border:1px solid #cbd5e1;padding:8px 10px;font-size:13px;vertical-align:top;}" +
-    "th{background:#f1f5f9;text-align:left;} .code{font-weight:700;} .qty{text-align:center;font-weight:700;} .money{text-align:right;font-weight:600;}" +
+    "<style>" + getPdfWindowSharedCss_() +
+    "h2{margin:22px 0 8px;font-size:15px;color:#1e40af;}" +
+    ".money{text-align:right;font-weight:600;}" +
     ".totals{margin-top:18px;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;line-height:1.8;}" +
     ".totals .grand{font-size:16px;font-weight:800;color:#0f172a;}" +
-    "@media print{.toolbar{display:none!important;} body{background:#fff;padding:0;} .sheet{box-shadow:none;border:none;border-radius:0;max-width:none;padding:0;} @page{margin:10mm;}}" +
     "</style></head><body>" +
-    '<div class="toolbar"><button type="button" onclick="window.print()">🖨️ In Hóa Đơn</button></div>' +
-    '<div class="sheet"><h1>HÓA ĐƠN BÁN HÀNG KÈM DỊCH VỤ</h1>' +
-    '<div class="meta"><b>Số hóa đơn / Mã chứng từ:</b> ' + so +
-    "<br><b>Mã phiếu XB:</b> " + mp +
+    '<div class="toolbar"><button type="button" class="btn-submit" onclick="window.print()">🖨️ In Hóa Đơn</button></div>' +
+    '<div class="sheet"><div class="order-code">Hóa đơn: ' + so + '</div>' +
+    '<div class="created-time">Ngày chứng từ: ' + tg + '</div>' +
+    '<div class="meta"><b>Mã phiếu XB:</b> ' + mp +
     "<br><b>Chi nhánh:</b> " + cn +
-    "<br><b>Ngày chứng từ:</b> " + tg +
     "<br><b>Người tạo:</b> " + actor + "</div>" +
     "<h2>1. Hàng hóa vật lý</h2>" +
     "<table><thead><tr><th>STT</th><th>SKU</th><th>Tên SP</th><th>ĐVT</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>" +
