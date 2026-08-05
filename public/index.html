@@ -925,6 +925,10 @@
               Nếu sheet còn 2 dòng Key trùng (<code>AKV001</code> và <code>AKV001|cai</code>), bấm dọn một lần:
             </p>
             <button type="button" class="btn-submit btn-teal" onclick="adm_removeDuplicateStockRows()">🧹 DỌN KEY TRÙNG TỒN (TON_VARIANT / TON_Q7)</button>
+            <p style="font-size:12px; color:#64748b; margin:12px 0 8px;">
+              Nếu cột ĐVT trên sheet đang chứa số lượng / ngày / mã SP (do import lệch cột trước đây), bấm dọn rồi Import lại file MISA:
+            </p>
+            <button type="button" class="btn-submit btn-warn" onclick="adm_fixWrongDVTOnSheet_()">🧹 DỌN ĐVT SAI TRÊN SHEET (Data_Excel / TON_VARIANT)</button>
           </div>
         </div>
         <div class="card" style="border-left: 4px solid #0f766e;">
@@ -987,6 +991,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260805v76-multisearch-barcode"></script>
+  <script src="app.js?v=20260805v77-import-dvt-header-map"></script>
 </body>
 </html>

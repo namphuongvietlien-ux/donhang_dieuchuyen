@@ -594,13 +594,15 @@ function normalizeHeaderText(value) {
 }
 
 
-function findColumnIndexByAliases(row, aliases) {
+function findColumnIndexByAliases(row, aliases, excludeIndexes) {
   if (!row) return -1;
   var i;
   var c;
   var normalized;
+  var skip = excludeIndexes || {};
   // Pass 1: khớp exact header — tránh "barcode".indexOf("code") / "unitname".indexOf("name")
   for (c = 0; c < row.length; c++) {
+    if (skip[c]) continue;
     normalized = normalizeHeaderText(row[c]);
     if (!normalized) continue;
     for (i = 0; i < aliases.length; i++) {
@@ -609,6 +611,7 @@ function findColumnIndexByAliases(row, aliases) {
   }
   // Pass 2: contains, bỏ alias ngắn dễ đụng (code/name/sku đơn lẻ đã thử exact ở trên)
   for (c = 0; c < row.length; c++) {
+    if (skip[c]) continue;
     normalized = normalizeHeaderText(row[c]);
     if (!normalized) continue;
     for (i = 0; i < aliases.length; i++) {
@@ -618,6 +621,248 @@ function findColumnIndexByAliases(row, aliases) {
     }
   }
   return -1;
+}
+
+
+/** Header ĐVT 2 / quy đổi — không được dùng làm ĐVT chính khi import */
+function isImportDvt2HeaderNorm_(norm) {
+  if (!norm) return false;
+  if (norm.indexOf("quydoi") !== -1) return true;
+  if (norm.indexOf("dvt2") !== -1 || norm.indexOf("donvi2") !== -1) return true;
+  if (norm.indexOf("dvtphu") !== -1 || norm.indexOf("donviphu") !== -1) return true;
+  if (norm.indexOf("unit2") !== -1 || norm.indexOf("altunit") !== -1) return true;
+  if (norm.indexOf("heso") !== -1 && norm.indexOf("dvt") !== -1) return true;
+  return false;
+}
+
+
+/** Header ĐVT chính (ĐVT 1) */
+function isImportDvt1HeaderNorm_(norm) {
+  if (!norm || isImportDvt2HeaderNorm_(norm)) return false;
+  if (norm === "dvt" || norm === "donvi" || norm === "donvitinh" || norm === "dvtinh") return true;
+  if (norm === "tendvt" || norm === "dvtchinh" || norm === "donvichinh" || norm === "basicunit") return true;
+  if (norm === "unit" || norm === "uom" || norm === "unitname") return true;
+  if (norm.indexOf("donvitinh") !== -1) return true;
+  if (norm.indexOf("dvtchinh") !== -1 || norm.indexOf("tendvt") !== -1) return true;
+  if (norm.indexOf("basicunit") !== -1) return true;
+  // "dvt..." nhưng không phải dvt2/quydoi
+  if (norm.indexOf("dvt") === 0 && norm.length <= 12) return true;
+  return false;
+}
+
+
+/**
+ * Map cột upload linh hoạt theo tiêu đề (KHÔNG hardcode index).
+ * @returns {{maHang:number,tenHang:number,dvt:number,dvt2:number,maVach:number,parentSku:number,labels:Object}}
+ */
+function mapImportHeaderColumns_(headerRow) {
+  var out = {
+    maHang: -1,
+    tenHang: -1,
+    dvt: -1,
+    dvt2: -1,
+    maVach: -1,
+    parentSku: -1,
+    labels: {}
+  };
+  if (!headerRow || !headerRow.length) return out;
+
+  var c;
+  var norm;
+  // Parent trước — để loại khỏi MaSP
+  for (c = 0; c < headerRow.length; c++) {
+    norm = normalizeHeaderText(headerRow[c]);
+    if (!norm) continue;
+    if (norm === "parentsku" || norm === "parent" || norm === "manhomban" || norm === "nhomban") {
+      out.parentSku = c; break;
+    }
+    if ((norm.indexOf("mahang") !== -1 || norm.indexOf("mahanghoa") !== -1) &&
+        (norm.indexOf("cha") !== -1 || norm.indexOf("parent") !== -1)) {
+      out.parentSku = c; break;
+    }
+    if (norm.indexOf("parentsku") !== -1) { out.parentSku = c; break; }
+  }
+
+  // ĐVT 2 trước — loại khỏi ĐVT 1
+  for (c = 0; c < headerRow.length; c++) {
+    norm = normalizeHeaderText(headerRow[c]);
+    if (isImportDvt2HeaderNorm_(norm)) { out.dvt2 = c; break; }
+  }
+
+  var exclude = {};
+  if (out.parentSku >= 0) exclude[out.parentSku] = true;
+  if (out.dvt2 >= 0) exclude[out.dvt2] = true;
+
+  // ĐVT 1: exact / ưu tiên mạnh trước
+  for (c = 0; c < headerRow.length; c++) {
+    if (exclude[c]) continue;
+    norm = normalizeHeaderText(headerRow[c]);
+    if (isImportDvt1HeaderNorm_(norm)) { out.dvt = c; break; }
+  }
+  if (out.dvt < 0) {
+    out.dvt = findColumnIndexByAliases(headerRow, [
+      "donvitinh", "dvtinh", "tendvt", "dvtchinh", "donvichinh", "basicunit", "unitname", "dvt", "donvi", "uom"
+    ], exclude);
+    // Tránh alias "unit" khớp unitprice / discountunit…
+    if (out.dvt >= 0) {
+      norm = normalizeHeaderText(headerRow[out.dvt]);
+      if (norm.indexOf("price") !== -1 || norm.indexOf("gia") !== -1 || isImportDvt2HeaderNorm_(norm)) {
+        exclude[out.dvt] = true;
+        out.dvt = findColumnIndexByAliases(headerRow, ["donvitinh", "dvtinh", "tendvt", "dvtchinh", "dvt"], exclude);
+      }
+    }
+  }
+
+  out.maHang = findColumnIndexByAliases(headerRow, [
+    "mahanghoa", "masanpham", "masp", "mahang", "itemcode", "article", "mahh", "sku"
+  ], exclude);
+  if (out.maHang >= 0) {
+    norm = normalizeHeaderText(headerRow[out.maHang]);
+    if (norm.indexOf("cha") !== -1 || norm.indexOf("parent") !== -1 || out.maHang === out.parentSku) {
+      exclude[out.maHang] = true;
+      out.maHang = findColumnIndexByAliases(headerRow, ["mahanghoa", "masanpham", "masp", "mahang", "sku", "mahh"], exclude);
+    }
+  }
+
+  out.maVach = findColumnIndexByAliases(headerRow, ["mavach", "barcodeid", "barcode", "ean"], exclude);
+  out.tenHang = findColumnIndexByAliases(headerRow, [
+    "tenhanghoa", "tensanpham", "tensp", "tenhang", "description"
+  ], exclude);
+  if (out.tenHang < 0) {
+    for (c = 0; c < headerRow.length; c++) {
+      if (exclude[c]) continue;
+      if (normalizeHeaderText(headerRow[c]) === "name") { out.tenHang = c; break; }
+    }
+  }
+
+  out.labels = {
+    maHang: out.maHang >= 0 ? String(headerRow[out.maHang] || "") : "",
+    tenHang: out.tenHang >= 0 ? String(headerRow[out.tenHang] || "") : "",
+    dvt: out.dvt >= 0 ? String(headerRow[out.dvt] || "") : "",
+    dvt2: out.dvt2 >= 0 ? String(headerRow[out.dvt2] || "") : "",
+    maVach: out.maVach >= 0 ? String(headerRow[out.maVach] || "") : ""
+  };
+  return out;
+}
+
+
+/**
+ * ĐVT hợp lệ: cái/hộp/thùng… — loại số lượng, ngày, mã SP nhảy cột.
+ * Giữ nguyên chữ Đ/đ trong giá trị (không fold).
+ */
+function isPlausibleDvtValue_(value) {
+  var raw = String(value == null ? "" : value).trim();
+  if (!raw) return false;
+  if (raw.length > 40) return false;
+  // Thuần số / số lượng
+  if (/^[\d.,\s]+$/.test(raw)) return false;
+  // Ngày tháng
+  if (/^\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}/.test(raw)) return false;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return false;
+  // Mã vạch dài / SKU số dài
+  if (/^\d{8,}$/.test(raw.replace(/\s+/g, ""))) return false;
+  // Scientific
+  if (/^[+-]?\d+(\.\d+)?e[+-]?\d+$/i.test(raw)) return false;
+  // Quá nhiều chữ số so với chữ → nghi là mã/số lượng
+  var digits = (raw.match(/\d/g) || []).length;
+  var letters = (raw.match(/[a-zA-ZÀ-ỹĐđ]/g) || []).length;
+  if (digits >= 6 && digits > letters) return false;
+  return true;
+}
+
+
+function sanitizeImportDvt_(value) {
+  var raw = String(value == null ? "" : value).trim();
+  if (!raw) return "";
+  // Bỏ nháy Excel / NBSP — giữ UTF-8 / Đ/đ
+  if (raw.charAt(0) === "'") raw = raw.slice(1).trim();
+  raw = raw.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+  if (!isPlausibleDvtValue_(raw)) return "";
+  return raw;
+}
+
+
+/** Tìm dòng header trong matrix upload (điểm theo alias MaSP/MV/Tên/ĐVT) */
+function findImportHeaderRowIndex_(rows, maxScan) {
+  if (!rows || !rows.length) return 0;
+  var limit = Math.min(rows.length, maxScan || 12);
+  var bestScore = -1;
+  var best = 0;
+  for (var hi = 0; hi < limit; hi++) {
+    var row = rows[hi] || [];
+    var score = 0;
+    var nonEmpty = 0;
+    for (var c = 0; c < row.length; c++) {
+      var cell = String(row[c] == null ? "" : row[c]).trim();
+      if (!cell) continue;
+      nonEmpty++;
+      var n = normalizeHeaderText(cell);
+      if (!n) continue;
+      if (n.indexOf("mahang") !== -1 || n === "sku" || n.indexOf("masp") !== -1 || n.indexOf("masanpham") !== -1) score += 6;
+      if (n.indexOf("mavach") !== -1 || n.indexOf("barcode") !== -1) score += 5;
+      if (n.indexOf("tenhang") !== -1 || n.indexOf("tensp") !== -1 || n.indexOf("tensanpham") !== -1) score += 4;
+      if (isImportDvt1HeaderNorm_(n)) score += 8;
+      if (isImportDvt2HeaderNorm_(n)) score += 2;
+    }
+    score += Math.min(nonEmpty, 6);
+    if (score > bestScore) { bestScore = score; best = hi; }
+  }
+  return best;
+}
+
+
+/**
+ * Tách catalog entries từ matrix Excel/MISA bằng dynamic header map.
+ * Output: [{mh,mv,th,d,d2,p}]
+ */
+function extractCatalogEntriesFromMatrix_(rows) {
+  if (!rows || rows.length < 2) return { entries: [], meta: { reason: "empty" } };
+  var headerIndex = findImportHeaderRowIndex_(rows, 12);
+  var header = rows[headerIndex] || [];
+  var cols = mapImportHeaderColumns_(header);
+  var entries = [];
+  var withDvt = 0;
+  var skippedBadDvt = 0;
+  var withDvt2 = 0;
+  for (var r = headerIndex + 1; r < rows.length; r++) {
+    var row = rows[r];
+    if (!row) continue;
+    var mh = cols.maHang >= 0 ? getCellValue(row, cols.maHang, "") : "";
+    var mv = cols.maVach >= 0 ? getCellValue(row, cols.maVach, "") : "";
+    var th = cols.tenHang >= 0 ? getCellValue(row, cols.tenHang, "") : "";
+    var dRaw = cols.dvt >= 0 ? getCellValue(row, cols.dvt, "") : "";
+    var d2Raw = cols.dvt2 >= 0 ? getCellValue(row, cols.dvt2, "") : "";
+    var p = cols.parentSku >= 0 ? getCellValue(row, cols.parentSku, "") : "";
+    mh = String(mh || "").trim();
+    mv = String(mv || "").trim();
+    th = String(th || "").trim();
+    p = String(p || "").trim();
+    if (!mh && !mv) continue;
+    var d = sanitizeImportDvt_(dRaw);
+    var d2 = sanitizeImportDvt_(d2Raw);
+    if (dRaw && !d) skippedBadDvt++;
+    if (d) withDvt++;
+    if (d2) withDvt2++;
+    entries.push({ mh: mh, mv: mv, th: th, d: d, d2: d2, p: p });
+  }
+  return {
+    entries: entries,
+    meta: {
+      headerIndex: headerIndex,
+      headerSample: (header || []).slice(0, 16),
+      maHangIdx: cols.maHang,
+      maVachIdx: cols.maVach,
+      tenHangIdx: cols.tenHang,
+      dvtIdx: cols.dvt,
+      dvt2Idx: cols.dvt2,
+      parentIdx: cols.parentSku,
+      labels: cols.labels,
+      entryCount: entries.length,
+      withDvt: withDvt,
+      withDvt2: withDvt2,
+      skippedBadDvt: skippedBadDvt
+    }
+  };
 }
 
 
@@ -1008,7 +1253,7 @@ function requireAuthenticatedAction(payload) {
 
 
 function requireAdminAction(action, payload) {
-  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin', 'removeDuplicateStockRows', 'saveCatalogIsNewFlags', 'saveChildVariants', 'updateProductLockStatus', 'markOutOfStockBatch', 'markInStockBatch'];
+  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin', 'removeDuplicateStockRows', 'fixWrongDVTOnSheet', 'saveCatalogIsNewFlags', 'saveChildVariants', 'updateProductLockStatus', 'markOutOfStockBatch', 'markInStockBatch'];
   if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
     throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
   }

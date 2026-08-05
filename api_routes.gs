@@ -57,6 +57,10 @@ function doPost(e) {
             requireAdmin((payload.payload && payload.payload.actor) || "");
             result = removeDuplicateStockRows();
             break;
+          case 'fixWrongDVTOnSheet':
+            requireAdminAction(action, payload.payload || {});
+            result = fixWrongDVTOnSheet_(payload.payload || {});
+            break;
           case 'updateProductLockStatus':
             requireAdminAction(action, payload.payload || {});
             result = updateProductLockStatus_(payload.payload || {});

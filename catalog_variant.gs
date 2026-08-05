@@ -39,7 +39,8 @@ var CATALOG_PARENT_HEADER = "Parent_SKU";
 
 var CATALOG_ISNEW_HEADER = "IsNew";
 
-var CATALOG_COL_COUNT = 11; // A..K: ... Parent_SKU | IsNew
+var CATALOG_COL_COUNT = 12; // A..L: Mã hàng | … | Mã vạch | … | Tên | … | ĐVT | Ngày tạo | Parent_SKU | IsNew | DonViTinh2
+var CATALOG_DVT2_HEADER = "DonViTinh2";
 
 
 /** Parse cờ TRUE/FALSE / 1 / x trên sheet */
@@ -1324,18 +1325,17 @@ function buildCatalogFromSheet_(ss) {
       break;
     }
   }
-  var parentSkuIdx = findCatalogParentColIdx_(headerRow);
-  var maHangIdx = findCatalogMaHangColIdx_(headerRow, parentSkuIdx);
-  if (maHangIdx === -1) maHangIdx = findColumnIndexByAliases(headerRow, ['mahanghoa', 'mahang', 'itemcode', 'article', 'sku']);
-  var maVachIdx = findColumnIndexByAliases(headerRow, ['mavach', 'barcodeid', 'barcode', 'ean']);
-  // Không dùng alias "name" dạng contains — dễ khớp nhầm UnitName / BrandName
-  var tenHangIdx = findColumnIndexByAliases(headerRow, ['tenhanghoa', 'tenhang', 'tensanpham', 'tensp', 'description']);
-  if (tenHangIdx === -1 && headerRow) {
-    for (var thc = 0; thc < headerRow.length; thc++) {
-      if (normalizeHeaderText(headerRow[thc]) === "name") { tenHangIdx = thc; break; }
-    }
-  }
-  var dvtIdx = findColumnIndexByAliases(headerRow, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'uom', 'unit']);
+  // Dynamic header map — tuyệt đối không hardcode cột ĐVT/Tên/MV
+  var mappedCols = mapImportHeaderColumns_(headerRow || []);
+  var parentSkuIdx = mappedCols.parentSku;
+  if (parentSkuIdx === -1) parentSkuIdx = findCatalogParentColIdx_(headerRow);
+  var maHangIdx = mappedCols.maHang;
+  if (maHangIdx === -1) maHangIdx = findCatalogMaHangColIdx_(headerRow, parentSkuIdx);
+  var maVachIdx = mappedCols.maVach;
+  var tenHangIdx = mappedCols.tenHang;
+  var dvtIdx = mappedCols.dvt;
+  var dvt2Idx = mappedCols.dvt2;
+  if (dvt2Idx === -1) dvt2Idx = findColumnIndexByAliases(headerRow, ["donvitinh2", "dvt2", "donviquydoi", "dvtphu"]);
   var isNewIdx = findColumnIndexByAliases(headerRow, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
   if (parentSkuIdx === -1 && headerRow && headerRow.length >= 10) {
     // Sheet chuẩn: cột J = Parent_SKU
@@ -1349,25 +1349,24 @@ function buildCatalogFromSheet_(ss) {
   var startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
   for (var k = startRow; k < rawData.length; k++) {
     if (!rawData[k]) continue;
-    var ma = getCellValue(rawData[k], maHangIdx !== -1 ? maHangIdx : 0, "").toUpperCase();
-    var ten = getCellValue(rawData[k], tenHangIdx !== -1 ? tenHangIdx : 5, "");
+    if (maHangIdx < 0 || tenHangIdx < 0) continue;
+    var ma = getCellValue(rawData[k], maHangIdx, "").toUpperCase();
+    var ten = getCellValue(rawData[k], tenHangIdx, "");
     if (ma !== "" && ten !== "") tenHangChuanTheoMa[ma] = ten;
   }
   for (var i = startRow; i < rawData.length; i++) {
     if (!rawData[i]) continue;
-    var maHang = getCellValue(rawData[i], maHangIdx !== -1 ? maHangIdx : 0, "");
-    var maVach = getCellValue(rawData[i], maVachIdx !== -1 ? maVachIdx : 2, "");
-    var tenHang = getCellValue(rawData[i], tenHangIdx !== -1 ? tenHangIdx : 5, "");
-    var dvt = getCellValue(rawData[i], dvtIdx !== -1 ? dvtIdx : 7, "");
+    var maHang = maHangIdx >= 0 ? getCellValue(rawData[i], maHangIdx, "") : "";
+    var maVach = maVachIdx >= 0 ? getCellValue(rawData[i], maVachIdx, "") : "";
+    var tenHang = tenHangIdx >= 0 ? getCellValue(rawData[i], tenHangIdx, "") : "";
+    var dvtRaw = dvtIdx >= 0 ? getCellValue(rawData[i], dvtIdx, "") : "";
+    var dvt = sanitizeImportDvt_(dvtRaw);
+    var dvt2 = dvt2Idx >= 0 ? sanitizeImportDvt_(getCellValue(rawData[i], dvt2Idx, "")) : "";
     var parentSku = parentSkuIdx !== -1 ? getCellValue(rawData[i], parentSkuIdx, "") : "";
     var isNewFlag = false;
     if (isNewIdx !== -1) {
       var flagRaw = String(rawData[i][isNewIdx] == null ? "" : rawData[i][isNewIdx]).trim().toLowerCase();
       isNewFlag = flagRaw === "1" || flagRaw === "true" || flagRaw === "yes" || flagRaw === "x" || flagRaw === "moi" || flagRaw === "new";
-    }
-    if (dvt === "" && dvtIdx === -1) {
-      var fallbackDvt = getCellValue(rawData[i], 6, "");
-      if (fallbackDvt !== "") dvt = fallbackDvt;
     }
     if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
     // Chuẩn hóa MH/MV (giữ Đ/đ, xử lý .0 / scientific) — phục hồi quét mã vạch 893…
@@ -1380,6 +1379,7 @@ function buildCatalogFromSheet_(ss) {
       maVach: mvNorm || maVach,
       tenHang: tenHang,
       dvt: dvt || "",
+      dvt2: dvt2 || "",
       parentSku: parentNorm || parentSku || "",
       isNew: isNewFlag,
       isLocked: false,
@@ -1472,12 +1472,16 @@ function resolveDvtValue(lookup, maHang, maVach, currentDvt) {
 
 function getOrCreateCatalogSheet(ss) {
   var sheet = ss.getSheetByName("Data_Excel");
+  var standardHeader = [
+    "Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT",
+    "Ngày tạo", CATALOG_PARENT_HEADER, CATALOG_ISNEW_HEADER, CATALOG_DVT2_HEADER
+  ];
   if (!sheet) {
     sheet = ss.insertSheet("Data_Excel");
-    sheet.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo", CATALOG_PARENT_HEADER, CATALOG_ISNEW_HEADER]]);
+    sheet.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([standardHeader]);
     sheet.getRange(1, 1, 1, CATALOG_COL_COUNT).setFontWeight("bold").setBackground("#d9ead3");
   } else {
-    // Bổ sung header Ngày tạo / Parent_SKU / IsNew nếu sheet cũ chưa có
+    // Bổ sung header Ngày tạo / Parent_SKU / IsNew / DonViTinh2 nếu sheet cũ chưa có
     try {
       var h9 = String(sheet.getRange(1, 9).getValue() || "").trim();
       if (!h9) {
@@ -1490,6 +1494,15 @@ function getOrCreateCatalogSheet(ss) {
       var h11 = String(sheet.getRange(1, 11).getValue() || "").trim();
       if (!h11) {
         sheet.getRange(1, 11).setValue(CATALOG_ISNEW_HEADER).setFontWeight("bold").setBackground("#d9ead3");
+      }
+      var h12 = String(sheet.getRange(1, 12).getValue() || "").trim();
+      if (!h12) {
+        sheet.getRange(1, 12).setValue(CATALOG_DVT2_HEADER).setFontWeight("bold").setBackground("#d9ead3");
+      }
+      // Chuẩn hóa nhãn ĐVT chính nếu ô trống / mơ hồ
+      var hDvt = String(sheet.getRange(1, 8).getValue() || "").trim();
+      if (!hDvt) {
+        sheet.getRange(1, 8).setValue("ĐVT").setFontWeight("bold").setBackground("#d9ead3");
       }
     } catch (e) {}
   }
@@ -1589,29 +1602,41 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
   var width = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
   var lastRow = sh.getLastRow();
   if (lastRow < 1) {
-    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([["Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT", "Ngày tạo", CATALOG_PARENT_HEADER, CATALOG_ISNEW_HEADER]]);
+    sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setValues([[
+      "Mã hàng", "", "Mã vạch", "", "", "Tên hàng hóa", "", "ĐVT",
+      "Ngày tạo", CATALOG_PARENT_HEADER, CATALOG_ISNEW_HEADER, CATALOG_DVT2_HEADER
+    ]]);
     sh.getRange(1, 1, 1, CATALOG_COL_COUNT).setFontWeight("bold").setBackground("#d9ead3");
     lastRow = 1;
     width = CATALOG_COL_COUNT;
   }
   var values = sh.getRange(1, 1, lastRow, width).getValues();
   var header = values[0] || [];
-  var parentIdx = findCatalogParentColIdx_(header);
+  var mappedSheet = mapImportHeaderColumns_(header);
+  var parentIdx = mappedSheet.parentSku;
+  if (parentIdx === -1) parentIdx = findCatalogParentColIdx_(header);
   if (parentIdx === -1) parentIdx = 9;
-  var mhIdx = findCatalogMaHangColIdx_(header, parentIdx);
+  var mhIdx = mappedSheet.maHang;
+  if (mhIdx === -1) mhIdx = findCatalogMaHangColIdx_(header, parentIdx);
   if (mhIdx === -1) mhIdx = 0;
-  var mvIdx = findColumnIndexByAliases(header, ["mavach", "barcode", "barcodeid"]);
+  var mvIdx = mappedSheet.maVach;
+  if (mvIdx === -1) mvIdx = findColumnIndexByAliases(header, ["mavach", "barcode", "barcodeid"]);
   if (mvIdx === -1) mvIdx = 2;
-  var thIdx = findColumnIndexByAliases(header, ["tenhang", "name", "description"]);
+  var thIdx = mappedSheet.tenHang;
+  if (thIdx === -1) thIdx = findColumnIndexByAliases(header, ["tenhanghoa", "tenhang", "tensanpham", "description"]);
   if (thIdx === -1) thIdx = 5;
-  var dvtIdx = findColumnIndexByAliases(header, ["dvt", "donvitinh", "donvi", "unit"]);
+  var dvtIdx = mappedSheet.dvt;
+  if (dvtIdx === -1) dvtIdx = findColumnIndexByAliases(header, ["donvitinh", "dvtinh", "tendvt", "dvtchinh", "dvt"]);
   if (dvtIdx === -1) dvtIdx = 7;
+  var dvt2Idx = mappedSheet.dvt2;
+  if (dvt2Idx === -1) dvt2Idx = findColumnIndexByAliases(header, ["donvitinh2", "dvt2", "donviquydoi", "dvtphu"]);
+  if (dvt2Idx === -1) dvt2Idx = 11;
   var ngayIdx = findColumnIndexByAliases(header, ["ngaytao", "createdat", "created"]);
   if (ngayIdx === -1) ngayIdx = 8;
   var isNewIdx = findColumnIndexByAliases(header, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
   if (isNewIdx === -1) isNewIdx = 10;
 
-  width = Math.max(width, CATALOG_COL_COUNT, parentIdx + 1, isNewIdx + 1);
+  width = Math.max(width, CATALOG_COL_COUNT, parentIdx + 1, isNewIdx + 1, dvt2Idx + 1);
   try {
     if (!String(sh.getRange(1, parentIdx + 1).getValue() || "").trim()) {
       sh.getRange(1, parentIdx + 1).setValue(CATALOG_PARENT_HEADER).setFontWeight("bold").setBackground("#d9ead3");
@@ -1621,6 +1646,12 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
     }
     if (!String(sh.getRange(1, ngayIdx + 1).getValue() || "").trim()) {
       sh.getRange(1, ngayIdx + 1).setValue("Ngày tạo").setFontWeight("bold").setBackground("#d9ead3");
+    }
+    if (!String(sh.getRange(1, dvtIdx + 1).getValue() || "").trim()) {
+      sh.getRange(1, dvtIdx + 1).setValue("ĐVT").setFontWeight("bold").setBackground("#d9ead3");
+    }
+    if (!String(sh.getRange(1, dvt2Idx + 1).getValue() || "").trim()) {
+      sh.getRange(1, dvt2Idx + 1).setValue(CATALOG_DVT2_HEADER).setFontWeight("bold").setBackground("#d9ead3");
     }
   } catch (eH) {}
 
@@ -1638,6 +1669,8 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
   var appended = 0;
   var preservedParent = 0;
   var withDvt = 0;
+  var withDvt2 = 0;
+  var skippedBadDvt = 0;
   var withParent = 0;
   var appendRows = [];
 
@@ -1647,10 +1680,14 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
     var mh = String(e.mh || e.maHang || "").trim();
     var mv = String(e.mv || e.maVach || "").trim();
     var th = String(e.th || e.tenHang || "").trim();
-    var d = String(e.d || e.dvt || "").trim();
+    var dRaw = String(e.d || e.dvt || "").trim();
+    var d = sanitizeImportDvt_(dRaw);
+    var d2 = sanitizeImportDvt_(e.d2 || e.dvt2 || "");
     var pIn = String(e.p || e.parentSku || "").trim();
     if (!mh && !mv) continue;
+    if (dRaw && !d) skippedBadDvt++;
     if (d) withDvt++;
+    if (d2) withDvt2++;
 
     var mhU = mh.toUpperCase();
     var mvU = mv.toUpperCase();
@@ -1665,6 +1702,7 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
       if (mv) row[mvIdx] = mv;
       if (th) row[thIdx] = th;
       if (d) row[dvtIdx] = d;
+      if (d2 && dvt2Idx >= 0) row[dvt2Idx] = d2;
       row[ngayIdx] = stamp.date;
       if (pIn) {
         row[parentIdx] = pIn;
@@ -1685,6 +1723,7 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
       newRow[mvIdx] = mv;
       newRow[thIdx] = th;
       newRow[dvtIdx] = d;
+      if (d2 && dvt2Idx >= 0) newRow[dvt2Idx] = d2;
       newRow[ngayIdx] = stamp.date;
       if (pIn) {
         newRow[parentIdx] = pIn;
@@ -1710,6 +1749,8 @@ function mergeCatalogEntriesUpsert_(ss, entries) {
     appended: appended,
     preservedParent: preservedParent,
     withDvt: withDvt,
+    withDvt2: withDvt2,
+    skippedBadDvt: skippedBadDvt,
     withParent: withParent,
     totalRows: Math.max(sh.getLastRow() - 1, 0),
     ms: Date.now() - t0,
@@ -2181,6 +2222,13 @@ function nhapKhauCapNhatThongTin(payload) {
     if (!catEntries.length) {
       throw new Error("Không có dòng catalog để ghi. Kiểm tra file có cột mã hàng / mã vạch / tên / ĐVT.");
     }
+    // Sanitize ĐVT lần nữa phía server (chặn số lượng/ngày/mã SP nhảy cột)
+    for (var si = 0; si < catEntries.length; si++) {
+      if (!catEntries[si]) continue;
+      catEntries[si].d = sanitizeImportDvt_(catEntries[si].d || catEntries[si].dvt || "");
+      catEntries[si].d2 = sanitizeImportDvt_(catEntries[si].d2 || catEntries[si].dvt2 || "");
+      catEntries[si].dvt = catEntries[si].d;
+    }
     var chunkIndexC = Number(payload.chunkIndex);
     if (isNaN(chunkIndexC) || chunkIndexC < 0) chunkIndexC = 0;
     var chunkTotalC = Number(payload.chunkTotal);
@@ -2310,32 +2358,12 @@ function nhapKhauCapNhatThongTin(payload) {
       };
     }
     if (importType === 'catalog') {
-      // Legacy matrix → chuyển sang UPSERT entries (không wipe Data_Excel)
-      var adjustedCatalogData = removeColumnFromMatrix(fileData, 3);
-      var legacyEntries = [];
-      for (var li = 0; li < adjustedCatalogData.length; li++) {
-        if (li === 0) continue; // skip header-ish
-        var lr = adjustedCatalogData[li] || [];
-        var lmh = String(lr[0] || "").trim();
-        var lmv = String(lr[2] || lr[1] || "").trim();
-        var lth = String(lr[5] || lr[4] || lr[3] || "").trim();
-        var ld = String(lr[7] || lr[6] || "").trim();
-        if (!lmh && !lmv) continue;
-        legacyEntries.push({ mh: lmh, mv: lmv, th: lth, d: ld });
-      }
+      // Legacy matrix → dynamic header map (KHÔNG hardcode cột 0/2/5/7)
+      var catalogMatrix = normalizeImportedMatrix(fileData);
+      var parsedLegacy = extractCatalogEntriesFromMatrix_(catalogMatrix);
+      var legacyEntries = parsedLegacy.entries || [];
       if (!legacyEntries.length) {
-        // Fallback: parse bằng extract kiểu thô từ matrix
-        for (var lj = 1; lj < adjustedCatalogData.length; lj++) {
-          var rowL = adjustedCatalogData[lj] || [];
-          var joined = rowL.join(" ");
-          if (!String(joined || "").trim()) continue;
-          legacyEntries.push({
-            mh: String(rowL[0] || "").trim(),
-            mv: String(rowL[2] || "").trim(),
-            th: String(rowL[5] || "").trim(),
-            d: String(rowL[7] || "").trim()
-          });
-        }
+        throw new Error("Không đọc được dòng catalog. Kiểm tra file có dòng tiêu đề: Mã hàng / Tên / ĐVT / Mã vạch.");
       }
       var legInfo = writeCatalogEntriesToSheet_(ss, legacyEntries, isFirstChunk);
       SpreadsheetApp.flush();
@@ -2347,12 +2375,17 @@ function nhapKhauCapNhatThongTin(payload) {
         stagingSheet: MISA_IMPORT_SHEET_NAME,
         updatedRows: legInfo.rows || 0,
         updatedCols: legInfo.withDvt || 0,
+        withDvt: legInfo.withDvt || 0,
+        skippedBadDvt: legInfo.skippedBadDvt || parsedLegacy.meta.skippedBadDvt || 0,
+        headerMap: parsedLegacy.meta.labels || {},
         chunkIndex: chunkIndex,
         chunkTotal: chunkTotal,
         done: isLastChunk,
+        _debugRun: "import-catalog-dynamic-header-v1",
         msg: isLastChunk
-          ? ('UPSERT Data_Excel từ file MISA (giữ Parent_SKU / mã con). Staging: ' + MISA_IMPORT_SHEET_NAME + '.')
-          : ('Đã nhận chunk ' + (chunkIndex + 1) + '/' + chunkTotal + ' (UPSERT).')
+          ? ('UPSERT Data_Excel (map cột động theo header). ĐVT hợp lệ: ' + (legInfo.withDvt || 0) +
+            '. Staging: ' + MISA_IMPORT_SHEET_NAME + '.')
+          : ('Đã nhận chunk ' + (chunkIndex + 1) + '/' + chunkTotal + ' (UPSERT, dynamic header).')
       };
     }
     throw new Error('Loại cập nhật không hợp lệ.');
@@ -2796,6 +2829,112 @@ function markOutOfStockBatch_(payload) {
 
 function markInStockBatch_(payload) {
   return updateProductOutOfStockStatus_(payload || {}, false);
+}
+
+
+/**
+ * One-time cleanup: quét Data_Excel + TON_VARIANT, xóa ĐVT bất thường
+ * (số lượng / ngày / mã SP nhảy cột). Không tự suy ĐVT mới nếu không chắc.
+ */
+function fixWrongDVTOnSheet_(payload) {
+  try {
+    var actor = payload && payload.actor ? String(payload.actor).trim() : "";
+    requireAdmin(actor);
+    var ss = getSS();
+    var clearedCatalog = 0;
+    var clearedVariant = 0;
+    var samples = [];
+
+    // --- Data_Excel ---
+    var sh = ss.getSheetByName("Data_Excel");
+    if (sh && sh.getLastRow() >= 2) {
+      var width = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
+      var values = sh.getRange(1, 1, sh.getLastRow(), width).getValues();
+      var header = values[0] || [];
+      var mapped = mapImportHeaderColumns_(header);
+      var dvtIdx = mapped.dvt;
+      if (dvtIdx < 0) dvtIdx = findColumnIndexByAliases(header, ["donvitinh", "dvtinh", "tendvt", "dvt"]);
+      if (dvtIdx < 0) dvtIdx = 7;
+      var dvt2Idx = mapped.dvt2;
+      if (dvt2Idx < 0) dvt2Idx = findColumnIndexByAliases(header, ["donvitinh2", "dvt2", "donviquydoi"]);
+      var mhIdx = mapped.maHang;
+      if (mhIdx < 0) mhIdx = 0;
+      var dirty = false;
+      for (var r = 1; r < values.length; r++) {
+        var dvtRaw = String(values[r][dvtIdx] == null ? "" : values[r][dvtIdx]).trim();
+        if (dvtRaw && !isPlausibleDvtValue_(dvtRaw)) {
+          if (samples.length < 12) {
+            samples.push({
+              sheet: "Data_Excel",
+              row: r + 1,
+              maHang: String(values[r][mhIdx] || ""),
+              badDvt: dvtRaw.slice(0, 40)
+            });
+          }
+          values[r][dvtIdx] = "";
+          clearedCatalog++;
+          dirty = true;
+        }
+        if (dvt2Idx >= 0) {
+          var d2Raw = String(values[r][dvt2Idx] == null ? "" : values[r][dvt2Idx]).trim();
+          if (d2Raw && !isPlausibleDvtValue_(d2Raw)) {
+            values[r][dvt2Idx] = "";
+            clearedCatalog++;
+            dirty = true;
+          }
+        }
+      }
+      if (dirty) {
+        sh.getRange(1, 1, values.length, width).setValues(values);
+      }
+    }
+
+    // --- TON_VARIANT cột DonViTinh (I = index 8) ---
+    var shV = ss.getSheetByName(TON_VARIANT_SHEET_NAME);
+    if (shV && shV.getLastRow() >= 2) {
+      ensureTonVariantSchema_(shV);
+      var lastV = shV.getLastRow();
+      var valsV = shV.getRange(2, 1, lastV - 1, TON_VARIANT_COL_COUNT).getValues();
+      var dirtyV = false;
+      for (var vr = 0; vr < valsV.length; vr++) {
+        var dvtV = String(valsV[vr][8] == null ? "" : valsV[vr][8]).trim();
+        if (dvtV && !isPlausibleDvtValue_(dvtV)) {
+          if (samples.length < 12) {
+            samples.push({
+              sheet: TON_VARIANT_SHEET_NAME,
+              row: vr + 2,
+              maHang: String(valsV[vr][0] || ""),
+              badDvt: dvtV.slice(0, 40)
+            });
+          }
+          valsV[vr][8] = "";
+          clearedVariant++;
+          dirtyV = true;
+        }
+      }
+      if (dirtyV) {
+        shV.getRange(2, 1, valsV.length, TON_VARIANT_COL_COUNT).setValues(valsV);
+        try { getScriptCache_().remove(CACHE_TON_VARIANT_KEY); } catch (eC) {}
+      }
+    }
+
+    invalidateCatalogCache_();
+    try { SpreadsheetApp.flush(); } catch (eF) {}
+    var total = clearedCatalog + clearedVariant;
+    return {
+      success: true,
+      clearedCatalog: clearedCatalog,
+      clearedVariant: clearedVariant,
+      cleared: total,
+      samples: samples,
+      msg: total
+        ? ("Đã xóa " + total + " ô ĐVT bất thường (Data_Excel: " + clearedCatalog +
+          ", TON_VARIANT: " + clearedVariant + "). Hãy Import lại file MISA để ghi ĐVT chuẩn.")
+        : "Không phát hiện ĐVT bất thường trên sheet."
+    };
+  } catch (e) {
+    return { success: false, error: e.message || String(e) };
+  }
 }
 
 

@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-05-v76-multisearch-barcode';
+var APP_BUILD = '2026-08-05-v77-import-dvt-header-map';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -4699,15 +4699,24 @@ function analyzeImportRows(rows, importType) {
   if (importType === 'stock' && !hasStockSignals) warnings.push('Không tìm thấy dấu hiệu cột tồn kho hoặc tên kho trong file.');
   if (importType === 'catalog' && !hasCatalogSignals) warnings.push('Không tìm thấy đủ dấu hiệu cột thông tin hàng hóa trong file.');
   if (normalized.length < 3) warnings.push('Dòng tiêu đề quá ít cột, có thể chọn nhầm sheet hoặc nhầm file.');
-  var dvtColIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'unit', 'uom']);
-  if (importType === 'stock' && dvtColIdx < 0) warnings.push('Không thấy cột Đơn vị tính (ĐVT) trong tiêu đề — sheet TON_Q7 sẽ thiếu ĐVT.');
+  var mapCols = impMapHeaderColumns_(header);
+  var dvtColIdx = mapCols.dvt;
+  if ((importType === 'stock' || importType === 'catalog') && dvtColIdx < 0) {
+    warnings.push('Không thấy cột Đơn vị tính (ĐVT / ĐVT chính / Tên ĐVT) trong tiêu đề — sẽ không ghi ĐVT.');
+  }
+  if (mapCols.dvt2 >= 0 && mapCols.dvt >= 0) {
+    // OK — ĐVT 2 tách riêng, không ghi đè ĐVT 1
+  } else if (mapCols.dvt2 >= 0 && mapCols.dvt < 0) {
+    warnings.push('Chỉ thấy cột ĐVT 2 / quy đổi — chưa nhận diện ĐVT chính.');
+  }
   return {
     header: header,
     detectedType: detectedType,
     warnings: warnings,
     rowCount: rows ? rows.length : 0,
     colCount: header ? header.length : 0,
-    dvtColIdx: dvtColIdx
+    dvtColIdx: dvtColIdx,
+    headerMap: mapCols.labels || {}
   };
 }
 
@@ -4735,7 +4744,19 @@ function renderImportPreview(previewState) {
 
   card.style.display = 'block';
   confirmEl.checked = false;
-  meta.innerHTML = '<b>File:</b> ' + previewState.fileName + ' | <b>Sheet:</b> ' + previewState.sheetName + ' | <b>Dòng:</b> ' + previewState.analysis.rowCount + ' | <b>Cột:</b> ' + previewState.analysis.colCount + ' | <b>Nhận diện:</b> ' + (previewState.analysis.detectedType === 'stock' ? 'Tồn kho' : previewState.analysis.detectedType === 'catalog' ? 'Nhập khẩu thông tin' : 'Chưa rõ');
+  var mapHint = '';
+  try {
+    var mapCols = impMapHeaderColumns_(previewState.analysis.header || []);
+    if (mapCols && mapCols.labels) {
+      mapHint = '<br><b>Map cột:</b> MaSP=[' + escapeHtml(mapCols.labels.maHang || '—') +
+        '] · Tên=[' + escapeHtml(mapCols.labels.tenHang || '—') +
+        '] · ĐVT1=[' + escapeHtml(mapCols.labels.dvt || '—') +
+        '] · ĐVT2=[' + escapeHtml(mapCols.labels.dvt2 || '—') +
+        '] · MV=[' + escapeHtml(mapCols.labels.maVach || '—') + ']';
+      if (mapCols.dvt < 0) mapHint += ' <span style="color:#b91c1c;">⚠️ Chưa nhận diện cột ĐVT</span>';
+    }
+  } catch (eMap) {}
+  meta.innerHTML = '<b>File:</b> ' + previewState.fileName + ' | <b>Sheet:</b> ' + previewState.sheetName + ' | <b>Dòng:</b> ' + previewState.analysis.rowCount + ' | <b>Cột:</b> ' + previewState.analysis.colCount + ' | <b>Nhận diện:</b> ' + (previewState.analysis.detectedType === 'stock' ? 'Tồn kho' : previewState.analysis.detectedType === 'catalog' ? 'Nhập khẩu thông tin' : 'Chưa rõ') + mapHint;
 
   if (previewState.analysis.warnings.length) {
     warning.style.display = 'block';
@@ -4841,63 +4862,165 @@ function impAddStockEntry_(map, prefix, code, qty, dvt) {
   if (dvtRaw && !map[key].d) map[key].d = dvtRaw;
 }
 
+/** Header ĐVT 2 / quy đổi — không dùng làm ĐVT chính */
+function impIsDvt2HeaderNorm_(norm) {
+  if (!norm) return false;
+  var n = String(norm).replace(/\s+/g, '');
+  if (n.indexOf('quydoi') !== -1) return true;
+  if (n.indexOf('dvt2') !== -1 || n.indexOf('donvi2') !== -1) return true;
+  if (n.indexOf('dvtphu') !== -1 || n.indexOf('donviphu') !== -1) return true;
+  if (n.indexOf('unit2') !== -1 || n.indexOf('altunit') !== -1) return true;
+  return false;
+}
+
+function impIsDvt1HeaderNorm_(norm) {
+  if (!norm || impIsDvt2HeaderNorm_(norm)) return false;
+  var n = String(norm).replace(/\s+/g, '');
+  if (n === 'dvt' || n === 'donvi' || n === 'donvitinh' || n === 'dvtinh') return true;
+  if (n === 'tendvt' || n === 'dvtchinh' || n === 'donvichinh' || n === 'basicunit') return true;
+  if (n === 'unit' || n === 'uom' || n === 'unitname') return true;
+  if (n.indexOf('donvitinh') !== -1 || n.indexOf('dvtchinh') !== -1 || n.indexOf('tendvt') !== -1) return true;
+  if (n.indexOf('dvt') === 0 && n.length <= 12) return true;
+  return false;
+}
+
+/** ĐVT hợp lệ (cái/hộp/thùng…) — loại số lượng / ngày / mã SP nhảy cột; giữ Đ/đ */
+function impIsPlausibleDvt_(value) {
+  var raw = String(value == null ? '' : value).trim();
+  if (!raw || raw.length > 40) return false;
+  if (/^[\d.,\s]+$/.test(raw)) return false;
+  if (/^\d{1,4}[\/\-.]\d{1,2}[\/\-.]\d{1,4}/.test(raw)) return false;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return false;
+  if (/^\d{8,}$/.test(raw.replace(/\s+/g, ''))) return false;
+  if (/^[+-]?\d+(\.\d+)?e[+-]?\d+$/i.test(raw)) return false;
+  var digits = (raw.match(/\d/g) || []).length;
+  var letters = (raw.match(/[a-zA-ZÀ-ỹĐđ]/g) || []).length;
+  if (digits >= 6 && digits > letters) return false;
+  return true;
+}
+
+function impSanitizeDvt_(value) {
+  var raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  if (raw.charAt(0) === "'") raw = raw.slice(1).trim();
+  raw = raw.replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+  return impIsPlausibleDvt_(raw) ? raw : '';
+}
+
+function impFindColByAliasesExclude_(header, aliases, excludeMap) {
+  if (!header) return -1;
+  var skip = excludeMap || {};
+  var c, a, n;
+  for (c = 0; c < header.length; c++) {
+    if (skip[c]) continue;
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (!n) continue;
+    for (a = 0; a < aliases.length; a++) {
+      if (n === aliases[a]) return c;
+    }
+  }
+  for (c = 0; c < header.length; c++) {
+    if (skip[c]) continue;
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (!n) continue;
+    for (a = 0; a < aliases.length; a++) {
+      if (!aliases[a] || aliases[a].length < 4) continue;
+      if (n.indexOf(aliases[a]) !== -1) return c;
+    }
+  }
+  return -1;
+}
+
+/** Map cột upload linh hoạt theo tiêu đề — không hardcode index */
+function impMapHeaderColumns_(header) {
+  var out = { maHang: -1, tenHang: -1, dvt: -1, dvt2: -1, maVach: -1, parentSku: -1, labels: {} };
+  if (!header || !header.length) return out;
+  var c, n;
+  for (c = 0; c < header.length; c++) {
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (!n) continue;
+    if (n === 'parentsku' || n === 'parent' || n === 'manhomban' || n === 'nhomban' ||
+        ((n.indexOf('mahang') !== -1) && (n.indexOf('cha') !== -1 || n.indexOf('parent') !== -1))) {
+      out.parentSku = c; break;
+    }
+  }
+  for (c = 0; c < header.length; c++) {
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (impIsDvt2HeaderNorm_(n)) { out.dvt2 = c; break; }
+  }
+  var exclude = {};
+  if (out.parentSku >= 0) exclude[out.parentSku] = true;
+  if (out.dvt2 >= 0) exclude[out.dvt2] = true;
+  for (c = 0; c < header.length; c++) {
+    if (exclude[c]) continue;
+    n = impNormalizeText(header[c]).replace(/\s+/g, '');
+    if (impIsDvt1HeaderNorm_(n)) { out.dvt = c; break; }
+  }
+  if (out.dvt < 0) {
+    out.dvt = impFindColByAliasesExclude_(header, [
+      'donvitinh', 'dvtinh', 'tendvt', 'dvtchinh', 'donvichinh', 'basicunit', 'unitname', 'dvt', 'donvi', 'uom'
+    ], exclude);
+    if (out.dvt >= 0) {
+      n = impNormalizeText(header[out.dvt]).replace(/\s+/g, '');
+      if (n.indexOf('price') !== -1 || n.indexOf('gia') !== -1 || impIsDvt2HeaderNorm_(n)) {
+        exclude[out.dvt] = true;
+        out.dvt = impFindColByAliasesExclude_(header, ['donvitinh', 'dvtinh', 'tendvt', 'dvtchinh', 'dvt'], exclude);
+      }
+    }
+  }
+  out.maHang = impFindColByAliasesExclude_(header, ['mahanghoa', 'masanpham', 'masp', 'mahang', 'itemcode', 'mahh', 'sku'], exclude);
+  if (out.maHang >= 0) {
+    n = impNormalizeText(header[out.maHang]).replace(/\s+/g, '');
+    if (n.indexOf('cha') !== -1 || n.indexOf('parent') !== -1 || out.maHang === out.parentSku) {
+      exclude[out.maHang] = true;
+      out.maHang = impFindColByAliasesExclude_(header, ['mahanghoa', 'masanpham', 'masp', 'mahang', 'sku', 'mahh'], exclude);
+    }
+  }
+  out.maVach = impFindColByAliasesExclude_(header, ['mavach', 'barcode', 'ean'], exclude);
+  out.tenHang = impFindColByAliasesExclude_(header, ['tenhanghoa', 'tensanpham', 'tensp', 'tenhang', 'description'], exclude);
+  if (out.tenHang < 0) {
+    for (c = 0; c < header.length; c++) {
+      if (exclude[c]) continue;
+      if (impNormalizeText(header[c]).replace(/\s+/g, '') === 'name') { out.tenHang = c; break; }
+    }
+  }
+  out.labels = {
+    maHang: out.maHang >= 0 ? String(header[out.maHang] || '') : '',
+    tenHang: out.tenHang >= 0 ? String(header[out.tenHang] || '') : '',
+    dvt: out.dvt >= 0 ? String(header[out.dvt] || '') : '',
+    dvt2: out.dvt2 >= 0 ? String(header[out.dvt2] || '') : '',
+    maVach: out.maVach >= 0 ? String(header[out.maVach] || '') : ''
+  };
+  return out;
+}
+
 /** Tách catalog (mã/tên/ĐVT) từ file nhập khẩu thông tin → payload nhỏ */
 function extractCatalogEntriesFromRows_(rows) {
   if (!rows || rows.length < 2) return { entries: [], meta: { reason: 'empty' } };
   var headerIndex = 0;
   var bestScore = -1;
-  for (var hi = 0; hi < Math.min(rows.length, 10); hi++) {
+  for (var hi = 0; hi < Math.min(rows.length, 12); hi++) {
     var joined = (rows[hi] || []).map(impNormalizeText).join(' ');
     var score = (rows[hi] || []).filter(function(cell) { return impNormalizeText(cell).length > 0; }).length;
-    if (/ma hang|mahang|sku|mavach|ma vach/.test(joined)) score += 6;
-    if (/ten hang|tenhang|name/.test(joined)) score += 4;
-    if (/dvt|don vi|donvi|unit|uom/.test(joined)) score += 5;
+    if (/ma hang|mahang|ma sp|ma san pham|sku|mavach|ma vach/.test(joined)) score += 6;
+    if (/ten hang|tenhang|ten sp|ten san pham|name/.test(joined)) score += 4;
+    if (/don vi tinh|dvt chinh|ten dvt|donvitinh/.test(joined)) score += 8;
+    else if (/dvt|don vi|donvi|unit|uom/.test(joined)) score += 5;
     if (score > bestScore) { bestScore = score; headerIndex = hi; }
   }
   var header = rows[headerIndex] || [];
-  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'itemcode', 'mahh', 'sku']);
-  var maVachIdx = impFindColByAliases_(header, ['mavach', 'barcode', 'ean']);
-  var tenHangIdx = impFindColByAliases_(header, ['tenhanghoa', 'tenhang', 'tensanpham', 'description']);
-  if (tenHangIdx < 0) {
-    for (var thExact = 0; thExact < header.length; thExact++) {
-      if (impNormalizeText(header[thExact]).replace(/\s+/g, '') === 'name') { tenHangIdx = thExact; break; }
-    }
-  }
-  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'uom', 'basicunit', 'unitname', 'unit']);
-  if (dvtIdx < 0) {
-    for (var dc = 0; dc < header.length; dc++) {
-      var hn = impNormalizeText(header[dc]);
-      if (hn.indexOf('don vi') !== -1 || hn === 'dv' || hn.indexOf('dvt') !== -1) { dvtIdx = dc; break; }
-    }
-  }
-  // Cột Parent_SKU / Mã hàng hóa cha / Ma_Nhom_Ban — đọc riêng, không dùng làm mã hàng chính
-  var parentIdx = -1;
-  for (var pc = 0; pc < header.length; pc++) {
-    var pn = impNormalizeText(header[pc]).replace(/\s+/g, '');
-    if (!pn) continue;
-    if (pn === 'parentsku' || pn === 'parent' || pn === 'manhomban' || pn === 'nhomban') { parentIdx = pc; break; }
-    if ((pn.indexOf('mahang') !== -1 || pn.indexOf('mahanghoa') !== -1) && (pn.indexOf('cha') !== -1 || pn.indexOf('parent') !== -1)) {
-      parentIdx = pc; break;
-    }
-    if (pn.indexOf('parentsku') !== -1 || pn.indexOf('manhomban') !== -1) { parentIdx = pc; break; }
-  }
-  if (maHangIdx >= 0) {
-    var mhHeader = impNormalizeText(header[maHangIdx]).replace(/\s+/g, '');
-    if (mhHeader.indexOf('cha') !== -1 || mhHeader.indexOf('parent') !== -1 || maHangIdx === parentIdx) {
-      var altMh = -1;
-      for (var ac = 0; ac < header.length; ac++) {
-        if (ac === maHangIdx || ac === parentIdx) continue;
-        var an = impNormalizeText(header[ac]).replace(/\s+/g, '');
-        if ((an.indexOf('mahang') !== -1 || an === 'sku') && an.indexOf('cha') === -1 && an.indexOf('parent') === -1) {
-          altMh = ac; break;
-        }
-      }
-      if (altMh >= 0) maHangIdx = altMh;
-    }
-  }
+  var cols = impMapHeaderColumns_(header);
+  var maHangIdx = cols.maHang;
+  var maVachIdx = cols.maVach;
+  var tenHangIdx = cols.tenHang;
+  var dvtIdx = cols.dvt;
+  var dvt2Idx = cols.dvt2;
+  var parentIdx = cols.parentSku;
 
   var entries = [];
   var withDvt = 0;
+  var withDvt2 = 0;
+  var skippedBadDvt = 0;
   var withParent = 0;
   var startRow = headerIndex + 1;
   for (var r = startRow; r < rows.length; r++) {
@@ -4906,29 +5029,19 @@ function extractCatalogEntriesFromRows_(rows) {
     var mh = maHangIdx >= 0 ? String(row[maHangIdx] == null ? '' : row[maHangIdx]).trim() : '';
     var mv = maVachIdx >= 0 ? String(row[maVachIdx] == null ? '' : row[maVachIdx]).trim() : '';
     var th = tenHangIdx >= 0 ? String(row[tenHangIdx] == null ? '' : row[tenHangIdx]).trim() : '';
-    var d = dvtIdx >= 0 ? String(row[dvtIdx] == null ? '' : row[dvtIdx]).trim() : '';
+    var dRaw = dvtIdx >= 0 ? String(row[dvtIdx] == null ? '' : row[dvtIdx]).trim() : '';
+    var d2Raw = dvt2Idx >= 0 ? String(row[dvt2Idx] == null ? '' : row[dvt2Idx]).trim() : '';
+    var d = impSanitizeDvt_(dRaw);
+    var d2 = impSanitizeDvt_(d2Raw);
     var p = parentIdx >= 0 ? String(row[parentIdx] == null ? '' : row[parentIdx]).trim() : '';
     if (!mh && !mv) continue;
     if (!th && !d && !mh && !mv) continue;
+    if (dRaw && !d) skippedBadDvt++;
     if (d) withDvt++;
+    if (d2) withDvt2++;
     if (p) withParent++;
-    entries.push({ mh: mh, mv: mv, th: th, d: d, p: p });
+    entries.push({ mh: mh, mv: mv, th: th, d: d, d2: d2, p: p });
   }
-  var headerNorm = (header || []).map(function(h) {
-    return { raw: String(h == null ? '' : h).slice(0, 40), norm: impNormalizeText(h).replace(/\s+/g, '') };
-  });
-  // #region agent log
-  dbgBranch_('A', 'extractCatalogEntriesFromRows_', 'catalog header dvt detect post-fix', {
-    runId: 'post-fix',
-    headerIndex: headerIndex,
-    dvtIdx: dvtIdx,
-    withDvt: withDvt,
-    entryCount: entries.length,
-    headerNorm: headerNorm.slice(0, 16),
-    sampleEntry: entries[0] || null,
-    dvtNormOk: headerNorm.some(function(h) { return h.norm.indexOf('donvitinh') !== -1 || h.norm === 'dvt' || h.norm.indexOf('dvt') === 0; })
-  });
-  // #endregion
   return {
     entries: entries,
     meta: {
@@ -4938,9 +5051,13 @@ function extractCatalogEntriesFromRows_(rows) {
       maVachIdx: maVachIdx,
       tenHangIdx: tenHangIdx,
       dvtIdx: dvtIdx,
+      dvt2Idx: dvt2Idx,
       parentIdx: parentIdx,
+      labels: cols.labels,
       entryCount: entries.length,
       withDvt: withDvt,
+      withDvt2: withDvt2,
+      skippedBadDvt: skippedBadDvt,
       withParent: withParent
     }
   };
@@ -4961,21 +5078,18 @@ function extractTonQ7EntriesFromRows_(rows) {
     if (score > bestScore) { bestScore = score; headerIndex = hi; }
   }
   var header = rows[headerIndex] || [];
-  var maHangIdx = impFindColByAliases_(header, ['mahanghoa', 'mahang', 'sku', 'mahh', 'itemcode']);
-  var maVachIdx = impFindColByAliases_(header, ['mavach', 'barcode', 'ean']);
-  var dvtIdx = impFindColByAliases_(header, ['donvitinh', 'dvtinh', 'dvt', 'donvi', 'unit', 'uom', 'basicunit', 'unitname']);
-  // Fallback: cột có chữ "đơn vị" trong header
-  if (dvtIdx < 0) {
-    for (var dc = 0; dc < header.length; dc++) {
-      var hn = impNormalizeText(header[dc]);
-      if (hn.indexOf('don vi') !== -1 || hn === 'dv' || hn.indexOf('dvt') !== -1) { dvtIdx = dc; break; }
-    }
-  }
-  var tonIdx = impFindColByAliases_(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'cuoiky']);
-  var tenHangIdx = impFindColByAliases_(header, ['tenhanghoa', 'tenhang', 'name', 'description']);
+  var stockCols = impMapHeaderColumns_(header);
+  var maHangIdx = stockCols.maHang;
+  var maVachIdx = stockCols.maVach;
+  var dvtIdx = stockCols.dvt;
+  var tenHangIdx = stockCols.tenHang;
+  var tonIdx = impFindColByAliasesExclude_(header, ['tonkho', 'soluongton', 'stock', 'onhand', 'slton', 'cuoiky'], {
+    // không lấy nhầm cột ĐVT
+  });
+  if (dvtIdx >= 0 && tonIdx === dvtIdx) tonIdx = -1;
   var q7Cols = [];
   for (var c = 0; c < header.length; c++) {
-    if (c === maHangIdx || c === maVachIdx || c === dvtIdx || c === tonIdx || c === tenHangIdx) continue;
+    if (c === maHangIdx || c === maVachIdx || c === dvtIdx || c === tonIdx || c === tenHangIdx || c === stockCols.dvt2) continue;
     if (impIsQ7Header_(header[c])) q7Cols.push(c);
   }
 
@@ -5001,16 +5115,16 @@ function extractTonQ7EntriesFromRows_(rows) {
     if (!row) continue;
     var maHang = maHangIdx >= 0 ? row[maHangIdx] : '';
     var maVach = maVachIdx >= 0 ? row[maVachIdx] : '';
-    var dvt = dvtIdx >= 0 ? row[dvtIdx] : '';
+    var dvt = impSanitizeDvt_(dvtIdx >= 0 ? row[dvtIdx] : '');
     var hasOwn = !!(String(maHang || '').trim() || String(maVach || '').trim());
     if (hasOwn) {
       currentMaHang = maHang;
       currentMaVach = maVach;
-      if (String(dvt || '').trim()) currentDvt = dvt;
+      if (dvt) currentDvt = dvt;
     }
     var useMaHang = hasOwn ? maHang : currentMaHang;
     var useMaVach = hasOwn ? maVach : currentMaVach;
-    var useDvt = String(dvt || '').trim() ? dvt : currentDvt;
+    var useDvt = dvt || currentDvt || '';
     if (!String(useMaHang || '').trim() && !String(useMaVach || '').trim()) continue;
 
     var got = false;
@@ -5060,6 +5174,38 @@ function extractTonQ7EntriesFromRows_(rows) {
       tonIdx: tonIdx
     }
   };
+}
+
+/** Admin: dọn ĐVT bất thường đã ghi sai lên sheet (one-time cleanup) */
+function adm_fixWrongDVTOnSheet_() {
+  if (!sessionUser || !sessionUser.user) return alert('Vui lòng đăng nhập Admin.');
+  if (String(sessionUser.role || '') !== 'Admin') return alert('Chỉ Admin được phép dọn ĐVT sai.');
+  if (!confirm('Quét Data_Excel + TON_VARIANT và XÓA các ô ĐVT bất thường (số lượng/ngày/mã SP nhảy cột)?\n\nSau đó hãy Import lại file MISA để ghi ĐVT chuẩn.')) return;
+  showLoad('Đang dọn ĐVT sai trên sheet...');
+  apiPost('fixWrongDVTOnSheet', {
+    actor: sessionUser.user
+  }, { directOnly: true, timeoutMs: 120000 }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) {
+      alert('❌ Dọn ĐVT thất bại: ' + ((res && (res.error || res.msg)) || 'Không rõ lỗi') + '\n[Build: ' + APP_BUILD + ']');
+      return;
+    }
+    var sampleText = '';
+    if (res.samples && res.samples.length) {
+      sampleText = '\n\nMẫu dòng đã xóa:\n' + res.samples.slice(0, 8).map(function(s) {
+        return '- ' + (s.sheet || '') + ' R' + (s.row || '?') + ' [' + (s.maHang || '') + '] ← "' + (s.badDvt || '') + '"';
+      }).join('\n');
+    }
+    alert('✅ ' + (res.msg || 'Xong.') +
+      '\n- Data_Excel: ' + (res.clearedCatalog || 0) +
+      '\n- TON_VARIANT: ' + (res.clearedVariant || 0) +
+      sampleText + '\n[' + APP_BUILD + ']');
+    clearCatalogLocalStorage();
+    loadCatalogInBackground(true);
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi: ' + (err && err.message || err) + '\n[Build: ' + APP_BUILD + ']\nclasp push rồi thử lại.');
+  });
 }
 
 /** Admin: dọn Key trùng SKU vs SKU|ĐVT trên TON_VARIANT / TON_Q7 */
@@ -5237,18 +5383,21 @@ function importDanhMucTonKho() {
         return;
       }
       var dvtOk = catExtracted.meta && catExtracted.meta.dvtIdx >= 0;
-      alert("✅ UPSERT danh mục thành công (không xóa mã con)!\n" +
+      var labels = (catExtracted.meta && catExtracted.meta.labels) || {};
+      alert("✅ UPSERT danh mục thành công (map cột động theo header)!\n" +
         "- Staging: MISA_IMPORT\n" +
         "- Dòng xử lý: " + catWritten + "\n" +
         "- Cập nhật / Thêm: " + (res.updated || '-') + " / " + (res.appended || '-') + "\n" +
         "- Giữ Parent_SKU: " + (res.preservedParent || 0) + "\n" +
         "- TON_VARIANT meta: " + (res.variantRows || 0) + "\n" +
-        "- Có ĐVT: " + (catExtracted.meta.withDvt || 0) +
-        (dvtOk ? (" (cột ĐVT #" + (catExtracted.meta.dvtIdx + 1) + ")") : " (⚠️ không thấy cột ĐVT)") + "\n" +
+        "- Map: MaSP=[" + (labels.maHang || '—') + "] ĐVT1=[" + (labels.dvt || '—') + "] MV=[" + (labels.maVach || '—') + "]\n" +
+        "- Có ĐVT hợp lệ: " + (catExtracted.meta.withDvt || 0) +
+        (dvtOk ? (" (cột #" + (catExtracted.meta.dvtIdx + 1) + ")") : " (⚠️ không thấy cột ĐVT)") +
+        ((catExtracted.meta.skippedBadDvt || 0) ? ("\n- Bỏ ĐVT bất thường: " + catExtracted.meta.skippedBadDvt) : "") + "\n" +
         "- Chunk: " + catChunks.length + "\n" +
         "- Thời gian: " + Math.round((Date.now() - t0) / 1000) + "s\n" +
         (res.msg ? ("\n" + res.msg + "\n") : "") +
-        "[" + APP_BUILD + " / import-catalog-upsert-v2]");
+        "[" + APP_BUILD + " / import-dvt-header-map]");
       if (fileEl) fileEl.value = '';
       importPreviewState = null;
       renderImportPreview(null);
