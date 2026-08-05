@@ -254,7 +254,7 @@
     <div id="tab-admin" class="tab-content">
       <div style="display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px;">
         <button type="button" class="btn-submit" style="width:auto; padding:8px 12px;" onclick="web_switchAdminTab_('web-adm-accounts')">Quản lý tài khoản</button>
-        <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; background:#64748b;" onclick="web_switchAdminTab_('web-adm-note')">Khóa SP / MISA</button>
+        <button type="button" class="btn-submit" style="width:auto; padding:8px 12px; background:#64748b;" onclick="web_switchAdminTab_('web-adm-note')">Khóa SP / Hết hàng / MISA</button>
       </div>
       <div id="web-adm-accounts">
         <div class="card" style="border-left: 4px solid var(--primary);">
@@ -286,12 +286,18 @@
       </div>
       <div id="web-adm-note" style="display:none;">
         <div class="card">
-          <h3 style="margin-top:0;">Khóa đặt hàng &amp; Đồng bộ MISA</h3>
+          <h3 style="margin-top:0;">Khóa đặt hàng · Hết hàng · Đồng bộ MISA</h3>
           <p style="font-size:13px; color:#5f6368; line-height:1.5;">
-            Giao diện đầy đủ (Khóa SP, Hàng Mới, Biến thể, Import MISA/TON_Q7) nằm trên FE
+            Giao diện đầy đủ (Khóa SP, <b>Quản lý Hàng Hết Hàng</b>, Hàng Mới, Biến thể, Import MISA/TON_Q7) nằm trên FE
             <b>public/index.html</b> (Vercel). WebApp GAS này giữ phần tài khoản.
           </p>
-          <p style="font-size:12px; color:#64748b;">Backend: cột <code>TON_VARIANT.IsLocked</code> + API <code>updateProductLockStatus</code>.</p>
+          <p style="font-size:12px; color:#64748b; line-height:1.55;">
+            Backend:
+            <code>TON_VARIANT.IsLocked</code> + <code>updateProductLockStatus</code>;
+            <code>TON_VARIANT.IsOutStock</code> + <code>markOutOfStockBatch</code> /
+            <code>markInStockBatch</code> / <code>getOutOfStockList</code>
+            (báo hết hàng tự gỡ <code>IsNew</code>; cờ được bảo tồn khi import MISA).
+          </p>
         </div>
       </div>
     </div>

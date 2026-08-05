@@ -13,12 +13,12 @@ var CACHE_TON_Q7_KEY = "ton_q7_map_v2";
 // MASTER Cha–Con + stock biến thể: KHÔNG được sheet.clear() khi import MISA / tồn
 var TON_VARIANT_SHEET_NAME = "TON_VARIANT";
 
-var CACHE_TON_VARIANT_KEY = "ton_variant_map_v2";
+var CACHE_TON_VARIANT_KEY = "ton_variant_map_v3_outstock";
 
 /** Staging thô từ MISA — được phép ghi đè mỗi lần import */
 var MISA_IMPORT_SHEET_NAME = "MISA_IMPORT";
 
-var TON_VARIANT_COL_COUNT = 11;
+var TON_VARIANT_COL_COUNT = 12;
 
 var TON_VARIANT_HEADERS = [
   "Key",            // A: mã SP (không gắn |ĐVT)
@@ -31,7 +31,8 @@ var TON_VARIANT_HEADERS = [
   "MaVach",         // H
   "DonViTinh",      // I
   "UpdatedAt",      // J
-  "IsLocked"        // K: TRUE/FALSE — khóa đặt hàng (giữ khi import MISA)
+  "IsLocked",       // K: TRUE/FALSE — khóa đặt hàng (giữ khi import MISA)
+  "IsOutStock"      // L: TRUE/FALSE — hết hàng (giữ khi import MISA; hết hàng → gỡ IsNew)
 ];
 
 var CATALOG_PARENT_HEADER = "Parent_SKU";
@@ -44,12 +45,23 @@ var CATALOG_COL_COUNT = 11; // A..K: ... Parent_SKU | IsNew
 /** Parse cờ TRUE/FALSE / 1 / x trên sheet */
 function parseTonVariantLocked_(raw) {
   var s = String(raw == null ? "" : raw).trim().toLowerCase();
-  return s === "1" || s === "true" || s === "yes" || s === "x" || s === "locked" || s === "khoa";
+  return s === "1" || s === "true" || s === "yes" || s === "x" || s === "locked" || s === "khoa" ||
+    s === "out" || s === "hethang" || s === "het hang" || s === "outofstock";
 }
 
 
 function tonVariantLockedCell_(isLocked) {
   return isLocked ? "TRUE" : "FALSE";
+}
+
+
+function parseTonVariantOutStock_(raw) {
+  return parseTonVariantLocked_(raw);
+}
+
+
+function tonVariantOutStockCell_(isOutStock) {
+  return isOutStock ? "TRUE" : "FALSE";
 }
 
 
@@ -165,7 +177,7 @@ function getOrCreateTonVariantSheet_(ss) {
 }
 
 
-/** Migrate sheet cũ → schema đối soát 11 cột (có IsLocked) */
+/** Migrate sheet cũ → schema đối soát 12 cột (IsLocked + IsOutStock) */
 function ensureTonVariantSchema_(sh) {
   if (!sh) return;
   var lastCol = Math.max(sh.getLastColumn(), 1);
@@ -175,7 +187,7 @@ function ensureTonVariantSchema_(sh) {
   var h2 = normalizeHeaderText(header[2]);
   var alreadyNew = h1.indexOf("parent") !== -1 && (h2.indexOf("tonbandau") !== -1 || h2.indexOf("bandau") !== -1);
   if (alreadyNew) {
-    // Đảm bảo header chuẩn 11 cột; không đụng dữ liệu — IsLocked cũ giữ nguyên
+    // Đảm bảo header chuẩn 12 cột; không đụng dữ liệu — IsLocked / IsOutStock cũ giữ nguyên
     sh.getRange(1, 1, 1, TON_VARIANT_COL_COUNT).setValues([TON_VARIANT_HEADERS])
       .setFontWeight("bold").setBackground("#cfe2f3");
     return;
@@ -205,6 +217,7 @@ function ensureTonVariantSchema_(sh) {
         String(old[i][4] || "").trim(),
         dvtOld,
         old[i][6] || new Date(),
+        "FALSE",
         "FALSE"
       ]);
     }
@@ -270,6 +283,7 @@ function persistTonVariantByKeyNoClear_(ss, dirtyByKey) {
     if (!String(row.d || "").trim()) row.d = dvtFromStockKey_(k) || "";
     row.tonHienTai = calcTonHienTaiVariant_(row.tonBanDau, row.daXuat, row.daNhanNhap);
     var locked = row.isLocked === true;
+    var outStock = row.isOutStock === true;
     var vals = [
       canonK,
       row.p || "",
@@ -281,7 +295,8 @@ function persistTonVariantByKeyNoClear_(ss, dirtyByKey) {
       row.mv || "",
       row.d || "",
       now,
-      tonVariantLockedCell_(locked)
+      tonVariantLockedCell_(locked),
+      tonVariantOutStockCell_(outStock)
     ];
     var sheetRow = rowIndexByKey[canonK];
     if (sheetRow === undefined) sheetRow = rowIndexByKey[k];
@@ -335,6 +350,7 @@ function readTonVariantByKeyMap_(ss) {
     if (!ck) continue;
     var dCol = String(existing[r][8] || "").trim() || dvtFromStockKey_(ek);
     var lockedFlag = parseTonVariantLocked_(existing[r].length > 10 ? existing[r][10] : "");
+    var outStockFlag = parseTonVariantOutStock_(existing[r].length > 11 ? existing[r][11] : "");
     var cand = {
       k: ck,
       p: String(existing[r][1] || "").trim(),
@@ -345,14 +361,15 @@ function readTonVariantByKeyMap_(ss) {
       th: String(existing[r][6] || "").trim(),
       mv: String(existing[r][7] || "").trim(),
       d: dCol,
-      isLocked: lockedFlag
+      isLocked: lockedFlag,
+      isOutStock: outStockFlag
     };
     var prev = byKey[ck];
     if (!prev) {
       byKey[ck] = cand;
       continue;
     }
-    // Ưu tiên dòng Key không hậu tố; gộp Da_Xuat / meta / IsLocked (OR)
+    // Ưu tiên dòng Key không hậu tố; gộp Da_Xuat / meta / IsLocked / IsOutStock (OR)
     var prevWasBare = String(prev.k) === ck && ek.indexOf("|") === -1;
     if (!prevWasBare && ek.indexOf("|") === -1) {
       cand.daXuat = Math.max(cand.daXuat, prev.daXuat);
@@ -362,6 +379,7 @@ function readTonVariantByKeyMap_(ss) {
       if (!cand.mv && prev.mv) cand.mv = prev.mv;
       if (!cand.d && prev.d) cand.d = prev.d;
       cand.isLocked = !!(cand.isLocked || prev.isLocked);
+      cand.isOutStock = !!(cand.isOutStock || prev.isOutStock);
       cand.tonHienTai = calcTonHienTaiVariant_(cand.tonBanDau, cand.daXuat, cand.daNhanNhap);
       byKey[ck] = cand;
     } else {
@@ -372,6 +390,7 @@ function readTonVariantByKeyMap_(ss) {
       if (!prev.mv && cand.mv) prev.mv = cand.mv;
       if (!prev.d && cand.d) prev.d = cand.d;
       prev.isLocked = !!(prev.isLocked || cand.isLocked);
+      prev.isOutStock = !!(prev.isOutStock || cand.isOutStock);
       prev.k = ck;
       prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
     }
@@ -409,7 +428,7 @@ function writeTonVariantEntriesToSheet_(ss, entries) {
       if (hasQty && isNaN(qty)) qty = 0;
 
       var prev = byKey[key] || {
-        k: key, p: "", tonBanDau: 0, daXuat: 0, tonHienTai: 0, daNhanNhap: 0, th: "", mv: "", d: "", isLocked: false
+        k: key, p: "", tonBanDau: 0, daXuat: 0, tonHienTai: 0, daNhanNhap: 0, th: "", mv: "", d: "", isLocked: false, isOutStock: false
       };
       prev.k = key;
       // Chỉ cập nhật Ton_Ban_Dau khi payload có qty — GIỮ Da_Xuat trừ khi resetExport=true
@@ -429,11 +448,16 @@ function writeTonVariantEntriesToSheet_(ss, entries) {
       if (th) prev.th = th;
       if (mv) prev.mv = mv;
       if (d) prev.d = d;
-      // BẮT BUỘC GIỮ IsLocked khi import MISA/tồn — chỉ ghi đè khi payload gửi rõ isLocked
+      // BẮT BUỘC GIỮ IsLocked / IsOutStock khi import MISA/tồn — chỉ ghi đè khi payload gửi rõ
       if (ent.isLocked !== undefined && ent.isLocked !== null && ent.isLocked !== "") {
         prev.isLocked = ent.isLocked === true || parseTonVariantLocked_(ent.isLocked);
       } else if (prev.isLocked === undefined) {
         prev.isLocked = false;
+      }
+      if (ent.isOutStock !== undefined && ent.isOutStock !== null && ent.isOutStock !== "") {
+        prev.isOutStock = ent.isOutStock === true || parseTonVariantOutStock_(ent.isOutStock);
+      } else if (prev.isOutStock === undefined) {
+        prev.isOutStock = false;
       }
       byKey[key] = prev;
       dirty[key] = prev;
@@ -679,6 +703,7 @@ function dedupeTonVariantSheet_(ss) {
     var dCol = String(data[i][8] || "").trim() || dvtFromStockKey_(raw);
     var isBare = raw.indexOf("|") === -1;
     var lockedCell = tonVariantLockedCell_(parseTonVariantLocked_(data[i].length > 10 ? data[i][10] : ""));
+    var outStockCell = tonVariantOutStockCell_(parseTonVariantOutStock_(data[i].length > 11 ? data[i][11] : ""));
     var cand = [
       ck,
       String(data[i][1] || "").trim(),
@@ -690,7 +715,8 @@ function dedupeTonVariantSheet_(ss) {
       String(data[i][7] || "").trim(),
       dCol,
       data[i][9] || new Date(),
-      lockedCell
+      lockedCell,
+      outStockCell
     ];
     if (!Object.prototype.hasOwnProperty.call(byCanon, ck)) {
       byCanon[ck] = cand;
@@ -699,9 +725,12 @@ function dedupeTonVariantSheet_(ss) {
     }
     removed++;
     var prev = byCanon[ck];
-    // Ưu tiên dòng Key trần (không |ĐVT); gộp xuất/nhập; IsLocked = OR
+    // Ưu tiên dòng Key trần (không |ĐVT); gộp xuất/nhập; IsLocked / IsOutStock = OR
     var lockedMerged = tonVariantLockedCell_(
       parseTonVariantLocked_(prev[10]) || parseTonVariantLocked_(cand[10])
+    );
+    var outStockMerged = tonVariantOutStockCell_(
+      parseTonVariantOutStock_(prev[11]) || parseTonVariantOutStock_(cand[11])
     );
     if (isBare) {
       cand[3] = Math.max(Number(cand[3]) || 0, Number(prev[3]) || 0);
@@ -711,6 +740,7 @@ function dedupeTonVariantSheet_(ss) {
       if (!cand[7] && prev[7]) cand[7] = prev[7];
       if (!cand[8] && prev[8]) cand[8] = prev[8];
       cand[10] = lockedMerged;
+      cand[11] = outStockMerged;
       cand[4] = calcTonHienTaiVariant_(cand[2], cand[3], cand[5]);
       byCanon[ck] = cand;
     } else {
@@ -722,6 +752,7 @@ function dedupeTonVariantSheet_(ss) {
       if (!prev[8] && cand[8]) prev[8] = cand[8];
       prev[0] = ck;
       prev[10] = lockedMerged;
+      prev[11] = outStockMerged;
       prev[4] = calcTonHienTaiVariant_(prev[2], prev[3], prev[5]);
     }
   }
@@ -1339,11 +1370,24 @@ function buildCatalogFromSheet_(ss) {
       if (fallbackDvt !== "") dvt = fallbackDvt;
     }
     if (tenHang === "" && maHang !== "") tenHang = tenHangChuanTheoMa[maHang.toUpperCase()] || "";
-    if (!maHang && !maVach) continue;
-    var obj = { maHang: maHang, maVach: maVach, tenHang: tenHang, dvt: dvt || "", parentSku: parentSku || "", isNew: isNewFlag, isLocked: false };
+    // Chuẩn hóa MH/MV (giữ Đ/đ, xử lý .0 / scientific) — phục hồi quét mã vạch 893…
+    var mhNorm = normalizeProductCode(maHang) || String(maHang || "").trim();
+    var mvNorm = normalizeProductCode(maVach) || String(maVach || "").trim();
+    if (!mhNorm && !mvNorm) continue;
+    var parentNorm = normalizeProductCode(parentSku) || String(parentSku || "").trim();
+    var obj = {
+      maHang: mhNorm || maHang,
+      maVach: mvNorm || maVach,
+      tenHang: tenHang,
+      dvt: dvt || "",
+      parentSku: parentNorm || parentSku || "",
+      isNew: isNewFlag,
+      isLocked: false,
+      isOutStock: false
+    };
     // Primary key = Mã SP (maHang). Không để barcode ghi đè SKU của sản phẩm khác.
-    var mhU = maHang ? String(maHang).trim().toUpperCase() : "";
-    var mvU = maVach ? String(maVach).trim().toUpperCase() : "";
+    var mhU = mhNorm ? String(mhNorm).trim().toUpperCase() : "";
+    var mvU = mvNorm ? String(mvNorm).trim().toUpperCase() : "";
     if (mhU) danhMucHangHoa[mhU] = obj;
     if (mvU) {
       var occupied = danhMucHangHoa[mvU];
@@ -1397,8 +1441,10 @@ function getCatalogLookup(ss) {
     if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
     var item = danhMuc[key];
     if (!item) continue;
-    if (item.maHang) lookup.byMaHang[String(item.maHang).trim().toUpperCase()] = item;
-    if (item.maVach) lookup.byMaVach[String(item.maVach).trim().toUpperCase()] = item;
+    var mhKey = normalizeProductCode(item.maHang) || String(item.maHang || "").trim().toUpperCase();
+    var mvKey = normalizeProductCode(item.maVach) || String(item.maVach || "").trim().toUpperCase();
+    if (mhKey) lookup.byMaHang[mhKey] = item;
+    if (mvKey) lookup.byMaVach[mvKey] = item;
   }
   return lookup;
 }
@@ -1406,8 +1452,8 @@ function getCatalogLookup(ss) {
 
 function resolveCatalogProduct(lookup, maHang, maVach) {
   if (!lookup) return null;
-  var mv = String(maVach || "").trim().toUpperCase();
-  var mh = String(maHang || "").trim().toUpperCase();
+  var mh = normalizeProductCode(maHang) || String(maHang || "").trim().toUpperCase();
+  var mv = normalizeProductCode(maVach) || String(maVach || "").trim().toUpperCase();
   // Ưu tiên Mã SP (primary key) khi có — tránh lệch tên/MV khi barcode trùng SKU khác
   if (mh && lookup.byMaHang[mh]) return lookup.byMaHang[mh];
   if (mv && lookup.byMaVach[mv]) return lookup.byMaVach[mv];
@@ -1712,6 +1758,10 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
         if (!existing.dvt && row.d) existing.dvt = row.d;
         if (!existing.maVach && mv) existing.maVach = mv;
         if (row.isLocked) existing.isLocked = true;
+        if (row.isOutStock) {
+          existing.isOutStock = true;
+          existing.isNew = false;
+        }
         continue;
       }
       var obj = {
@@ -1722,6 +1772,7 @@ function mergeTonVariantChildrenIntoCatalog_(ss, danhMuc) {
         parentSku: parentSku,
         isNew: false,
         isLocked: !!row.isLocked,
+        isOutStock: !!row.isOutStock,
         fromTonVariant: true
       };
       if (mhU) danhMuc[mhU] = obj;
@@ -2432,6 +2483,9 @@ function getCatalogData(forceRefresh) {
     try {
       applyProductLocksToCatalog_(getSS(), danhMuc);
     } catch (eLock) {}
+    try {
+      applyProductOutOfStockToCatalog_(getSS(), danhMuc);
+    } catch (eOut) {}
     var keys = 0;
     for (var k in danhMuc) {
       if (Object.prototype.hasOwnProperty.call(danhMuc, k)) keys++;
@@ -2520,7 +2574,7 @@ function updateProductLockStatus_(payload) {
         if (!key && ent.k) key = canonicalizeTonVariantKey_(ent.k);
         if (!key) continue;
         var prev = byKey[key] || {
-          k: key, p: "", tonBanDau: 0, daXuat: 0, tonHienTai: 0, daNhanNhap: 0, th: "", mv: "", d: "", isLocked: false
+          k: key, p: "", tonBanDau: 0, daXuat: 0, tonHienTai: 0, daNhanNhap: 0, th: "", mv: "", d: "", isLocked: false, isOutStock: false
         };
         prev.k = key;
         var p = String(ent.parentSku || ent.p || "").trim();
@@ -2544,6 +2598,7 @@ function updateProductLockStatus_(payload) {
           } catch (eCat) {}
         }
         prev.isLocked = ent.isLocked === true || parseTonVariantLocked_(ent.isLocked);
+        if (prev.isOutStock === undefined) prev.isOutStock = false;
         prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
         byKey[key] = prev;
         dirty[key] = prev;
@@ -2562,6 +2617,225 @@ function updateProductLockStatus_(payload) {
     }
   } catch (e) {
     return { success: false, error: e.message || String(e) };
+  }
+}
+
+
+/**
+ * Gắn isOutStock từ TON_VARIANT vào catalog; hết hàng → isNew = false trên object trả về.
+ */
+function applyProductOutOfStockToCatalog_(ss, danhMuc) {
+  danhMuc = danhMuc || {};
+  ss = ss || getSS();
+  var byKey = readTonVariantByKeyMap_(ss);
+  var outByCode = {};
+  for (var k in byKey) {
+    if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
+    var row = byKey[k];
+    if (!row || !row.isOutStock) continue;
+    var mh = canonicalizeTonVariantKey_(row.k) || String(row.k || "").trim().toUpperCase();
+    var mv = normalizeProductCode(row.mv);
+    if (mh) outByCode[mh] = true;
+    if (mv) {
+      outByCode[mv] = true;
+      outByCode["MV:" + mv] = true;
+    }
+  }
+  for (var key in danhMuc) {
+    if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
+    var item = danhMuc[key];
+    if (!item) continue;
+    var mhU = String(item.maHang || "").trim().toUpperCase();
+    var mvU = normalizeProductCode(item.maVach);
+    var out = !!(outByCode[mhU] || (mvU && (outByCode[mvU] || outByCode["MV:" + mvU])));
+    item.isOutStock = out;
+    if (out) item.isNew = false;
+  }
+  return danhMuc;
+}
+
+
+/** Gỡ IsNew trên Data_Excel theo danh sách mã SP / mã vạch */
+function clearCatalogIsNewForCodes_(ss, codes) {
+  ss = ss || getSS();
+  codes = codes || [];
+  var want = {};
+  for (var i = 0; i < codes.length; i++) {
+    var c = String(codes[i] || "").trim().toUpperCase();
+    if (c) want[c] = true;
+  }
+  if (!Object.keys(want).length) return { changed: 0 };
+  var sh = ss.getSheetByName("Data_Excel");
+  if (!sh || sh.getLastRow() < 2) return { changed: 0 };
+  var width = Math.max(sh.getLastColumn(), CATALOG_COL_COUNT);
+  var values = sh.getRange(1, 1, sh.getLastRow(), width).getValues();
+  var header = values[0] || [];
+  var parentIdx = findCatalogParentColIdx_(header);
+  var mhIdx = findCatalogMaHangColIdx_(header, parentIdx);
+  if (mhIdx === -1) mhIdx = 0;
+  var mvIdx = findColumnIndexByAliases(header, ["mavach", "barcode", "barcodeid"]);
+  if (mvIdx === -1) mvIdx = 2;
+  var isNewIdx = findColumnIndexByAliases(header, ["isnew", "trangthaimoi", "hangmoi", "newflag"]);
+  if (isNewIdx === -1) isNewIdx = 10;
+  var changed = 0;
+  for (var r = 1; r < values.length; r++) {
+    var mh = String(values[r][mhIdx] == null ? "" : values[r][mhIdx]).trim().toUpperCase();
+    var mv = String(values[r][mvIdx] == null ? "" : values[r][mvIdx]).trim().toUpperCase();
+    if (!(want[mh] || want[mv])) continue;
+    var prevVal = String(values[r][isNewIdx] == null ? "" : values[r][isNewIdx]).trim();
+    if (!prevVal) continue;
+    if (!/^(1|true|yes|x|moi|new)$/i.test(prevVal)) continue;
+    values[r][isNewIdx] = "";
+    changed++;
+  }
+  if (changed) {
+    var colOut = [];
+    for (var rr = 0; rr < values.length; rr++) {
+      colOut.push([values[rr][isNewIdx] == null ? "" : values[rr][isNewIdx]]);
+    }
+    sh.getRange(1, isNewIdx + 1, colOut.length, 1).setValues(colOut);
+    try { SpreadsheetApp.flush(); } catch (eF) {}
+  }
+  return { changed: changed };
+}
+
+
+/**
+ * Upsert cờ IsOutStock trên TON_VARIANT.
+ * outOfStock=true → đồng thời gỡ IsNew trên Data_Excel.
+ */
+function updateProductOutOfStockStatus_(payload, outOfStock) {
+  try {
+    var actor = payload && payload.actor ? String(payload.actor).trim() : "";
+    requireAdmin(actor);
+    var items = [];
+    if (payload && payload.items && payload.items.length) items = payload.items;
+    else if (payload) items = [payload];
+    if (!items.length) return { success: false, error: "Thiếu danh sách sản phẩm." };
+
+    var ss = getSS();
+    var lock = LockService.getDocumentLock();
+    lock.waitLock(20000);
+    try {
+      var byKey = readTonVariantByKeyMap_(ss);
+      var dirty = {};
+      var updated = 0;
+      var clearCodes = [];
+      for (var i = 0; i < items.length; i++) {
+        var ent = items[i];
+        if (!ent) continue;
+        var mh = String(ent.maHang || ent.mh || ent.maSP || "").trim();
+        var key = buildTonVariantKey_(mh, ent.dvt || ent.d || "");
+        if (!key && ent.k) key = canonicalizeTonVariantKey_(ent.k);
+        if (!key) continue;
+        var prev = byKey[key] || {
+          k: key, p: "", tonBanDau: 0, daXuat: 0, tonHienTai: 0, daNhanNhap: 0, th: "", mv: "", d: "", isLocked: false, isOutStock: false
+        };
+        prev.k = key;
+        var p = String(ent.parentSku || ent.p || "").trim();
+        var th = String(ent.tenHang || ent.th || "").trim();
+        var mv = String(ent.maVach || ent.mv || "").trim();
+        var d = String(ent.dvt || ent.d || "").trim();
+        if (p) prev.p = p;
+        if (th) prev.th = th;
+        if (mv) prev.mv = mv;
+        if (d) prev.d = d;
+        if (!prev.th || !prev.mv || !prev.d || !prev.p) {
+          try {
+            var catLookup = getCatalogLookup(ss);
+            var cat = resolveCatalogProduct(catLookup, mh || key, mv);
+            if (cat) {
+              if (!prev.th && cat.tenHang) prev.th = cat.tenHang;
+              if (!prev.mv && cat.maVach) prev.mv = cat.maVach;
+              if (!prev.d && cat.dvt) prev.d = cat.dvt;
+              if (!prev.p && cat.parentSku) prev.p = cat.parentSku;
+            }
+          } catch (eCat) {}
+        }
+        if (prev.isLocked === undefined) prev.isLocked = false;
+        prev.isOutStock = outOfStock === true;
+        prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
+        byKey[key] = prev;
+        dirty[key] = prev;
+        updated++;
+        if (outOfStock) {
+          if (mh) clearCodes.push(mh);
+          if (prev.mv) clearCodes.push(prev.mv);
+          if (mv) clearCodes.push(mv);
+        }
+      }
+      if (!updated) return { success: false, error: "Không có mã hợp lệ để cập nhật." };
+      persistTonVariantByKeyNoClear_(ss, dirty);
+      var clearedNew = { changed: 0 };
+      if (outOfStock) {
+        try { clearedNew = clearCatalogIsNewForCodes_(ss, clearCodes); } catch (eClear) {}
+      }
+      invalidateCatalogCache_();
+      return {
+        success: true,
+        updated: updated,
+        clearedIsNew: clearedNew.changed || 0,
+        isOutStock: !!outOfStock,
+        msg: outOfStock
+          ? ("Đã báo hết hàng " + updated + " SP" + (clearedNew.changed ? ("; gỡ IsNew " + clearedNew.changed + " dòng") : "") + ".")
+          : ("Đã gỡ báo hết hàng / bán lại " + updated + " sản phẩm.")
+      };
+    } finally {
+      try { lock.releaseLock(); } catch (eL2) {}
+    }
+  } catch (e) {
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+
+function markOutOfStockBatch_(payload) {
+  return updateProductOutOfStockStatus_(payload || {}, true);
+}
+
+
+function markInStockBatch_(payload) {
+  return updateProductOutOfStockStatus_(payload || {}, false);
+}
+
+
+/** Danh sách mã đang hết hàng (Admin) */
+function getOutOfStockList_(query, limit) {
+  try {
+    var lim = Number(limit);
+    if (isNaN(lim) || lim <= 0) lim = 500;
+    lim = Math.min(lim, 2000);
+    var qRaw = String(query || "").trim().toLowerCase();
+    var ss = getSS();
+    var byKey = readTonVariantByKeyMap_(ss);
+    var items = [];
+    for (var k in byKey) {
+      if (!Object.prototype.hasOwnProperty.call(byKey, k)) continue;
+      var row = byKey[k];
+      if (!row || !row.isOutStock) continue;
+      var mh = canonicalizeTonVariantKey_(row.k) || String(row.k || "").trim();
+      var mv = String(row.mv || "").trim();
+      var th = String(row.th || "").trim();
+      if (qRaw) {
+        var hay = (mh + " " + mv + " " + th).toLowerCase();
+        if (hay.indexOf(qRaw) === -1) continue;
+      }
+      items.push({
+        maHang: mh,
+        maVach: mv,
+        tenHang: th,
+        dvt: String(row.d || "").trim(),
+        parentSku: String(row.p || "").trim(),
+        isOutStock: true
+      });
+      if (items.length >= lim) break;
+    }
+    items.sort(function(a, b) {
+      return String(a.maHang || "").localeCompare(String(b.maHang || ""), "vi");
+    });
+    return { success: true, items: items, count: items.length };
+  } catch (e) {
+    return { success: false, error: e.message || String(e), items: [] };
   }
 }
 
@@ -2704,13 +2978,31 @@ function getNewProductsList(limit) {
     var cached = getCacheJson_(cache, cacheKey);
     if (cached && cached.success && cached.data) return cached;
 
-    var data = getAutoNewProductsList_(getSS(), lim);
+    var ssNp = getSS();
+    var data = getAutoNewProductsList_(ssNp, lim);
+    // Loại SP đang hết hàng khỏi danh sách Hàng Mới
+    try {
+      var outMap = readTonVariantByKeyMap_(ssNp);
+      data = (data || []).filter(function(it) {
+        if (!it) return false;
+        var mh = String(it.maHang || "").trim().toUpperCase();
+        var mv = normalizeProductCode(it.maVach);
+        var row = (mh && outMap[mh]) || null;
+        if (!row && mv) {
+          for (var ok in outMap) {
+            if (!Object.prototype.hasOwnProperty.call(outMap, ok)) continue;
+            if (normalizeProductCode(outMap[ok].mv) === mv) { row = outMap[ok]; break; }
+          }
+        }
+        return !(row && row.isOutStock);
+      });
+    } catch (eFilt) {}
     var result = {
       success: true,
       data: data,
       limit: lim,
       source: "Data_Excel",
-      strategy: "admin_isNew_only"
+      strategy: "admin_isNew_only_exclude_outstock"
     };
     try { putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS); } catch (e) {}
     return result;

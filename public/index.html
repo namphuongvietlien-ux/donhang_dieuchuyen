@@ -38,6 +38,7 @@
     .admin-panel { display:none; animation: fadeIn 0.18s ease; }
     .admin-panel.active { display:block; }
     .badge-locked { display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px; background:#fef2f2; color:#b91c1c; font-size:11px; font-weight:800; }
+    .badge-outstock { display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px; background:#fff7ed; color:#c2410c; font-size:11px; font-weight:800; border:1px solid #fdba74; }
 
     .card { background: var(--card-bg); border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); border: 1px solid rgba(226,232,240,0.9); transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; position: relative; overflow: hidden; }
     .card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--accent)); opacity: 0.9; }
@@ -835,6 +836,46 @@
             </table>
           </div>
         </div>
+
+        <div class="card" style="border-left: 4px solid #ea580c;">
+          <h3 style="margin-top:0;">⚠️ Quản lý Hàng Hết Hàng</h3>
+          <p style="font-size:13px; color:#64748b; margin-top:-4px;">
+            Báo hết hàng lưu trên <b>TON_VARIANT.IsOutStock</b> (giữ khi import MISA).
+            Khi báo hết hàng hệ thống <b>tự gỡ IsNew</b> khỏi Hàng Mới.
+          </p>
+          <div class="form-row" style="align-items:end; position:relative;">
+            <div class="form-group" style="flex:1;">
+              <label>Tìm &amp; chọn sản phẩm</label>
+              <input type="text" id="adm-outstock-q" placeholder="Gõ mã / tên / mã vạch..." autocomplete="off"
+                oninput="adm_outstock_handleSearch_(event)" onkeydown="adm_outstock_handleSearch_(event)">
+              <div id="adm-outstock-suggest" style="display:none; position:absolute; left:12px; right:180px; z-index:40; background:#fff; border:1px solid #e2e8f0; border-radius:12px; max-height:220px; overflow:auto; box-shadow:0 12px 28px rgba(15,23,42,.12);"></div>
+            </div>
+            <div class="form-group" style="max-width:200px;">
+              <button type="button" class="btn-submit btn-danger" style="width:100%;" onclick="adm_outstock_addSelected_()">➕ Thêm Vào DS Hết Hàng</button>
+            </div>
+          </div>
+          <div class="form-row" style="align-items:center; gap:8px; margin-top:4px;">
+            <button type="button" class="btn-submit btn-compact" onclick="adm_outstock_reload_()">↻ Tải DS hết hàng</button>
+            <div id="adm-outstock-meta" style="font-size:12px; color:#64748b; flex:1;">Chưa tải danh sách hết hàng.</div>
+          </div>
+          <div id="adm-outstock-selected" style="display:none; margin:8px 0; padding:10px 12px; border-radius:10px; background:#fff7ed; border:1px solid #fed7aa; font-size:13px;"></div>
+          <div style="overflow-x:auto; max-height:320px; border:1px solid #e2e8f0; border-radius:10px;">
+            <table style="min-width:720px; margin:0;">
+              <thead>
+                <tr>
+                  <th>Mã hàng</th>
+                  <th>Mã vạch</th>
+                  <th>Tên sản phẩm</th>
+                  <th style="width:80px;">ĐVT</th>
+                  <th style="width:160px; text-align:center;">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="adm-outstock-tbody">
+                <tr><td colspan="5" style="text-align:center; color:#64748b; padding:16px;">Nhấn "Tải DS hết hàng" để xem danh sách.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- Panel 2: Đồng bộ MISA & tồn -->
@@ -946,6 +987,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260805v74-pdf-btn-sync"></script>
+  <script src="app.js?v=20260805v76-multisearch-barcode"></script>
 </body>
 </html>

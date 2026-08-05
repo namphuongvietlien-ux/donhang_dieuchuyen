@@ -61,6 +61,14 @@ function doPost(e) {
             requireAdminAction(action, payload.payload || {});
             result = updateProductLockStatus_(payload.payload || {});
             break;
+          case 'markOutOfStockBatch':
+            requireAdminAction(action, payload.payload || {});
+            result = markOutOfStockBatch_(payload.payload || {});
+            break;
+          case 'markInStockBatch':
+            requireAdminAction(action, payload.payload || {});
+            result = markInStockBatch_(payload.payload || {});
+            break;
           case 'doiMatKhau':
             result = doiMatKhau(payload.payload || {});
             break;
@@ -266,6 +274,9 @@ function doGet(e) {
         case 'getCatalogIsNewAdminList':
           // Default cao: quét gần như toàn bộ catalog (FE Admin Hàng Mới)
           res = getCatalogIsNewAdminList_(e.parameter.q || '', e.parameter.limit || 20000);
+          break;
+        case 'getOutOfStockList':
+          res = getOutOfStockList_(e.parameter.q || '', e.parameter.limit || 500);
           break;
         case 'getVariantStockList':
           res = getVariantStockList(e.parameter.parentSku || e.parameter.parent || '');

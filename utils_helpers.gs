@@ -641,6 +641,12 @@ function getCellValue(row, index, fallback) {
   if (!row || index === undefined || index === null || index < 0 || index >= row.length) return fallback;
   var value = row[index];
   if (value === null || value === undefined || value === "") return fallback;
+  // Barcode/SKU dạng số từ Excel — không để scientific notation phá tìm kiếm mã vạch
+  if (typeof value === "number" && isFinite(value)) {
+    if (Math.floor(value) === value && Math.abs(value) < 1e16) {
+      return String(Math.round(value));
+    }
+  }
   return String(value).trim();
 }
 
@@ -811,11 +817,25 @@ function parseQuantityValue(value) {
 
 function normalizeProductCode(value) {
   if (value === null || value === undefined) return "";
+  // Số Excel thuần (barcode/SKU) — tránh String() ra dạng 8.93e+12
+  if (typeof value === "number" && isFinite(value)) {
+    if (Math.floor(value) === value && Math.abs(value) < 1e16) {
+      value = String(Math.round(value));
+    }
+  }
   var text = String(value).trim();
   if (!text) return "";
 
   if (text.charAt(0) === "'") text = text.slice(1);
   text = text.replace(/\u00A0/g, "").replace(/\s+/g, "");
+
+  // Excel scientific notation: 8.93E+12 / 8.93e+12
+  if (/^[+-]?\d+(\.\d+)?e[+-]?\d+$/i.test(text)) {
+    var sciNum = Number(text);
+    if (isFinite(sciNum) && Math.abs(sciNum) < 1e16) {
+      text = String(Math.round(sciNum));
+    }
+  }
 
   // Số Excel kiểu 12345.0 / 1.234.567 — xử lý trước khi lọc ký tự
   var upperProbe = text.toUpperCase();
@@ -988,7 +1008,7 @@ function requireAuthenticatedAction(payload) {
 
 
 function requireAdminAction(action, payload) {
-  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin', 'removeDuplicateStockRows', 'saveCatalogIsNewFlags', 'saveChildVariants', 'updateProductLockStatus'];
+  var adminActions = ['taoTaiKhoanMoi', 'nhapKhauCapNhatThongTin', 'removeDuplicateStockRows', 'saveCatalogIsNewFlags', 'saveChildVariants', 'updateProductLockStatus', 'markOutOfStockBatch', 'markInStockBatch'];
   if (adminActions.indexOf(action) !== -1 && !isAdminActor(payload && payload.actor ? payload.actor : "")) {
     throw new Error("Chỉ quản trị viên được phép thực hiện thao tác này.");
   }
