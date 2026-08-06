@@ -1709,6 +1709,13 @@ function applyStockDeductionAfterReceive(historySheet, confirmations, soPhieu, r
       tonMat[updateRows[w] - minR][0] = stockUpdates[updateRows[w]];
     }
     stockSheet.getRange(minR, tonCol, numRows, 1).setValues(tonMat);
+
+    // FIFO STOCK_LOTS + sync TON_Q7 (cùng DocumentLock đang giữ)
+    try {
+      applyFifoStockOutFromConfirmations_(ss, historySheet, confirmations, soPhieu, rowCache);
+    } catch (eFifoRecv) {
+      Logger.log("FIFO after receive: " + (eFifoRecv.message || eFifoRecv));
+    }
   } catch (err) {
     Logger.log("applyStockDeductionAfterReceive error: " + (err.message || err));
     throw err;
@@ -2207,6 +2214,8 @@ function luuSoSoanHangVaAnh(payload) {
       }
       if (variantExportLines.length) {
         try { applyTonVariantExportBatch_(ss, variantExportLines); } catch (eVarExp) { Logger.log(eVarExp); }
+        // FIFO trừ lô STOCK_LOTS + TON_Q7 (đã trong DocumentLock)
+        try { applyFifoStockOutBatch_(ss, variantExportLines, { acquireLock: false }); } catch (eFifoPack) { Logger.log(eFifoPack); }
       }
 
       SpreadsheetApp.flush();
