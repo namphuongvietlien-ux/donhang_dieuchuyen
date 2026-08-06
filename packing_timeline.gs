@@ -243,6 +243,8 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
     var slThucTe = row[8];
     var displayStatus = getDisplayOrderStatus(rowStatus, slThucTe, row[15]);
+    var isDupCancel = rowStatus === "Hủy (Trùng đơn)";
+    var isLineCancel = rowStatus === "Đã hủy dòng" || rowStatus === "Đã hủy đơn" || isDupCancel;
 
     if (!map[soPhieu]) {
       map[soPhieu] = {
@@ -254,8 +256,11 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
         hasConfirmed: false,
         hasCancelled: false,
         hasOpen: false,
+        isDuplicateCancelled: false,
         inMain: false,
-        inSupp: false
+        inSupp: false,
+        totalQty: 0,
+        skuQty: {}
       };
     }
 
@@ -263,12 +268,21 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
     // Theo dõi trạng thái để trả FE — KHÔNG dùng để loại đơn
     if (displayStatus === "Đã xác nhận") entry.hasConfirmed = true;
     else if (displayStatus === "Đã soạn") entry.hasPacked = true;
-    else if (displayStatus === "Đã hủy" || displayStatus === "Đã hủy dòng") entry.hasCancelled = true;
-    else entry.hasOpen = true;
+    else if (displayStatus === "Đã hủy" || displayStatus === "Đã hủy dòng" || isDupCancel) {
+      entry.hasCancelled = true;
+      if (isDupCancel) entry.isDuplicateCancelled = true;
+    } else entry.hasOpen = true;
 
     // Giữ mốc createdAt sớm nhất (gốc) — không bị lệch khi sửa/soạn sau 10h
     if (!isNaN(createdMs) && (isNaN(entry.createdAtMs) || createdMs < entry.createdAtMs)) {
       entry.createdAtMs = createdMs;
+    }
+    // Gom SL + MaSP cho phát hiện trùng (bỏ dòng hủy)
+    if (!isLineCancel) {
+      var slLine = Number(row[7]) || 0;
+      entry.totalQty += slLine;
+      var mhKey = normalizeOrderCodeText(row[4] || "");
+      if (mhKey) entry.skuQty[mhKey] = (entry.skuQty[mhKey] || 0) + slLine;
     }
   }
 
@@ -276,6 +290,8 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
   var storesWithMain = {};
   for (var key in map) {
     var item = map[key];
+    // Đơn đã hủy vì trùng — gạt khỏi bảng soạn hàng
+    if (item.isDuplicateCancelled && !item.hasOpen && !item.hasPacked && !item.hasConfirmed) continue;
     // Phân ca theo createdAt gốc của đơn
     item.inMain = isInPackingMainWindow_(item.createdAtMs, win);
     item.inSupp = isInPackingSuppWindow_(item.createdAtMs, win);
@@ -299,6 +315,8 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
       packingBucket: bucket,
       packingBucketLabel: bucketLabel,
       groupKey: knKey,
+      totalQty: item.totalQty || 0,
+      skuSignature: buildOrderSkuSignature_(item.skuQty || {}),
       trangThai: statusMeta.trangThai,
       status: statusMeta.status,
       statusTone: statusMeta.statusTone,
@@ -306,6 +324,7 @@ function getEligibleOrdersForSoanHang(baseDate, userRole, userStore, historyPack
       alreadyPacked: !!statusMeta.alreadyPacked
     });
   }
+  attachDuplicateSuspects_(orders);
 
   // Mode tổng hợp: gắn cờ gộp khi kho nhận đã có đơn chính + đơn bổ sung trong cùng ca
   if (mode === "total") {
@@ -892,19 +911,52 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
       if (!isSameStoreName(khoXuat, filterStore) && !isSameStoreName(khoNhan, filterStore)) continue;
     }
     var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
-    if (rowStatus === "Đã hủy đơn") continue;
+    if (rowStatus === "Đã hủy đơn" || rowStatus === "Hủy (Trùng đơn)") continue;
+    var isLineCancel = rowStatus === "Đã hủy dòng";
 
     if (!map[soPhieu]) {
       map[soPhieu] = {
         soPhieu: soPhieu,
         khoXuat: khoXuat,
         khoNhan: khoNhan,
-        createdAtMs: createdMs
+        createdAtMs: createdMs,
+        totalQty: 0,
+        skuQty: {}
       };
     } else if (createdMs < map[soPhieu].createdAtMs) {
       map[soPhieu].createdAtMs = createdMs;
       if (khoXuat) map[soPhieu].khoXuat = khoXuat;
       if (khoNhan) map[soPhieu].khoNhan = khoNhan;
+    }
+    if (!isLineCancel) {
+      var slCal = Number(row[7]) || 0;
+      map[soPhieu].totalQty += slCal;
+      var mhCal = normalizeOrderCodeText(row[4] || "");
+      if (mhCal) map[soPhieu].skuQty[mhCal] = (map[soPhieu].skuQty[mhCal] || 0) + slCal;
+    }
+  }
+
+  // Gắn nghi trùng trên toàn bộ đơn tuần (trước khi chia ngày)
+  var weekOrderList = [];
+  for (var spAll in map) {
+    if (!Object.prototype.hasOwnProperty.call(map, spAll)) continue;
+    var mo = map[spAll];
+    weekOrderList.push({
+      soPhieu: mo.soPhieu,
+      khoXuat: mo.khoXuat,
+      khoNhan: mo.khoNhan,
+      createdAt: mo.createdAtMs,
+      thoiGianDatMillis: mo.createdAtMs,
+      totalQty: mo.totalQty || 0,
+      skuSignature: buildOrderSkuSignature_(mo.skuQty || {}),
+      groupKey: normalizeStoreName(mo.khoNhan || "") || String(mo.khoNhan || "").trim()
+    });
+  }
+  attachDuplicateSuspects_(weekOrderList);
+  var dupBySoPhieu = {};
+  for (var di = 0; di < weekOrderList.length; di++) {
+    if (weekOrderList[di].duplicateSuspect) {
+      dupBySoPhieu[weekOrderList[di].soPhieu] = weekOrderList[di].duplicateSuspect;
     }
   }
 
@@ -937,6 +989,7 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
       warehouseIndex[khoKey].orderCount++;
 
       var hh = Utilities.formatDate(new Date(ord.createdAtMs), tz, "HH:mm");
+      var dupInfo = dupBySoPhieu[ord.soPhieu] || null;
       byWh[khoKey].orders.push({
         soPhieu: ord.soPhieu,
         khoXuat: ord.khoXuat,
@@ -944,7 +997,10 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
         createdAt: ord.createdAtMs,
         createdTime: hh,
         thoiGian: formatOrderCreatedAtLabel_(ord.createdAtMs),
-        thoiGianPretty: formatOrderCreatedAtPretty_(ord.createdAtMs)
+        thoiGianPretty: formatOrderCreatedAtPretty_(ord.createdAtMs),
+        totalQty: ord.totalQty || 0,
+        duplicateSuspect: dupInfo,
+        isDuplicateSuspect: !!(dupInfo && !dupInfo.acknowledged)
       });
     }
 
@@ -994,6 +1050,351 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
     warehouses: warehousesAll,
     totalOrders: Object.keys(map).length,
     _debugTotalMs: Date.now() - t0,
-    _debugRun: "packing-week-calendar-v1-dynamic-wh"
+    _debugRun: "packing-week-calendar-v2-dup-sku"
   };
+}
+
+
+// ========== MODULE: Duplicate detector + Branch SKU history (additive) ==========
+
+function buildOrderSkuSignature_(skuQtyMap) {
+  var keys = Object.keys(skuQtyMap || {}).sort();
+  var parts = [];
+  for (var i = 0; i < keys.length; i++) {
+    parts.push(keys[i] + ":" + (Number(skuQtyMap[keys[i]]) || 0));
+  }
+  return parts.join("|");
+}
+
+function sameCalendarDayMs_(msA, msB) {
+  if (isNaN(msA) || isNaN(msB)) return false;
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+  try {
+    return Utilities.formatDate(new Date(msA), tz, "yyyy-MM-dd") ===
+      Utilities.formatDate(new Date(msB), tz, "yyyy-MM-dd");
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Cùng kho nhận + (cùng ngày hoặc ≤60 phút) + (cùng tổng SL hoặc cùng chữ ký MaSP).
+ * Gắn order.duplicateSuspect / isDuplicateSuspect (không đổi struct cũ ngoài field mới).
+ */
+function attachDuplicateSuspects_(orders) {
+  var list = orders || [];
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i];
+    if (!a || a.duplicateSuspect) continue;
+    var aMs = Number(a.thoiGianDatMillis || a.createdAt || a.createdAtMs || 0) || 0;
+    var aStore = normalizeStoreName(a.khoNhan || "") || String(a.khoNhan || a.groupKey || "").trim();
+    if (!aStore || !aMs) continue;
+    for (var j = i + 1; j < list.length; j++) {
+      var b = list[j];
+      if (!b) continue;
+      var bMs = Number(b.thoiGianDatMillis || b.createdAt || b.createdAtMs || 0) || 0;
+      var bStore = normalizeStoreName(b.khoNhan || "") || String(b.khoNhan || b.groupKey || "").trim();
+      if (!bStore || !bMs) continue;
+      if (!isSameStoreName(aStore, bStore)) continue;
+      var deltaMin = Math.abs(aMs - bMs) / 60000;
+      var timeOk = sameCalendarDayMs_(aMs, bMs) || deltaMin <= 60;
+      if (!timeOk) continue;
+      var qtyA = Number(a.totalQty || 0);
+      var qtyB = Number(b.totalQty || 0);
+      var sameQty = qtyA > 0 && qtyA === qtyB;
+      var sigA = String(a.skuSignature || "");
+      var sigB = String(b.skuSignature || "");
+      var sameSku = !!(sigA && sigB && sigA === sigB);
+      if (!sameQty && !sameSku) continue;
+      var reason = sameSku && sameQty ? "cùng danh mục mã & tổng SL" :
+        (sameSku ? "cùng danh mục mã hàng" : "cùng tổng số lượng");
+      var aUi = formatOrderTimestampUi_(aMs) || formatOrderCreatedAtPretty_(aMs) || "";
+      var bUi = formatOrderTimestampUi_(bMs) || formatOrderCreatedAtPretty_(bMs) || "";
+      if (!a.duplicateSuspect) {
+        a.duplicateSuspect = {
+          peerSoPhieu: b.soPhieu,
+          peerCreatedAt: bMs,
+          peerCreatedUi: bUi,
+          reason: reason,
+          acknowledged: isDuplicateAcknowledged_(a.soPhieu)
+        };
+        a.isDuplicateSuspect = !a.duplicateSuspect.acknowledged;
+      }
+      if (!b.duplicateSuspect) {
+        b.duplicateSuspect = {
+          peerSoPhieu: a.soPhieu,
+          peerCreatedAt: aMs,
+          peerCreatedUi: aUi,
+          reason: reason,
+          acknowledged: isDuplicateAcknowledged_(b.soPhieu)
+        };
+        b.isDuplicateSuspect = !b.duplicateSuspect.acknowledged;
+      }
+    }
+    if (a.duplicateSuspect && a.duplicateSuspect.acknowledged) a.isDuplicateSuspect = false;
+  }
+  return list;
+}
+
+function isDuplicateAcknowledged_(soPhieu) {
+  try {
+    var key = "dup_ack_" + normalizeOrderCodeText(soPhieu || "");
+    if (!key || key === "dup_ack_") return false;
+    var raw = PropertiesService.getDocumentProperties().getProperty(key);
+    return !!raw;
+  } catch (e) {
+    return false;
+  }
+}
+
+function acknowledgeDuplicateOrder_(soPhieu, actor) {
+  try {
+    var code = String(soPhieu || "").trim();
+    if (!code) return { success: false, error: "Thiếu số phiếu." };
+    var key = "dup_ack_" + normalizeOrderCodeText(code);
+    PropertiesService.getDocumentProperties().setProperty(key, JSON.stringify({
+      at: Date.now(),
+      actor: String(actor || ""),
+      soPhieu: code
+    }));
+    try {
+      logOrderChange(getSS(), code, "Chấp nhận đơn (không trùng)", actor || "", "", "", "", "", "Ẩn cảnh báo trùng");
+    } catch (eLog) {}
+    return { success: true, soPhieu: code, acknowledged: true };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+/**
+ * Chống double-submit: cùng chi nhánh + đơn giống trong ≤5 phút.
+ */
+function checkDuplicateBeforeSave_(khoNhan, items, userRole, userStore) {
+  try {
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) return { success: true, isDuplicate: false };
+    var store = normalizeStoreName(khoNhan || userStore || "");
+    var skuQty = {};
+    var totalQty = 0;
+    var arr = items || [];
+    for (var i = 0; i < arr.length; i++) {
+      var it = arr[i];
+      if (!it) continue;
+      var sl = Number(it.sl) || 0;
+      if (sl <= 0) continue;
+      totalQty += sl;
+      var mh = normalizeOrderCodeText(it.maHang || "");
+      if (mh) skuQty[mh] = (skuQty[mh] || 0) + sl;
+    }
+    var sig = buildOrderSkuSignature_(skuQty);
+    var nowMs = Date.now();
+    var windowMs = 5 * 60 * 1000;
+    var pack = readHistoryDataPack_(historySheet, 3000);
+    var data = pack.data || [[]];
+    var map = {};
+    for (var r = 1; r < data.length; r++) {
+      var row = data[r];
+      if (!row) continue;
+      var sp = row[1] ? String(row[1]).trim() : "";
+      if (!sp) continue;
+      var st = row[12] ? String(row[12]).trim() : "Mới";
+      if (st === "Đã hủy đơn" || st === "Hủy (Trùng đơn)" || st === "Đã hủy dòng") continue;
+      var kn = row[3] ? String(row[3]).trim() : "";
+      if (store && !isSameStoreName(kn, store)) continue;
+      var cms = toHoChiMinhMillis_(row[0]);
+      if (isNaN(cms) || (nowMs - cms) > windowMs || cms > nowMs + 60000) continue;
+      if (!map[sp]) {
+        map[sp] = { soPhieu: sp, khoNhan: kn, createdAtMs: cms, totalQty: 0, skuQty: {} };
+      }
+      if (cms < map[sp].createdAtMs) map[sp].createdAtMs = cms;
+      var slR = Number(row[7]) || 0;
+      map[sp].totalQty += slR;
+      var mhR = normalizeOrderCodeText(row[4] || "");
+      if (mhR) map[sp].skuQty[mhR] = (map[sp].skuQty[mhR] || 0) + slR;
+    }
+    for (var k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+      var o = map[k];
+      var oSig = buildOrderSkuSignature_(o.skuQty);
+      var sameQty = totalQty > 0 && totalQty === o.totalQty;
+      var sameSku = !!(sig && oSig && sig === oSig);
+      if (!sameQty && !sameSku) continue;
+      var mins = Math.round(Math.abs(nowMs - o.createdAtMs) / 60000);
+      return {
+        success: true,
+        isDuplicate: true,
+        withinMinutes: mins,
+        peerSoPhieu: o.soPhieu,
+        peerCreatedAt: o.createdAtMs,
+        peerCreatedUi: formatOrderTimestampUi_(o.createdAtMs) || "",
+        khoNhan: o.khoNhan,
+        reason: sameSku && sameQty ? "cùng danh mục & tổng SL" : (sameSku ? "cùng danh mục mã" : "cùng tổng SL")
+      };
+    }
+    return { success: true, isDuplicate: false };
+  } catch (err) {
+    return { success: true, isDuplicate: false, warning: err.message || String(err) };
+  }
+}
+
+/**
+ * Lịch sử xuất MaSP của chi nhánh trong N ngày (mặc định 7) — phục vụ SKU History Checker.
+ */
+function getBranchSkuHistory_(khoNhan, excludeSoPhieu, daysBack) {
+  var t0 = Date.now();
+  try {
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) return { success: false, error: "Không có lịch sử.", bySku: {} };
+    var store = normalizeStoreName(khoNhan || "");
+    if (!store) return { success: true, bySku: {}, orders: [] };
+    var days = Number(daysBack);
+    if (!days || days < 1) days = 7;
+    if (days > 31) days = 31;
+    var today = getScriptTodayStart_() || new Date();
+    var start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1), 0, 0, 0, 0);
+    var startMs = start.getTime();
+    var exclude = normalizeOrderCodeText(excludeSoPhieu || "");
+    var pack = readHistoryDataPack_(historySheet, 6000);
+    var data = pack.data || [[]];
+    var bySku = {};
+    var orderSeen = {};
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      if (!row) continue;
+      var sp = row[1] ? String(row[1]).trim() : "";
+      if (!sp) continue;
+      if (exclude && normalizeOrderCodeText(sp) === exclude) continue;
+      var kn = row[3] ? String(row[3]).trim() : "";
+      if (!isSameStoreName(kn, store)) continue;
+      var st = row[12] ? String(row[12]).trim() : "Mới";
+      if (st === "Đã hủy đơn" || st === "Hủy (Trùng đơn)" || st === "Đã hủy dòng") continue;
+      var cms = toHoChiMinhMillis_(row[0]);
+      if (isNaN(cms) || cms < startMs) continue;
+      var mh = String(row[4] || "").trim();
+      var mhKey = normalizeOrderCodeText(mh);
+      if (!mhKey) continue;
+      var qty = Number(row[7]) || 0;
+      if (qty <= 0) continue;
+      var dvt = row[9] ? String(row[9]).trim() : "";
+      var prev = bySku[mhKey];
+      if (!prev || cms >= prev.createdAtMs) {
+        var tzHist = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+        bySku[mhKey] = {
+          maHang: mh,
+          maHangKey: mhKey,
+          qty: qty,
+          dvt: dvt,
+          soPhieu: sp,
+          createdAtMs: cms,
+          createdUi: formatOrderTimestampUi_(cms) || formatOrderCreatedAtLabel_(cms) || "",
+          dateLabel: Utilities.formatDate(new Date(cms), tzHist, "dd/MM/yyyy"),
+          storeLabel: formatStoreDisplayLabel_(kn) || kn
+        };
+      }
+      orderSeen[sp] = true;
+    }
+    return {
+      success: true,
+      khoNhan: khoNhan,
+      storeKey: store,
+      daysBack: days,
+      excludeSoPhieu: excludeSoPhieu || "",
+      bySku: bySku,
+      orderCount: Object.keys(orderSeen).length,
+      skuCount: Object.keys(bySku).length,
+      cacheKey: "bsh_v1_" + store + "_" + days,
+      _debugTotalMs: Date.now() - t0,
+      _debugRun: "branch-sku-history-v1"
+    };
+  } catch (err) {
+    return { success: false, error: err.message || String(err), bySku: {} };
+  }
+}
+
+/** Chi tiết nghi trùng cho 1 phiếu (header QL / Soạn) */
+function getOrderDuplicateInfo_(soPhieu) {
+  try {
+    var code = String(soPhieu || "").trim();
+    if (!code) return { success: false, isDuplicateSuspect: false };
+    if (isDuplicateAcknowledged_(code)) {
+      return { success: true, isDuplicateSuspect: false, acknowledged: true, soPhieu: code };
+    }
+    var info = getThongTinPhieu(code);
+    if (!info) return { success: false, isDuplicateSuspect: false, error: "Không tìm thấy phiếu." };
+    var detail = getOrderDetail(code);
+    var items = (detail && detail.items) || [];
+    var skuQty = {};
+    var totalQty = 0;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var sl = Number(it.slGoc != null ? it.slGoc : it.sl) || 0;
+      totalQty += sl;
+      var mh = normalizeOrderCodeText(it.maHang || "");
+      if (mh) skuQty[mh] = (skuQty[mh] || 0) + sl;
+    }
+    var createdMs = info.thoiGianTaoMs || info.thoiGianMs || info.createdAt;
+    var ss = getSS();
+    var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+    if (!historySheet) return { success: true, isDuplicateSuspect: false };
+    var pack = readHistoryDataPack_(historySheet, 5000);
+    var data = pack.data || [[]];
+    var map = {};
+    var windowPad = 24 * 60 * 60 * 1000; // ±1 ngày quanh mốc tạo
+    var cMs = Number(createdMs) || 0;
+    for (var r = 1; r < data.length; r++) {
+      var row = data[r];
+      if (!row) continue;
+      var sp = row[1] ? String(row[1]).trim() : "";
+      if (!sp || normalizeOrderCodeText(sp) === normalizeOrderCodeText(code)) continue;
+      var st = row[12] ? String(row[12]).trim() : "Mới";
+      if (st === "Đã hủy đơn" || st === "Hủy (Trùng đơn)" || st === "Đã hủy dòng") continue;
+      var kn = row[3] ? String(row[3]).trim() : "";
+      if (!isSameStoreName(kn, info.khoNhan)) continue;
+      var cms = toHoChiMinhMillis_(row[0]);
+      if (isNaN(cms)) continue;
+      if (cMs && Math.abs(cms - cMs) > windowPad) continue;
+      if (!map[sp]) map[sp] = { soPhieu: sp, khoNhan: kn, createdAtMs: cms, totalQty: 0, skuQty: {} };
+      if (cms < map[sp].createdAtMs) map[sp].createdAtMs = cms;
+      var slR = Number(row[7]) || 0;
+      map[sp].totalQty += slR;
+      var mhR = normalizeOrderCodeText(row[4] || "");
+      if (mhR) map[sp].skuQty[mhR] = (map[sp].skuQty[mhR] || 0) + slR;
+    }
+    var selfSig = buildOrderSkuSignature_(skuQty);
+    var selfOrder = {
+      soPhieu: code,
+      khoNhan: info.khoNhan,
+      createdAt: cMs,
+      thoiGianDatMillis: cMs,
+      totalQty: totalQty,
+      skuSignature: selfSig
+    };
+    var peers = [selfOrder];
+    for (var k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+      peers.push({
+        soPhieu: map[k].soPhieu,
+        khoNhan: map[k].khoNhan,
+        createdAt: map[k].createdAtMs,
+        thoiGianDatMillis: map[k].createdAtMs,
+        totalQty: map[k].totalQty,
+        skuSignature: buildOrderSkuSignature_(map[k].skuQty)
+      });
+    }
+    attachDuplicateSuspects_(peers);
+    var hit = peers[0].duplicateSuspect || null;
+    return {
+      success: true,
+      soPhieu: code,
+      isDuplicateSuspect: !!(hit && !hit.acknowledged),
+      acknowledged: !!(hit && hit.acknowledged) || isDuplicateAcknowledged_(code),
+      duplicateSuspect: hit,
+      khoNhan: info.khoNhan,
+      totalQty: totalQty
+    };
+  } catch (err) {
+    return { success: false, isDuplicateSuspect: false, error: err.message || String(err) };
+  }
 }

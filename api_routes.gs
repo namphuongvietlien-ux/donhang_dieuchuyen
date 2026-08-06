@@ -44,6 +44,21 @@ function doPost(e) {
             requireAuthenticatedAction(payload.payload || {});
             result = huyPhieu(payload.payload || {});
             break;
+          case 'checkDuplicateBeforeSave':
+            result = checkDuplicateBeforeSave_(
+              (payload.payload && payload.payload.khoNhan) || '',
+              (payload.payload && payload.payload.items) || [],
+              (payload.payload && payload.payload.userRole) || '',
+              (payload.payload && payload.payload.userStore) || ''
+            );
+            break;
+          case 'acknowledgeDuplicateOrder':
+            requireAuthenticatedAction(payload.payload || {});
+            result = acknowledgeDuplicateOrder_(
+              (payload.payload && payload.payload.soPhieu) || '',
+              (payload.payload && payload.payload.actor) || ''
+            );
+            break;
           case 'taoTaiKhoanMoi':
             requireAdminAction(action, payload.payload || {});
             result = taoTaiKhoanMoi(payload.payload || {});
@@ -338,6 +353,27 @@ function doGet(e) {
             e.parameter.userRole || '',
             e.parameter.userStore || ''
           );
+          break;
+        case 'getOrderDuplicateInfo':
+          res = getOrderDuplicateInfo_(e.parameter.soPhieu || '');
+          break;
+        case 'getBranchSkuHistory':
+          res = getBranchSkuHistory_(
+            e.parameter.khoNhan || '',
+            e.parameter.excludeSoPhieu || e.parameter.soPhieu || '',
+            e.parameter.daysBack || 7
+          );
+          break;
+        case 'checkDuplicateBeforeSave':
+          res = checkDuplicateBeforeSave_(
+            e.parameter.khoNhan || '',
+            [],
+            e.parameter.userRole || '',
+            e.parameter.userStore || ''
+          );
+          break;
+        case 'acknowledgeDuplicateOrder':
+          res = acknowledgeDuplicateOrder_(e.parameter.soPhieu || '', e.parameter.actor || '');
           break;
         case 'getChiTietDonHangMobile':
           res = getChiTietDonHangMobile(e.parameter.soPhieu || '');

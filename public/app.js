@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-05-v82-created-updated-header';
+var APP_BUILD = '2026-08-06-v85-dual-cal-link';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -1135,8 +1135,17 @@ function saveBootstrapToLocalStorage(res) {
 
 var phieuData = []; var editRows = []; var currentLoadedRows = []; var currentPhieuObj = null; var currentConfirmPhieuObj = null;
 var confirmPhieuList_ = [];
+var qlDetailPreferSoPhieu_ = '';
+var qlLoadSeq_ = 0;
 var shWeekCalState_ = { weekStart: '', data: null };
+var shWeekCalLoadPromise_ = null;
+var shWeekCalLoadingKey_ = '';
+var shFocusPackQtyAfterLoad_ = false;
+var shPendingPickSoPhieu_ = '';
 var shPrintDayState_ = { date: '', dateLabel: '', orders: [], filterWh: '__all__' };
+/** Client cache lịch sử xuất theo chi nhánh (SKU History Checker) */
+var branchSkuHistoryCache_ = {};
+var currentDupInfo_ = null;
 var sessionUser = { user: "", role: "", store: "" };
 var deepLinkOrder = new URLSearchParams(location.search).get("soPhieu");
 var deepLinkTab = new URLSearchParams(location.search).get("tab");
@@ -1345,7 +1354,10 @@ function switchTab(tabId) {
   hidePasswordSection();
   activateTab(tabId);
   refreshPackingTimelineBanners();
-  if(tabId === 'tab-quan-ly') ql_loadPhieu();
+  if(tabId === 'tab-quan-ly') {
+    ql_loadPhieu();
+    sh_loadWeekCalendar_();
+  }
   if(tabId === 'tab-xac-nhan') confirm_loadPhieu();
   if(tabId === 'tab-soan-hang') {
     sh_taiDanhSachDon();
@@ -1782,14 +1794,45 @@ function filterProducts(kw) {
   var query = String(kw == null ? '' : kw).trim();
   if (!query) return [];
   if (!danhMucArr || !danhMucArr.length) return [];
-  var scored = danhMucArr.map(function(it) {
-    return { item: it, score: getSearchScore(it, query) };
+
+  var qCode = normalizeMisaCode_(query);
+  var qLower = toSearchNfcLower_(query);
+
+  // 1) Từ khóa trùng/bắt đầu bằng Mã Cha hoặc Mã SP → chỉ biến thể thuộc đúng mã đó
+  var codePrefixHits = [];
+  if (qCode || qLower) {
+    for (var i = 0; i < danhMucArr.length; i++) {
+      var it = danhMucArr[i];
+      var mhCode = normalizeMisaCode_(it && it.maHang);
+      var parentCode = normalizeMisaCode_(it && (it.parentSku || it.Parent_SKU));
+      var mhLower = toSearchNfcLower_(it && it.maHang);
+      var parentLower = toSearchNfcLower_(it && (it.parentSku || it.Parent_SKU));
+      var mhStarts = !!(
+        (qCode && mhCode && mhCode.indexOf(qCode) === 0) ||
+        (qLower && mhLower && mhLower.indexOf(qLower) === 0)
+      );
+      var parentStarts = !!(
+        (qCode && parentCode && parentCode.indexOf(qCode) === 0) ||
+        (qLower && parentLower && parentLower.indexOf(qLower) === 0)
+      );
+      if (mhStarts || parentStarts) codePrefixHits.push(it);
+    }
+  }
+
+  var pool = codePrefixHits.length ? codePrefixHits : danhMucArr;
+  var scored = pool.map(function(it) {
+    var score = getSearchScore(it, query);
+    // Code-prefix family: vẫn hiện đủ quy cách ĐVT dù score phụ thấp
+    if (codePrefixHits.length && score <= 0) score = 700;
+    return { item: it, score: score };
   }).filter(function(entry) {
     return entry.score > 0;
   }).sort(function(a, b) {
     return b.score - a.score || String(a.item.tenHang || "").localeCompare(String(b.item.tenHang || ""), 'vi') ||
       String(a.item.dvt || '').localeCompare(String(b.item.dvt || ''), 'vi');
   });
+
+  // 2) Không phải mã SP → pool = danhMucArr, giữ nguyên getSearchScore (tên / mã vạch)
   var seenResults = {};
   return scored.filter(function(entry) {
     var item = entry.item;
@@ -2253,12 +2296,9 @@ function submitPhieuMoi() {
   if (!catalogLoadState.ready) return alert("Danh mục hàng đang tải. Vui lòng đợi vài giây rồi thử lại.");
   refreshPackingTimelineBanners();
   if (!confirmPackingTimelineAction_('Xác nhận tạo đơn mới')) return;
-  if (!beginSubmitBusy_('submitPhieuMoi', 'btn-save-phieu', '⏳ Đang lưu...')) return;
-  showLoad("Đang tạo đơn...");
   var lPhieu = document.querySelector('input[name="loaiPhieu"]:checked').value;
   var khoXuat = document.getElementById("select-kho-xuat").value;
   var khoNhan = document.getElementById("select-kho-nhan").value;
-  var itemCount = arrItems.length;
   var itemsToSave = arrItems.map(function(it) {
     var dvtSave = resolveDvtClient_(it.maHang, it.maVach, it.selectedDVT || it.dvt);
     return {
@@ -2270,7 +2310,34 @@ function submitPhieuMoi() {
       parentSku: it.parentSku || ''
     };
   });
-  lastCreatedOrderItems_ = itemsToSave.slice();
+  showLoad("Đang kiểm tra đơn trùng...");
+  apiPost('checkDuplicateBeforeSave', {
+    khoNhan: khoNhan,
+    items: itemsToSave,
+    userRole: sessionUser.role || '',
+    userStore: sessionUser.store || ''
+  }).then(function(dup) {
+    hideLoad();
+    if (dup && dup.isDuplicate && Number(dup.withinMinutes) <= 5) {
+      var msg = '⚠️ CẢNH BÁO DOUBLE SUBMIT\n\nChi nhánh vừa có đơn giống hệt trong 5 phút qua:\n' +
+        '• Đơn: ' + (dup.peerSoPhieu || '—') + '\n' +
+        '• Tạo lúc: ' + (dup.peerCreatedUi || '—') + '\n' +
+        '• Lý do: ' + (dup.reason || 'trùng kho nhận & số lượng/mã') + '\n\nVẫn tiếp tục lưu đơn mới?';
+      if (!confirm(msg)) return;
+    }
+    submitPhieuMoiDoSave_(lPhieu, khoXuat, khoNhan, itemsToSave);
+  }).catch(function() {
+    hideLoad();
+    // Không chặn lưu nếu API kiểm tra lỗi — bảo tồn luồng cũ
+    submitPhieuMoiDoSave_(lPhieu, khoXuat, khoNhan, itemsToSave);
+  });
+}
+
+function submitPhieuMoiDoSave_(lPhieu, khoXuat, khoNhan, itemsToSave) {
+  if (!beginSubmitBusy_('submitPhieuMoi', 'btn-save-phieu', '⏳ Đang lưu...')) return;
+  showLoad("Đang tạo đơn...");
+  var itemCount = (itemsToSave || []).length;
+  lastCreatedOrderItems_ = (itemsToSave || []).slice();
   // #region agent log
   dbgSend_('DVT', 'submitPhieuMoi', 'items dvt before save', {
     sample: itemsToSave.slice(0, 5).map(function(x) { return { ma: x.maHang || x.maVach, dvt: x.dvt }; })
@@ -2448,6 +2515,182 @@ function refreshCreateOrderMetaBadge_() {
   var khoLabel = resolveOrderKhoLabel_(kn && kn.value, kx && kx.value);
   var nowUi = formatOrderTimestampUiClient_(new Date());
   el.innerHTML = buildOrderMetaBadgeHtml_('(chưa lưu)', khoLabel, nowUi, '—');
+}
+
+function dupBadgeHtml_(dup) {
+  if (!dup || dup.acknowledged) return '';
+  var peer = dup.peerSoPhieu || '—';
+  return ' <span class="badge-dup" title="Nghi trùng với ' + escapeHtml(peer) + '">⚠️ Nghi trùng ' + escapeHtml(peer) + '</span>';
+}
+
+function setDupWarnBanner_(prefix, dupInfo) {
+  var warn = document.getElementById(prefix + '-dup-warn');
+  var actions = document.getElementById(prefix + '-dup-actions');
+  if (!warn) return;
+  var dup = dupInfo && (dupInfo.duplicateSuspect || dupInfo);
+  var show = !!(dupInfo && dupInfo.isDuplicateSuspect && dup && !dup.acknowledged);
+  if (!show) {
+    warn.style.display = 'none';
+    warn.innerHTML = '';
+    if (actions) actions.style.display = 'none';
+    return;
+  }
+  currentDupInfo_ = dupInfo;
+  warn.innerHTML = '⚠️ CẢNH BÁO: Đơn hàng này trùng Chi nhánh & Số lượng với đơn <b>' +
+    escapeHtml(dup.peerSoPhieu || '—') + '</b> (Tạo lúc ' + escapeHtml(dup.peerCreatedUi || '—') +
+    '). Vui lòng đối soát trước khi soạn/in!';
+  warn.style.display = 'block';
+  if (actions) {
+    actions.style.display = 'flex';
+  }
+}
+
+function setSkuHistBanner_(prefix, n) {
+  var el = document.getElementById(prefix + '-sku-hist-warn');
+  if (!el) return;
+  if (!n || n < 1) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = 'ℹ️ Đơn hàng có <b>' + n + '</b> mã sản phẩm vừa được giao cho cửa hàng này trong vòng 7 ngày qua.';
+  el.style.display = 'block';
+}
+
+function loadBranchSkuHistoryCached_(khoNhan, excludeSoPhieu) {
+  var storeKey = String(khoNhan || '').trim();
+  if (!storeKey) return Promise.resolve({ bySku: {} });
+  var cacheKey = 'bsh_v1_' + storeKey + '_7';
+  var hit = branchSkuHistoryCache_[cacheKey];
+  if (hit && (Date.now() - hit.at) < 5 * 60 * 1000 && hit.data) {
+    return Promise.resolve(hit.data);
+  }
+  return apiGet('getBranchSkuHistory', {
+    khoNhan: storeKey,
+    excludeSoPhieu: excludeSoPhieu || '',
+    daysBack: 7
+  }, { timeoutMs: 45000 }).then(function(res) {
+    if (res && res.success) {
+      branchSkuHistoryCache_[cacheKey] = { at: Date.now(), data: res };
+    }
+    return res || { bySku: {} };
+  }).catch(function() { return { bySku: {} }; });
+}
+
+function skuHistoryTagHtml_(maHang, histBySku) {
+  if (!histBySku || !maHang) return '';
+  var key = String(maHang || '').replace(/[^a-zA-Z0-9Đđ]/g, '').toUpperCase();
+  var info = histBySku[key];
+  if (!info) {
+    // fallback scan
+    for (var k in histBySku) {
+      if (!Object.prototype.hasOwnProperty.call(histBySku, k)) continue;
+      if (String(histBySku[k].maHang || '').trim().toUpperCase() === String(maHang).trim().toUpperCase()) {
+        info = histBySku[k];
+        break;
+      }
+    }
+  }
+  if (!info) return '';
+  return '<div class="sku-hist-tag">ℹ️ Mã đã xuất tới ' + escapeHtml(info.storeLabel || 'cửa hàng') +
+    ' ngày ' + escapeHtml(info.dateLabel || '—') +
+    ' (Đã giao: ' + escapeHtml(String(info.qty != null ? info.qty : '—')) +
+    ' ' + escapeHtml(info.dvt || '') + ')</div>';
+}
+
+function refreshOrderDupAndSkuUi_(soPhieu, khoNhan, rows, prefixes) {
+  prefixes = prefixes || ['ql'];
+  prefixes.forEach(function(p) {
+    setDupWarnBanner_(p, null);
+    setSkuHistBanner_(p, 0);
+  });
+  if (!soPhieu) return;
+  apiGet('getOrderDuplicateInfo', { soPhieu: soPhieu }, { timeoutMs: 30000 }).then(function(dup) {
+    prefixes.forEach(function(p) { setDupWarnBanner_(p, dup); });
+  }).catch(function() {});
+  loadBranchSkuHistoryCached_(khoNhan, soPhieu).then(function(hist) {
+    var bySku = (hist && hist.bySku) || {};
+    var matched = 0;
+    (rows || []).forEach(function(r) {
+      if (!r || r.trangThai === 'Đã hủy dòng' || r.trangThai === 'Đã hủy đơn' || r.trangThai === 'Hủy (Trùng đơn)') return;
+      var key = String(r.maHang || '').replace(/[^a-zA-Z0-9Đđ]/g, '').toUpperCase();
+      if (key && bySku[key]) matched++;
+    });
+    prefixes.forEach(function(p) { setSkuHistBanner_(p, matched); });
+    // Gắn tag dòng (QL table / SH cards) — quét lại DOM đã render
+    try {
+      if (prefixes.indexOf('ql') !== -1) {
+        var tb = document.getElementById('ql-tbody');
+        if (tb) {
+          Array.from(tb.querySelectorAll('tr')).forEach(function(tr, idx) {
+            var row = rows[idx];
+            if (!row) return;
+            var cell = tr.cells && tr.cells[2];
+            if (!cell) return;
+            if (cell.querySelector('.sku-hist-tag')) return;
+            var tag = skuHistoryTagHtml_(row.maHang, bySku);
+            if (tag) cell.insertAdjacentHTML('beforeend', tag);
+          });
+        }
+      }
+      if (prefixes.indexOf('sh') !== -1) {
+        var cards = document.querySelectorAll('#sh-list-container .item-card');
+        cards.forEach(function(card, idx) {
+          var row = rows[idx];
+          if (!row) return;
+          if (card.querySelector('.sku-hist-tag')) return;
+          var tag = skuHistoryTagHtml_(row.maHang, bySku);
+          if (tag) {
+            var b = card.querySelector('b');
+            if (b) b.insertAdjacentHTML('afterend', tag);
+            else card.insertAdjacentHTML('beforeend', tag);
+          }
+        });
+      }
+    } catch (eDom) {}
+  });
+}
+
+function ql_acceptNotDuplicate_() {
+  var sp = (currentPhieuObj && currentPhieuObj.soPhieu) || '';
+  if (!sp) return alert('Chưa chọn đơn.');
+  showLoad('Đang ghi nhận chấp nhận...');
+  apiPost('acknowledgeDuplicateOrder', { soPhieu: sp, actor: sessionUser.user || '' }).then(function(res) {
+    hideLoad();
+    if (!res || !res.success) return alert('❌ ' + ((res && (res.error || res.msg)) || 'Không ghi nhận được.'));
+    setDupWarnBanner_('ql', null);
+    setDupWarnBanner_('sh', null);
+    currentDupInfo_ = null;
+    alert('✅ Đã chấp nhận đơn (không trùng). Cảnh báo đã ẩn.');
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi: ' + (err && err.message || err));
+  });
+}
+
+function ql_cancelDuplicateOrder_() {
+  var sp = (currentPhieuObj && currentPhieuObj.soPhieu) || '';
+  if (!sp) return alert('Chưa chọn đơn.');
+  if (sessionUser.role !== 'Admin') return alert('Chỉ Admin được hủy đơn trùng.');
+  if (!confirm('Hủy đơn ' + sp + ' với trạng thái "Hủy (Trùng đơn)"?\nĐơn sẽ bị gạt khỏi Bảng Soạn Hàng.')) return;
+  showLoad('Đang hủy đơn trùng...');
+  apiPost('huyPhieu', {
+    soPhieu: sp,
+    actor: sessionUser.user || '',
+    cancelStatus: 'Hủy (Trùng đơn)',
+    reason: 'Hủy do trùng đơn'
+  }).then(function(res) {
+    hideLoad();
+    if (!res || res.success === false) return alert('❌ ' + ((res && (res.error || res.msg)) || 'Hủy thất bại'));
+    alert('✅ Đã hủy đơn trùng ' + sp);
+    try { ql_loadPhieu(); } catch (e1) {}
+    try { sh_loadWeekCalendar_(); } catch (e2) {}
+    setDupWarnBanner_('ql', null);
+    setDupWarnBanner_('sh', null);
+  }).catch(function(err) {
+    hideLoad();
+    alert('Lỗi: ' + (err && err.message || err));
+  });
 }
 
 /**
@@ -2679,15 +2922,20 @@ function ql_loadPhieu(selectedSoPhieu) {
   var ngay = getNgayFilterParam('ql-ngay');
   var khoNhan = document.getElementById("ql-kho-nhan") ? document.getElementById("ql-kho-nhan").value : '';
   var tQl0 = Date.now();
+  var mySeq = ++qlLoadSeq_;
+  var wantSp = String(selectedSoPhieu || '').trim();
   // #region agent log
   dbgBranch_('B', 'ql_loadPhieu:start', 'branch manage list request', {
     role: sessionUser.role || '',
     store: sessionUser.store || '',
     khoNhan: khoNhan,
-    ngay: ngay || ''
+    ngay: ngay || '',
+    wantSp: wantSp,
+    seq: mySeq
   });
   // #endregion
   apiGet('layDanhSachPhieuTheoFilter', { khoNhan: khoNhan, ngay: ngay, userRole: sessionUser.role, userStore: sessionUser.store }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
+    if (mySeq !== qlLoadSeq_) return;
     var parsed = unwrapListResponse_(res);
     var rows = parsed.rows;
     // #region agent log
@@ -2710,18 +2958,53 @@ function ql_loadPhieu(selectedSoPhieu) {
       var shortName = formatStoreShortLabel_(r.khoNhan) || formatStoreShortLabel_(r.khoXuat) || r.khoNhan || r.khoXuat || '';
       html += '<option value="'+r.soPhieu+'">'+r.soPhieu+' ('+shortName+') ['+r.trangThai+']</option>';
     });
-    selectEl.innerHTML = html; document.getElementById("ql-view-phieu").style.display = "none";
+    selectEl.innerHTML = html;
+    var preferSp = String(wantSp || qlDetailPreferSoPhieu_ || '').trim();
+    var matched = preferSp ? rows.find(function(item) { return item.soPhieu === preferSp; }) : null;
+    if (matched) {
+      selectEl.value = preferSp;
+      ql_hienThiChiTiet(matched);
+      if (qlDetailPreferSoPhieu_ === preferSp) qlDetailPreferSoPhieu_ = '';
+    } else if (qlDetailPreferSoPhieu_ && currentPhieuObj && String(currentPhieuObj.soPhieu || '').trim() === qlDetailPreferSoPhieu_) {
+      // Giữ chi tiết đang mở từ lịch (đơn có thể ngoài filter ngày hiện tại)
+      var keepSp = qlDetailPreferSoPhieu_;
+      var hasOpt = Array.from(selectEl.options || []).some(function(o) { return o.value === keepSp; });
+      if (!hasOpt) {
+        var optKeep = document.createElement('option');
+        optKeep.value = keepSp;
+        var kn = formatStoreShortLabel_(currentPhieuObj.khoNhan) || formatStoreShortLabel_(currentPhieuObj.khoXuat) || '';
+        optKeep.textContent = keepSp + (kn ? (' (' + kn + ')') : '');
+        selectEl.appendChild(optKeep);
+      }
+      selectEl.value = keepSp;
+      var viewKeep = document.getElementById('ql-view-phieu');
+      if (viewKeep) viewKeep.style.display = 'block';
+      qlDetailPreferSoPhieu_ = '';
+    } else if (currentPhieuObj && String(currentPhieuObj.soPhieu || '').trim()) {
+      var viewOpen = document.getElementById('ql-view-phieu');
+      if (viewOpen && viewOpen.style.display === 'block') {
+        // Chi tiết vừa mở từ lịch — không ẩn khi response list cũ/không khớp filter
+        var openSp = String(currentPhieuObj.soPhieu || '').trim();
+        var hasOpen = Array.from(selectEl.options || []).some(function(o) { return o.value === openSp; });
+        if (!hasOpen) {
+          var optOpen = document.createElement('option');
+          optOpen.value = openSp;
+          var kn2 = formatStoreShortLabel_(currentPhieuObj.khoNhan) || formatStoreShortLabel_(currentPhieuObj.khoXuat) || '';
+          optOpen.textContent = openSp + (kn2 ? (' (' + kn2 + ')') : '');
+          selectEl.appendChild(optOpen);
+        }
+        selectEl.value = openSp;
+      } else {
+        document.getElementById("ql-view-phieu").style.display = "none";
+      }
+    } else {
+      document.getElementById("ql-view-phieu").style.display = "none";
+    }
     var serverMs = parsed.meta && parsed.meta._debugTotalMs;
     document.getElementById("ql-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 MỚI: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ XỬ LÝ: '+countDone+'</div> | <div class="stat-box" style="color:#8b5a2b;">🚫 HỦY: '+countCancel+'</div>' +
       (serverMs ? (' <span style="color:#64748b;font-size:12px;">(' + Math.round(serverMs/1000) + 's)</span>') : '');
-    if (selectedSoPhieu) {
-      var matched = rows.find(function(item) { return item.soPhieu === selectedSoPhieu; });
-      if (matched) {
-        selectEl.value = selectedSoPhieu;
-        ql_hienThiChiTiet(matched);
-      }
-    }
   }).catch(function(err){
+    if (mySeq !== qlLoadSeq_) return;
     // #region agent log
     dbgBranch_('B', 'ql_loadPhieu:err', 'branch manage list failed', {
       ms: Date.now() - tQl0,
@@ -3143,7 +3426,7 @@ function ql_hienThiChiTiet(phieu, options) {
     var lowStockCount = 0;
     var packedLineCount = 0;
     rows.forEach((r, i) => {
-      var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn";
+      var isCancelled = r.trangThai === "Đã hủy dòng" || r.trangThai === "Đã hủy đơn" || r.trangThai === "Hủy (Trùng đơn)";
       var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
       var slSoanVal = ql_getSlSoan_(r);
       var compareNeed = slSoanVal !== "" ? slSoanVal : r.slGoc;
@@ -3194,6 +3477,7 @@ function ql_hienThiChiTiet(phieu, options) {
       : '';
     document.getElementById("ql-view-phieu").style.display = "block";
     refreshPackingTimelineBanners();
+    refreshOrderDupAndSkuUi_(currentPhieuObj.soPhieu, currentPhieuObj.khoNhan, rows, ['ql']);
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
@@ -3584,7 +3868,10 @@ function sh_findOrderInWeekCal_(soPhieu) {
       var orders = (whs[w] && whs[w].orders) || [];
       for (var o = 0; o < orders.length; o++) {
         if (orders[o] && String(orders[o].soPhieu || '').trim() === target) {
-          return Object.assign({ khoLabel: whs[w].khoLabel }, orders[o]);
+          return Object.assign({
+            khoLabel: whs[w].khoLabel,
+            calendarDate: day.date || ''
+          }, orders[o]);
         }
       }
     }
@@ -3592,44 +3879,96 @@ function sh_findOrderInWeekCal_(soPhieu) {
   return null;
 }
 
-function sh_loadWeekCalendar_() {
-  var grid = document.getElementById('sh-week-cal-grid');
-  var label = document.getElementById('sh-week-cal-label');
-  if (!grid) return;
+function sh_weekCalTargets_() {
+  return [
+    { gridId: 'sh-week-cal-grid', labelId: 'sh-week-cal-label', mode: 'ql', showPrint: true },
+    { gridId: 'sh-week-cal-grid-op', labelId: 'sh-week-cal-label-op', mode: 'op', showPrint: false }
+  ].filter(function(t) { return !!document.getElementById(t.gridId); });
+}
+
+function sh_weekCalSetLoading_(msg) {
   var weekStart = sh_ensureWeekStart_();
-  grid.innerHTML = '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;padding:18px;">⏳ Đang tải lịch tuần...</div>';
-  if (label) label.textContent = 'Tuần bắt đầu ' + weekStart + '…';
-  apiGet('getPackingWeekCalendar', {
+  var text = msg || ('Tuần bắt đầu ' + weekStart + '…');
+  sh_weekCalTargets_().forEach(function(t) {
+    var grid = document.getElementById(t.gridId);
+    var label = document.getElementById(t.labelId);
+    if (grid) {
+      grid.innerHTML = '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;padding:18px;">⏳ Đang tải lịch tuần...</div>';
+    }
+    if (label) label.textContent = text;
+  });
+}
+
+function sh_weekCalSetError_(msg) {
+  var html = '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;color:#b91c1c;padding:18px;">' +
+    escapeHtml(msg || 'Không tải được lịch tuần.') + '</div>';
+  sh_weekCalTargets_().forEach(function(t) {
+    var grid = document.getElementById(t.gridId);
+    if (grid) grid.innerHTML = html;
+  });
+}
+
+function sh_weekCalUpdateLabels_(res) {
+  var text = (res && res.weekLabel) || '';
+  if (res && res.totalOrders != null) text += (text ? ' · ' : '') + res.totalOrders + ' đơn';
+  if (res && res.warehouses && res.warehouses.length) text += (text ? ' · ' : '') + res.warehouses.length + ' kho';
+  sh_weekCalTargets_().forEach(function(t) {
+    var label = document.getElementById(t.labelId);
+    if (label) label.textContent = text || '—';
+  });
+}
+
+/** Một nguồn dữ liệu lịch — render đồng bộ lên mọi tab có lưới lịch */
+function sh_loadWeekCalendar_(opts) {
+  opts = opts || {};
+  var force = !!opts.force;
+  var weekStart = sh_ensureWeekStart_();
+  var targets = sh_weekCalTargets_();
+  if (!targets.length) return Promise.resolve(null);
+
+  if (!force && shWeekCalState_.data && String(shWeekCalState_.data.weekStart || shWeekCalState_.weekStart || '') === String(weekStart)) {
+    sh_weekCalUpdateLabels_(shWeekCalState_.data);
+    sh_renderWeekCalendarAll_(shWeekCalState_.data);
+    return Promise.resolve(shWeekCalState_.data);
+  }
+
+  if (!force && shWeekCalLoadPromise_ && shWeekCalLoadingKey_ === weekStart) {
+    return shWeekCalLoadPromise_;
+  }
+
+  sh_weekCalSetLoading_();
+  shWeekCalLoadingKey_ = weekStart;
+  shWeekCalLoadPromise_ = apiGet('getPackingWeekCalendar', {
     weekStart: weekStart,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
   }, { allowDirectFallback: true, timeoutMs: 90000 }).then(function(res) {
     if (!res || res.success === false) {
-      grid.innerHTML = '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;color:#b91c1c;padding:18px;">' +
-        escapeHtml((res && (res.error || res.msg)) || 'Không tải được lịch tuần. Hãy clasp push packing_timeline.gs + api_routes.gs.') + '</div>';
-      return;
+      sh_weekCalSetError_((res && (res.error || res.msg)) || 'Không tải được lịch tuần. Hãy clasp push packing_timeline.gs + api_routes.gs.');
+      return null;
     }
     shWeekCalState_.data = res;
     if (res.weekStart) shWeekCalState_.weekStart = res.weekStart;
-    if (label) {
-      label.textContent = (res.weekLabel || '') +
-        (res.totalOrders != null ? (' · ' + res.totalOrders + ' đơn') : '') +
-        (res.warehouses && res.warehouses.length ? (' · ' + res.warehouses.length + ' kho') : '');
-    }
-    sh_renderWeekCalendar_(res);
+    sh_weekCalUpdateLabels_(res);
+    sh_renderWeekCalendarAll_(res);
+    return res;
   }).catch(function(err) {
-    grid.innerHTML = '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;color:#b91c1c;padding:18px;">Lỗi: ' +
-      escapeHtml(err && err.message || err) + '</div>';
+    sh_weekCalSetError_('Lỗi: ' + (err && err.message || err));
+    return null;
+  }).then(function(res) {
+    if (shWeekCalLoadingKey_ === weekStart) {
+      shWeekCalLoadPromise_ = null;
+      shWeekCalLoadingKey_ = '';
+    }
+    return res;
   });
+  return shWeekCalLoadPromise_;
 }
 
-function sh_renderWeekCalendar_(res) {
-  var grid = document.getElementById('sh-week-cal-grid');
-  if (!grid) return;
+function sh_buildWeekCalendarHtml_(res, mode, showPrint) {
   var days = (res && res.days) || [];
   if (!days.length) {
-    grid.innerHTML = '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;padding:18px;">Không có đơn trong tuần này.</div>';
-    return;
+    return '<div class="sh-day-empty" style="grid-column:1/-1;text-align:center;padding:18px;">Không có đơn trong tuần này.</div>';
   }
   var html = '';
   days.forEach(function(day) {
@@ -3639,8 +3978,11 @@ function sh_renderWeekCalendar_(res) {
     html += '<div class="' + cellCls + '">';
     html += '<div class="sh-day-cell-head"><div><b>' + escapeHtml(day.weekday || '') + '</b><br><span>' + escapeHtml(dateDisp) +
       '</span></div>';
-    html += '<button type="button" class="btn-submit btn-print-day" onclick="sh_openPrintDayModal_(\'' +
-      escapeHtml(day.date || '') + '\')">In Đơn Ngày ' + escapeHtml(printLabel) + '</button></div>';
+    if (showPrint) {
+      html += '<button type="button" class="btn-submit btn-print-day" onclick="sh_openPrintDayModal_(\'' +
+        escapeHtml(day.date || '') + '\')">In Đơn Ngày ' + escapeHtml(printLabel) + '</button>';
+    }
+    html += '</div>';
     var whs = day.warehouses || [];
     if (!whs.length) {
       html += '<div class="sh-day-empty">Không có đơn</div>';
@@ -3650,45 +3992,146 @@ function sh_renderWeekCalendar_(res) {
         (wh.orders || []).forEach(function(ord) {
           var sp = String(ord.soPhieu || '');
           var tm = String(ord.createdTime || '');
+          var dupBadge = '';
+          if (ord.isDuplicateSuspect && ord.duplicateSuspect) dupBadge = dupBadgeHtml_(ord.duplicateSuspect);
           html += '<button type="button" class="sh-day-order" onclick="sh_pickOrderFromCalendar_(\'' +
-            encodeURIComponent(sp) + '\')">' + escapeHtml(sp) +
-            (tm ? (' <small>' + escapeHtml(tm) + '</small>') : '') + '</button>';
+            escapeHtml(mode) + '\',\'' + encodeURIComponent(sp) + '\')">' + escapeHtml(sp) +
+            (tm ? (' <small>' + escapeHtml(tm) + '</small>') : '') + dupBadge + '</button>';
         });
         html += '</div>';
       });
     }
     html += '</div>';
   });
-  grid.innerHTML = html;
+  return html;
 }
 
-function sh_pickOrderFromCalendar_(soPhieuEncoded) {
-  var soPhieu = '';
-  try { soPhieu = decodeURIComponent(soPhieuEncoded || ''); } catch (e) { soPhieu = String(soPhieuEncoded || ''); }
-  soPhieu = String(soPhieu || '').trim();
-  if (!soPhieu) return;
-  var hit = sh_findOrderInWeekCal_(soPhieu);
-  setOrderMetaBadgeEl_(
-    'sh-order-meta-badge',
-    soPhieu,
-    hit && hit.khoNhan,
-    hit && hit.khoXuat,
-    hit && (hit.thoiGianTao || hit.thoiGianPretty || hit.thoiGian || hit.createdAt),
-    hit && (hit.thoiGianCapNhat || hit.updatedAt)
-  );
+function sh_renderWeekCalendarAll_(res) {
+  sh_weekCalTargets_().forEach(function(t) {
+    var grid = document.getElementById(t.gridId);
+    if (!grid) return;
+    grid.innerHTML = sh_buildWeekCalendarHtml_(res, t.mode, t.showPrint);
+  });
+}
+
+function sh_renderWeekCalendar_(res) {
+  sh_renderWeekCalendarAll_(res);
+}
+
+function sh_ensureShPhieuOption_(soPhieu, hit) {
   var sel = document.getElementById('sh-phieu');
+  if (!sel || !soPhieu) return;
+  var exists = Array.from(sel.options || []).some(function(o) { return o.value === soPhieu; });
+  if (!exists) {
+    var opt = document.createElement('option');
+    opt.value = soPhieu;
+    var khoShort = hit ? resolveOrderKhoLabel_(hit.khoNhan, hit.khoXuat) : '';
+    opt.textContent = soPhieu + (khoShort && khoShort !== '—' ? (' (' + khoShort + ')') : '');
+    sel.appendChild(opt);
+  }
+  sel.value = soPhieu;
+}
+
+function sh_focusFirstPackQty_() {
+  var list = document.getElementById('sh-list-container');
+  var input = list ? list.querySelector('.sl-thuc-te') : document.querySelector('#sh-list-container .sl-thuc-te');
+  if (!input) return;
+  try {
+    if (list && list.scrollIntoView) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e1) {}
+  try {
+    var card = input.closest('.item-card');
+    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (e2) {}
+  setTimeout(function() {
+    try {
+      input.focus({ preventScroll: false });
+      if (typeof input.select === 'function') input.select();
+    } catch (e3) {
+      try { input.focus(); if (input.select) input.select(); } catch (e4) {}
+    }
+  }, 80);
+}
+
+function sh_pickOrderForSoanHang_(soPhieu) {
+  var hit = sh_findOrderInWeekCal_(soPhieu);
+  hidePasswordSection();
+  activateTab('tab-soan-hang');
+  shFocusPackQtyAfterLoad_ = true;
+
+  if (hit && hit.calendarDate) {
+    var ngayEl = document.getElementById('sh-ngay');
+    if (ngayEl && String(ngayEl.value || '') !== String(hit.calendarDate)) {
+      ngayEl.value = hit.calendarDate;
+      shPendingPickSoPhieu_ = soPhieu;
+      sh_taiDanhSachDon();
+      return;
+    }
+  }
+  shPendingPickSoPhieu_ = '';
+  sh_ensureShPhieuOption_(soPhieu, hit);
+  sh_chonDonMobile();
+}
+
+function sh_pickOrderForQuanLy_(soPhieu) {
+  var hit = sh_findOrderInWeekCal_(soPhieu);
+  hidePasswordSection();
+  activateTab('tab-quan-ly');
+  if (hit && hit.calendarDate) {
+    var ngayEl = document.getElementById('ql-ngay');
+    if (ngayEl) ngayEl.value = hit.calendarDate;
+  }
+  var phieu = {
+    soPhieu: soPhieu,
+    khoXuat: (hit && hit.khoXuat) || '',
+    khoNhan: (hit && hit.khoNhan) || '',
+    thoiGian: (hit && (hit.thoiGian || hit.thoiGianPretty)) || '',
+    thoiGianPretty: (hit && (hit.thoiGianPretty || hit.thoiGian)) || '',
+    thoiGianTao: (hit && (hit.thoiGianPretty || hit.thoiGian || hit.createdAt)) || '',
+    thoiGianMs: (hit && hit.createdAt) || null,
+    createdAt: (hit && hit.createdAt) || null,
+    thoiGianCapNhat: (hit && hit.thoiGianCapNhat) || '',
+    duplicateSuspect: hit && hit.duplicateSuspect
+  };
+  currentPhieuObj = phieu;
+  qlDetailPreferSoPhieu_ = soPhieu;
+  var sel = document.getElementById('ql-phieu');
   if (sel) {
     var exists = Array.from(sel.options || []).some(function(o) { return o.value === soPhieu; });
     if (!exists) {
       var opt = document.createElement('option');
       opt.value = soPhieu;
-      var khoShort = hit ? resolveOrderKhoLabel_(hit.khoNhan, hit.khoXuat) : '';
+      var khoShort = resolveOrderKhoLabel_(phieu.khoNhan, phieu.khoXuat);
       opt.textContent = soPhieu + (khoShort && khoShort !== '—' ? (' (' + khoShort + ')') : '');
       sel.appendChild(opt);
     }
     sel.value = soPhieu;
   }
-  sh_chonDonMobile();
+  ql_hienThiChiTiet(phieu);
+  try {
+    var view = document.getElementById('ql-view-phieu');
+    if (view && view.scrollIntoView) view.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (eScroll) {}
+  try { ql_loadPhieu(soPhieu); } catch (eLoad) {}
+}
+
+function sh_pickOrderFromCalendar_(modeOrEncoded, soPhieuEncodedMaybe) {
+  var mode = 'ql';
+  var soPhieuEncoded = modeOrEncoded;
+  // Hỗ trợ cả chữ ký mới (mode, soPhieu) và cũ (soPhieu)
+  if (soPhieuEncodedMaybe != null && soPhieuEncodedMaybe !== '') {
+    mode = String(modeOrEncoded || 'ql');
+    soPhieuEncoded = soPhieuEncodedMaybe;
+  } else if (modeOrEncoded === 'ql' || modeOrEncoded === 'op') {
+    mode = modeOrEncoded;
+    soPhieuEncoded = '';
+  }
+  var soPhieu = '';
+  try { soPhieu = decodeURIComponent(soPhieuEncoded || ''); } catch (e) { soPhieu = String(soPhieuEncoded || ''); }
+  soPhieu = String(soPhieu || '').trim();
+  if (!soPhieu) return;
+  if (mode === 'op') sh_pickOrderForSoanHang_(soPhieu);
+  else sh_pickOrderForQuanLy_(soPhieu);
 }
 
 function sh_flattenDayOrders_(day) {
@@ -3929,6 +4372,15 @@ function sh_taiDanhSachDon() {
     });
     document.getElementById("sh-phieu").innerHTML = html;
     document.getElementById("sh-stats").innerHTML = '<div class="stat-box" style="color:#d93025;">🔔 CẦN SOẠN: '+countMoi+'</div> | <div class="stat-box" style="color:#137333;">✅ ĐÃ SOẠN: '+countDone+'</div>';
+    if (shPendingPickSoPhieu_) {
+      var pendingSp = String(shPendingPickSoPhieu_ || '').trim();
+      shPendingPickSoPhieu_ = '';
+      if (pendingSp) {
+        sh_ensureShPhieuOption_(pendingSp, sh_findOrderInWeekCal_(pendingSp));
+        shFocusPackQtyAfterLoad_ = true;
+        sh_chonDonMobile();
+      }
+    }
   }).catch(function(err){
     // #region agent log
     dbgBranch_('C', 'sh_taiDanhSachDon:err', 'packing list failed', {
@@ -3997,6 +4449,11 @@ function sh_chonDonMobile() {
           pickOrderCreatedRaw_(det),
           pickOrderUpdatedRaw_(det)
         );
+        currentPhieuObj = currentPhieuObj || { soPhieu: sp };
+        currentPhieuObj.soPhieu = det.soPhieu || sp;
+        currentPhieuObj.khoNhan = det.khoNhan || currentPhieuObj.khoNhan;
+        currentPhieuObj.khoXuat = det.khoXuat || currentPhieuObj.khoXuat;
+        refreshOrderDupAndSkuUi_(sp, det.khoNhan, items, ['sh']);
       }
     }).catch(function() {});
     (items || []).forEach(function(it, j) {
@@ -4032,6 +4489,15 @@ function sh_chonDonMobile() {
       html = '<div style="margin:0 0 10px; padding:10px 12px; border-radius:10px; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; font-size:13px; font-weight:700;">⚠️ ' + lowStockCount + ' mã tồn thấp hơn SL đặt/soạn — chỉ cảnh báo, vẫn lưu được</div>' + html;
     }
     document.getElementById("sh-list-container").innerHTML = html; document.getElementById("sh-footer").style.display = "block";
+    var knHint = (calHit && calHit.khoNhan) || (currentPhieuObj && currentPhieuObj.khoNhan) || '';
+    currentPhieuObj = currentPhieuObj || { soPhieu: sp };
+    currentPhieuObj.soPhieu = sp;
+    if (knHint) currentPhieuObj.khoNhan = knHint;
+    refreshOrderDupAndSkuUi_(sp, knHint, items, ['sh']);
+    if (shFocusPackQtyAfterLoad_) {
+      shFocusPackQtyAfterLoad_ = false;
+      sh_focusFirstPackQty_();
+    }
   }).catch(function(err){ alert('Lỗi: '+err.message); });
 }
 
@@ -4203,7 +4669,8 @@ function sh_renderDanhSachDonSoan(candidates, meta) {
     html += '<tr>' +
       '<td style="text-align:center; font-weight:700; color:#334155;">' + (idx + 1) + '</td>' +
       '<td style="text-align:center;"><input type="checkbox" class="sh-order-check" data-sophieu="' + escapeHtml(order.soPhieu) + '"' + checkedAttr + ' onchange="sh_capNhatTomTatChonDonSoan()"></td>' +
-      '<td><a href="javascript:void(0)" class="order-pdf-link" onclick="openOrderPdfView(\'' + soAttr + '\')">' + escapeHtml(order.soPhieu) + '</a>' + bucketBadge + mergeHint + '</td>' +
+      '<td><a href="javascript:void(0)" class="order-pdf-link" onclick="openOrderPdfView(\'' + soAttr + '\')">' + escapeHtml(order.soPhieu) + '</a>' +
+        dupBadgeHtml_(order.duplicateSuspect) + bucketBadge + mergeHint + '</td>' +
       '<td>' + formatPackingStoreCellHtml_(order.khoXuat) + '</td>' +
       '<td>' + formatPackingStoreCellHtml_(order.khoNhan) + '</td>' +
       '<td>' + sh_statusBadgeHtml_(order) + '</td>' +

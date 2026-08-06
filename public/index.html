@@ -72,7 +72,15 @@
     .order-meta-badge .om-k { color: #1d4ed8; }
     .order-meta-badge .om-line1 { font-size: 14px; font-weight: 800; }
     .order-meta-badge .om-line2 { margin-top: 4px; font-size: 12px; font-weight: 600; color: #334155; }
+    .badge-dup { display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px; background:#fff7ed; color:#c2410c; font-size:10px; font-weight:800; border:1px solid #fdba74; vertical-align:middle; }
+    .warn-dup-banner { display:none; margin:0 0 12px; padding:10px 12px; border-radius:12px; border:1px solid #fde68a; background:linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%); color:#92400e; font-size:13px; font-weight:700; line-height:1.45; }
+    .warn-sku-banner { display:none; margin:0 0 12px; padding:10px 12px; border-radius:12px; border:1px solid #93c5fd; background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%); color:#1e40af; font-size:13px; font-weight:700; line-height:1.45; }
+    .sku-hist-tag { margin-top:4px; font-size:11px; font-weight:700; color:#1d4ed8; line-height:1.35; }
+    .dup-action-row { display:none; gap:8px; flex-wrap:wrap; margin:0 0 12px; }
     .sh-week-cal { margin-top: 4px; }
+    .sh-week-cal-compact { margin-bottom: 12px; }
+    .sh-week-cal-compact .sh-day-cell { min-height: 120px; }
+    .sh-week-cal-compact .btn-print-day { display: none !important; }
     .sh-week-cal-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
     .sh-week-cal-nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .sh-week-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 8px; overflow-x: auto; }
@@ -612,8 +620,25 @@
     <!-- TAB 2: QUẢN LÝ PHIẾU -->
     <div id="tab-quan-ly" class="tab-content">
       <div class="tab-guide">
-        <b>Cách dùng:</b> lọc ngày/kho → chọn phiếu → xem / in / Excel.
-        <b>Sửa SL</b> hoặc <b>thêm mã</b> (khi được phép): dòng mới theo giờ lưu hiện tại (khung chính / bổ sung).
+        <b>Cách dùng:</b> xem lịch tuần gom đơn theo kho → click mã đơn để mở chi tiết / in PDF.
+        Lọc ngày/kho → chọn phiếu → xem / sửa / Excel. <b>Sửa SL</b> hoặc <b>thêm mã</b> khi được phép.
+      </div>
+      <div class="card sh-week-cal">
+        <div class="sh-week-cal-head">
+          <div>
+            <h3 style="margin:0; color:var(--primary);">📅 BẢNG GOM ĐƠN THEO KHO TRONG TUẦN</h3>
+            <div id="sh-week-cal-label" style="font-size:13px; color:#64748b; margin-top:4px;">Đang tải tuần...</div>
+          </div>
+          <div class="sh-week-cal-nav">
+            <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_weekCalShift_(-7)">← Tuần trước</button>
+            <button type="button" class="btn-submit btn-compact" onclick="sh_weekCalGoToday_()">Tuần này</button>
+            <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_weekCalShift_(7)">Tuần sau →</button>
+            <button type="button" class="btn-submit btn-teal btn-compact" onclick="sh_loadWeekCalendar_({force:true})">↻ Tải lại</button>
+          </div>
+        </div>
+        <div id="sh-week-cal-grid" class="sh-week-cal-grid">
+          <div class="sh-day-empty" style="grid-column:1/-1; text-align:center; padding:18px;">Đang tải lịch tuần...</div>
+        </div>
       </div>
       <div class="card">
         <h3 style="margin-top:0; color:var(--primary);">Tra cứu & Quản lý</h3>
@@ -631,6 +656,12 @@
       <div id="ql-view-phieu" class="card" style="display:none; border: 2px solid #34a853;">
         <h3 style="margin-top:0;">Chi tiết Đơn: <span id="ql-lbl-sophieu" style="color:#d93025;"></span></h3>
         <div id="ql-order-meta-badge" class="order-meta-badge">Mã Đơn: — | Kho: —<div class="om-line2">[Ngày Tạo: —] - [Lần sửa cuối: —]</div></div>
+        <div id="ql-dup-warn" class="warn-dup-banner"></div>
+        <div id="ql-dup-actions" class="dup-action-row">
+          <button type="button" class="btn-submit btn-success btn-compact" onclick="ql_acceptNotDuplicate_()">✅ Chấp Nhận Đơn (Không Trùng)</button>
+          <button type="button" class="btn-submit btn-danger btn-compact" onclick="ql_cancelDuplicateOrder_()">🗑️ Hủy Đơn Trùng</button>
+        </div>
+        <div id="ql-sku-hist-warn" class="warn-sku-banner"></div>
         <p style="font-size:13px; color:gray;">Kho Xuất: <b id="ql-lbl-khoxuat"></b> | Kho Nhận: <b id="ql-lbl-khonhan"></b></p>
         <p id="ql-order-meta" style="font-size:13px; color:#137333; margin-top:-6px;"></p>
         <div id="ql-edit-timeline-banner" class="timeline-banner" style="display:none;"></div>
@@ -696,24 +727,23 @@
     <!-- TAB 4: SOẠN HÀNG MOBILE -->
     <div id="tab-soan-hang" class="tab-content">
       <div class="tab-guide">
-        <b>Cách dùng:</b> chọn ngày tổng hợp / giao → chọn phiếu → nhập SL soạn → lưu.
-        <b>Tạo bảng:</b> chọn chế độ <b>Chính</b> / <b>Bổ sung</b> / <b>Tổng hợp</b> theo ca N1→N2. Mốc 10:00 thuộc ngày hôm sau.
-        <b>Lịch tuần:</b> tự nhóm theo kho phát sinh đơn (không khóa cứng Q8/PH).
+        <b>Cách dùng:</b> click đơn trên lịch tuần → mở soạn &amp; focus ô SL Soạn. Hoặc chọn ngày / phiếu thủ công → nhập SL → lưu.
+        <b>Tạo bảng:</b> chế độ <b>Chính</b> / <b>Bổ sung</b> / <b>Tổng hợp</b> theo ca N1→N2. Mốc 10:00 thuộc ngày hôm sau.
       </div>
-      <div class="card sh-week-cal">
+      <div class="card sh-week-cal sh-week-cal-compact">
         <div class="sh-week-cal-head">
           <div>
             <h3 style="margin:0; color:var(--primary);">📅 Bảng Lịch Gom Đơn Theo Kho</h3>
-            <div id="sh-week-cal-label" style="font-size:13px; color:#64748b; margin-top:4px;">Đang tải tuần...</div>
+            <div id="sh-week-cal-label-op" style="font-size:13px; color:#64748b; margin-top:4px;">Đang tải tuần...</div>
           </div>
           <div class="sh-week-cal-nav">
             <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_weekCalShift_(-7)">← Tuần trước</button>
             <button type="button" class="btn-submit btn-compact" onclick="sh_weekCalGoToday_()">Tuần này</button>
             <button type="button" class="btn-submit btn-muted btn-compact" onclick="sh_weekCalShift_(7)">Tuần sau →</button>
-            <button type="button" class="btn-submit btn-teal btn-compact" onclick="sh_loadWeekCalendar_()">↻ Tải lại</button>
+            <button type="button" class="btn-submit btn-teal btn-compact" onclick="sh_loadWeekCalendar_({force:true})">↻ Tải lại</button>
           </div>
         </div>
-        <div id="sh-week-cal-grid" class="sh-week-cal-grid">
+        <div id="sh-week-cal-grid-op" class="sh-week-cal-grid">
           <div class="sh-day-empty" style="grid-column:1/-1; text-align:center; padding:18px;">Đang tải lịch tuần...</div>
         </div>
       </div>
@@ -791,6 +821,12 @@
         </div>
       </div>
       <div id="sh-order-meta-badge" class="order-meta-badge" style="display:none;"></div>
+      <div id="sh-dup-warn" class="warn-dup-banner"></div>
+      <div id="sh-dup-actions" class="dup-action-row">
+        <button type="button" class="btn-submit btn-success btn-compact" onclick="ql_acceptNotDuplicate_()">✅ Chấp Nhận Đơn (Không Trùng)</button>
+        <button type="button" class="btn-submit btn-danger btn-compact" onclick="ql_cancelDuplicateOrder_()">🗑️ Hủy Đơn Trùng</button>
+      </div>
+      <div id="sh-sku-hist-warn" class="warn-sku-banner"></div>
       <div id="sh-list-container"><div class="card" style="text-align:center; color:gray;">Vui lòng chọn số phiếu ở trên.</div></div>
       <div class="fixed-footer" id="sh-footer" style="display:none;">
         <div id="sh-status" style="text-align:center; margin-bottom:5px; font-weight:bold; color:#d93025; font-size:13px;"></div>
@@ -1079,6 +1115,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20260805v82-created-updated-header"></script>
+  <script src="app.js?v=20260806v85-dual-cal-link"></script>
 </body>
 </html>

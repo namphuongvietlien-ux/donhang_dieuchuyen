@@ -869,7 +869,7 @@ function ensureHistoryStatusColumn(historySheet) {
 
 function getDisplayOrderStatus(rowStatus, slThucTe, slSoan) {
   var status = String(rowStatus || "").trim();
-  if (status === "Đã hủy đơn") return "Đã hủy";
+  if (status === "Đã hủy đơn" || status === "Hủy (Trùng đơn)") return "Đã hủy";
   // Ưu tiên trạng thái xác nhận — không bị cột 9 (SL nhận) kéo về "Đã soạn"
   if (status === "Đã xác nhận nhận hàng") return "Đã xác nhận";
   if (status === "Đã soạn hàng") return "Đã soạn";
@@ -1327,15 +1327,20 @@ function huyPhieu(payload) {
       if (matchRows[m] > maxR) maxR = matchRows[m];
     }
     var numRows = maxR - minR + 1;
+    // cancelStatus tùy chọn: "Hủy (Trùng đơn)" — mặc định "Đã hủy đơn" (giữ hành vi cũ)
+    var cancelStatus = "Đã hủy đơn";
+    if (payload && String(payload.cancelStatus || "").trim() === "Hủy (Trùng đơn)") {
+      cancelStatus = "Hủy (Trùng đơn)";
+    }
     var statusMat = historySheet.getRange(minR, 12, numRows, 2).getValues(); // cột 12-13
     for (var k = 0; k < matchRows.length; k++) {
       var off = matchRows[k] - minR;
-      statusMat[off][0] = "Đã hủy đơn";
-      statusMat[off][1] = "Đã hủy đơn";
+      statusMat[off][0] = cancelStatus;
+      statusMat[off][1] = cancelStatus;
     }
     historySheet.getRange(minR, 12, numRows, 2).setValues(statusMat);
 
-    logOrderChange(ss, payload.soPhieu, "Hủy đơn", payload.actor, "", "", "Đang xử lý", "Đã hủy đơn", (payload && payload.reason) ? payload.reason : "");
+    logOrderChange(ss, payload.soPhieu, cancelStatus === "Hủy (Trùng đơn)" ? "Hủy đơn trùng" : "Hủy đơn", payload.actor, "", "", "Đang xử lý", cancelStatus, (payload && payload.reason) ? payload.reason : "");
 
     var orderInfo = getThongTinPhieu(payload.soPhieu);
     if (orderInfo) {
