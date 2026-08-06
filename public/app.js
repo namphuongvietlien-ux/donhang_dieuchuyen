@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-06-v86-stock-debug';
+var APP_BUILD = '2026-08-06-v90-ton-q7-fix';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -336,17 +336,19 @@ var variantPickerState = { open: false, mode: 'order', parentSku: '', qty: 1, va
 /** Snapshot dòng đơn vừa tạo — dùng In/Excel sau khi clear arrItems */
 var lastCreatedOrderItems_ = [];
 var catalogLoadState = { loading: false, ready: false, version: '' };
-var CATALOG_CACHE_KEY = 'donhang_catalog_v5_stock_fix';
-var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v5_stock_fix';
-var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v5_stock_fix';
+var CATALOG_CACHE_KEY = 'donhang_catalog_v90_ton_q7';
+var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v90_ton_q7';
+var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v90_ton_q7';
 var CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
-var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v2_stock_fix';
-var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v2_stock_fix';
+var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v90_ton_q7';
+var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v90_ton_q7';
 var BOOTSTRAP_CACHE_TTL_MS = 60 * 60 * 1000;
 /** Auto invalidate local catalog/stock caches when schema bumps */
-var CLIENT_STOCK_CACHE_SCHEMA = 'v_stock_fix_1.0';
+var CLIENT_STOCK_CACHE_SCHEMA = 'v90_TON_Q7_FIX';
 var CLIENT_STOCK_CACHE_SCHEMA_KEY = 'donhang_stock_cache_schema';
-var MASTER_CATALOG_LEGACY_KEYS_ = ['MASTER_CATALOG', 'donhang_catalog_v4_composite_key', 'donhang_catalog_ts_v4', 'donhang_catalog_version_v4', 'donhang_bootstrap_v1', 'donhang_bootstrap_ts_v1'];
+var CACHE_KEY_VER = 'v90_TON_Q7_FIX';
+var APP_CACHE_VER_KEY = 'APP_CACHE_VER';
+var MASTER_CATALOG_LEGACY_KEYS_ = ['MASTER_CATALOG', 'donhang_catalog_v4_composite_key', 'donhang_catalog_ts_v4', 'donhang_catalog_version_v4', 'donhang_bootstrap_v1', 'donhang_bootstrap_ts_v1', 'donhang_catalog_v5_stock_fix', 'donhang_catalog_ts_v5_stock_fix', 'donhang_catalog_version_v5_stock_fix', 'donhang_bootstrap_v2_stock_fix', 'donhang_bootstrap_ts_v2_stock_fix'];
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -366,7 +368,10 @@ function cloneCatalogProduct_(src) {
     dvt: src.dvt || '',
     dvt2: src.dvt2 || '',
     selectedDVT: src.selectedDVT || src.dvt || '',
-    tonKho: src.tonKho != null ? src.tonKho : (src.ton != null ? src.ton : null),
+    tonKho: src.tonKho != null ? src.tonKho : (src.TonKho != null ? src.TonKho : (src.stock != null ? src.stock : (src.ton != null ? src.ton : null))),
+    TonKho: src.TonKho != null ? src.TonKho : (src.tonKho != null ? src.tonKho : (src.stock != null ? src.stock : null)),
+    stock: src.stock != null ? src.stock : (src.tonKho != null ? src.tonKho : (src.TonKho != null ? src.TonKho : null)),
+    tonHienTai: src.tonHienTai != null ? src.tonHienTai : (src.tonKho != null ? src.tonKho : null),
     parentSku: src.parentSku || src.Parent_SKU || '',
     isNew: !!src.isNew,
     isLocked: !!src.isLocked,
@@ -891,7 +896,7 @@ function applyCatalogData(res) {
         });
       }
     }
-    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'A_B_E',location:'app.js:applyCatalogData',message:'catalog applied stock stats',data:{source:res._debugFromCache?'cache':'api',keyCount:arr.length,withTon:withTon,zeroTon:zeroTon,missingTon:missingTon,beDebug:res._debugStock||null,version:res.version||'',sample:sample,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'post-fix',hypothesisId:'A_B_E',location:'app.js:applyCatalogData',message:'catalog applied stock stats',data:{source:res._debugFromCache?'cache':'api',keyCount:arr.length,withTon:withTon,zeroTon:zeroTon,missingTon:missingTon,beDebug:res._debugStock||null,stockSource:res.stockSource||'',version:res.version||'',sample:sample,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
   } catch (eDbg) {}
   // #endregion
 }
@@ -928,22 +933,47 @@ function clearCatalogLocalStorage() {
   catalogLoadState.ready = false;
 }
 
-/** Xóa cache FE cũ khi schema tồn kho đổi — ép gọi lại API lấy Ton_Hien_Tai mới */
+function resolveDisplayStock_(item) {
+  if (!item) return 0;
+  var v = item.TonKho;
+  if (v === null || v === undefined || v === '') v = item.tonHienTai;
+  if (v === null || v === undefined || v === '') v = item.stock;
+  if (v === null || v === undefined || v === '') v = item.tonKho;
+  if (v === null || v === undefined || v === '') return 0;
+  var n = Number(v);
+  return isNaN(n) ? 0 : n;
+}
+
+function hasDisplayStockValue_(item) {
+  if (!item) return false;
+  return !(
+    (item.TonKho === null || item.TonKho === undefined || item.TonKho === '') &&
+    (item.tonHienTai === null || item.tonHienTai === undefined || item.tonHienTai === '') &&
+    (item.stock === null || item.stock === undefined || item.stock === '') &&
+    (item.tonKho === null || item.tonKho === undefined || item.tonKho === '')
+  );
+}
+
+/** Xóa cache FE cũ khi schema tồn kho đổi — ép gọi lại API lấy Ton từ TON_Q7 */
 function invalidateStaleClientCaches_() {
   try {
-    var cur = localStorage.getItem(CLIENT_STOCK_CACHE_SCHEMA_KEY) || '';
-    var willPurge = cur !== CLIENT_STOCK_CACHE_SCHEMA;
+    var curSchema = localStorage.getItem(CLIENT_STOCK_CACHE_SCHEMA_KEY) || '';
+    var curApp = localStorage.getItem(APP_CACHE_VER_KEY) || '';
+    var willPurge = curSchema !== CLIENT_STOCK_CACHE_SCHEMA || curApp !== CACHE_KEY_VER;
     // #region agent log
-    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'A',location:'app.js:invalidateStaleClientCaches_',message:'cache schema check',data:{cur:cur,expected:CLIENT_STOCK_CACHE_SCHEMA,willPurge:willPurge,hasLegacyCatalog:!!localStorage.getItem('donhang_catalog_v4_composite_key')||!!localStorage.getItem(CATALOG_CACHE_KEY),build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'post-fix',hypothesisId:'A',location:'app.js:invalidateStaleClientCaches_',message:'cache schema check',data:{curSchema:curSchema,expectedSchema:CLIENT_STOCK_CACHE_SCHEMA,curApp:curApp,expectedApp:CACHE_KEY_VER,willPurge:willPurge,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
     // #endregion
     if (!willPurge) return false;
-    clearCatalogLocalStorage();
-    try { localStorage.removeItem(BOOTSTRAP_CACHE_KEY); } catch (e1) {}
-    try { localStorage.removeItem(BOOTSTRAP_CACHE_TS_KEY); } catch (e2) {}
-    for (var i = 0; i < MASTER_CATALOG_LEGACY_KEYS_.length; i++) {
-      try { localStorage.removeItem(MASTER_CATALOG_LEGACY_KEYS_[i]); } catch (e3) {}
+    try { localStorage.clear(); } catch (eClear) {
+      clearCatalogLocalStorage();
+      try { localStorage.removeItem(BOOTSTRAP_CACHE_KEY); } catch (e1) {}
+      try { localStorage.removeItem(BOOTSTRAP_CACHE_TS_KEY); } catch (e2) {}
+      for (var i = 0; i < MASTER_CATALOG_LEGACY_KEYS_.length; i++) {
+        try { localStorage.removeItem(MASTER_CATALOG_LEGACY_KEYS_[i]); } catch (e3) {}
+      }
     }
     localStorage.setItem(CLIENT_STOCK_CACHE_SCHEMA_KEY, CLIENT_STOCK_CACHE_SCHEMA);
+    localStorage.setItem(APP_CACHE_VER_KEY, CACHE_KEY_VER);
     return true;
   } catch (e) {
     return false;
@@ -999,7 +1029,7 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
   if (cached && cached.danhMuc) {
     cached._debugFromCache = true;
     // #region agent log
-    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'A',location:'app.js:loadCatalogInBackground',message:'using localStorage catalog cache',data:{forceReload:!!forceReload,expectedVersion:expectedVersion||'',cachedVersion:cached.version||'',build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'post-fix',hypothesisId:'A',location:'app.js:loadCatalogInBackground',message:'using localStorage catalog cache',data:{forceReload:!!forceReload,expectedVersion:expectedVersion||'',cachedVersion:cached.version||'',build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
     // #endregion
     applyCatalogData(cached);
     setCatalogStatus('Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:');
@@ -1016,7 +1046,7 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
       return res;
     }
     // #region agent log
-    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'B_C',location:'app.js:loadCatalogInBackground:api',message:'getCatalogData response meta',data:{forceReload:!!forceReload,keyCount:res.keyCount,forced:res.forced,debugRun:res._debugRun||'',debugStock:res._debugStock||null,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'post-fix',hypothesisId:'B_C',location:'app.js:loadCatalogInBackground:api',message:'getCatalogData response meta',data:{forceReload:!!forceReload,keyCount:res.keyCount,forced:res.forced,debugRun:res._debugRun||'',debugStock:res._debugStock||null,stockSource:res.stockSource||'',build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
     // #endregion
     applyCatalogData(res);
     saveCatalogToLocalStorage(res);
@@ -1033,7 +1063,7 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
 /** Xóa cache local + gọi getCatalogData?nocache=1 (Data_Excel + mã con từ TON_VARIANT) */
 function reloadCatalogNow_() {
   clearCatalogLocalStorage();
-  showLoad('Đang tải lại danh mục (Data_Excel + TON_VARIANT)...');
+  showLoad('Đang tải lại danh mục (Data_Excel + TON_Q7)...');
   return loadCatalogInBackground(true).then(function(res) {
     hideLoad();
     var n = danhMucArr ? danhMucArr.length : 0;
@@ -1041,7 +1071,7 @@ function reloadCatalogNow_() {
       alert('Không tải được danh mục: ' + ((res && res.error) || 'unknown'));
       return res;
     }
-    alert('✅ Đã tải lại danh mục: ' + n + ' sản phẩm (gồm mã cha/con từ TON_VARIANT).\nVersion: ' + (res.version || catalogLoadState.version || '-') + '.');
+    alert('✅ Đã tải lại danh mục: ' + n + ' sản phẩm (tồn từ TON_Q7).\nSource: ' + (res.stockSource || '-') + '\nVersion: ' + (res.version || catalogLoadState.version || '-') + '.');
     var input = document.getElementById('input-scan');
     if (input) {
       input.focus();
@@ -1835,7 +1865,7 @@ function handleSearchInput(e) {
     var keyEnc = encodeURIComponent(String(item.key || ensureItemCatalogKey_(item)));
     var newBadge = isNewProductItem_(item) ? ' <span class="badge-new">MỚI</span>' : '';
     var outBadge = isProductOutOfStockItem_(item) ? ' <span class="badge-outstock">HẾT HÀNG</span>' : '';
-    var tonLabel = (item.tonKho != null && item.tonKho !== '') ? String(item.tonKho) : '—';
+    var tonLabel = hasDisplayStockValue_(item) ? String(resolveDisplayStock_(item)) : '—';
     html += '<div class="suggest-item" onclick="chonSanPhamByKey_(\'' + keyEnc + '\')">' +
       '<div class="sg-title">' + escapeHtml(item.maHang || '') + ' — ' + escapeHtml(item.tenHang || '') + newBadge + outBadge + '</div>' +
       '<div class="sg-desc"><b>ĐVT:</b> ' + escapeHtml(item.dvt || '—') +
@@ -1945,7 +1975,7 @@ function ql_handleAddCodeInput(e) {
   results.slice(0, 8).forEach(function(item) {
     var keyEnc = encodeURIComponent(String(item.key || ensureItemCatalogKey_(item)));
     var outBadge = isProductOutOfStockItem_(item) ? ' <span class="badge-outstock">HẾT HÀNG</span>' : '';
-    var tonLabel = (item.tonKho != null && item.tonKho !== '') ? String(item.tonKho) : '—';
+    var tonLabel = hasDisplayStockValue_(item) ? String(resolveDisplayStock_(item)) : '—';
     html += '<div class="suggest-item" onclick="ql_pickSuggestedItemByKey_(\'' + keyEnc + '\')">' +
       '<div class="sg-title">' + escapeHtml(item.maHang || '') + ' — ' + escapeHtml(item.tenHang || '') + outBadge + '</div>' +
       '<div class="sg-desc"><b>ĐVT:</b> ' + escapeHtml(item.dvt || '—') +
@@ -7160,7 +7190,7 @@ function xb_handleSearchInput(e) {
   results.slice(0, 10).forEach(function(item) {
     var keyEnc = encodeURIComponent(String(item.key || ensureItemCatalogKey_(item)));
     var outBadge = isProductOutOfStockItem_(item) ? ' <span class="badge-outstock">HẾT HÀNG</span>' : '';
-    var tonLabel = (item.tonKho != null && item.tonKho !== '') ? String(item.tonKho) : '—';
+    var tonLabel = hasDisplayStockValue_(item) ? String(resolveDisplayStock_(item)) : '—';
     html += '<div class="suggest-item" onclick="xb_chonSanPhamByKey_(\'' + keyEnc + '\')">' +
       '<div class="sg-title">' + escapeHtml(item.maHang || '') + ' — ' + escapeHtml(item.tenHang || '') + outBadge + '</div>' +
       '<div class="sg-desc"><b>ĐVT:</b> ' + escapeHtml(item.dvt || '—') +

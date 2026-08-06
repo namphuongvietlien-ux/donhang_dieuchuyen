@@ -7,7 +7,7 @@ var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
 
 var TON_Q7_SHEET_NAME = "TON_Q7";
 
-var CACHE_TON_Q7_KEY = "ton_q7_map_v2";
+var CACHE_TON_Q7_KEY = "ton_q7_map_v3_catalog_merge";
 
 // Tồn riêng theo biến thể đồ chơi — đối soát: Ton_Ban_Dau - Da_Xuat + Da_Nhan_Nhap = Ton_Hien_Tai
 // MASTER Cha–Con + stock biến thể: KHÔNG được sheet.clear() khi import MISA / tồn
@@ -1211,37 +1211,76 @@ function readTonKhoQ7Bundle_(ss) {
   var cached = getCacheJson_(cache, CACHE_TON_Q7_KEY);
   var labelCached = getCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt");
   if (cached && typeof cached === "object" && Object.keys(cached).length) {
-    return { map: cached, dvtLabels: labelCached || {} };
+    return { map: cached, dvtLabels: labelCached || {}, source: "TON_Q7-cache" };
   }
 
   var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
-  if (!sh || sh.getLastRow() < 2) return { map: null, dvtLabels: {} };
+  if (!sh || sh.getLastRow() < 2) return { map: null, dvtLabels: {}, source: "TON_Q7-missing" };
   var lastRow = sh.getLastRow();
-  var numRows = lastRow - 1;
   var lastCol = Math.max(sh.getLastColumn(), 3);
-  var data = sh.getRange(2, 1, numRows, Math.min(lastCol, 3)).getValues();
+  var header = sh.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+  var keyIdx = 0;
+  var qtyIdx = 1;
+  var dvtIdx = 2;
+  var foundQtyByName = false;
+  for (var c = 0; c < header.length; c++) {
+    var h = normalizeHeaderText(header[c]);
+    if (!h) continue;
+    if (h === "key" || h === "mahang" || h === "masp" || h === "parentsku" || h.indexOf("mahang") === 0) keyIdx = c;
+    else if (
+      h.indexOf("tonhientai") !== -1 || h.indexOf("tonq7") !== -1 || h === "tonkho" ||
+      h.indexOf("soluongton") !== -1 || h === "stock" || h === "qty" || h === "quantity" || h === "soluong"
+    ) {
+      qtyIdx = c;
+      foundQtyByName = true;
+    } else if (h === "dvt" || h.indexOf("donvi") === 0 || h === "unit") dvtIdx = c;
+  }
+  if (!foundQtyByName) {
+    // Schema chuẩn Key|Qty|Dvt — giữ mặc định; cảnh báo nếu header không rõ
+    Logger.log("TON_Q7: không tìm thấy cột tồn theo tên — dùng cột index " + qtyIdx + " (Qty mặc định). Header=" + JSON.stringify(header));
+  }
+  var numRows = lastRow - 1;
+  var data = sh.getRange(2, 1, numRows, lastCol).getValues();
   var map = {};
   var dvtLabels = {};
   for (var i = 0; i < data.length; i++) {
-    var key = String(data[i][0] || "").trim();
+    var row = data[i];
+    if (!row) continue;
+    var key = String(row[keyIdx] || "").trim();
     if (!key) continue;
-    var qty = Number(data[i][1]) || 0;
-    var dvtCol = data[i][2] != null ? String(data[i][2]).trim() : "";
-    // Sheet cũ: Key không có |DV: nhưng cột Dvt có giá trị → gắn vào key
-    if (dvtCol && key.indexOf("|DV:") === -1) {
+    var rawQty = row[qtyIdx];
+    if (typeof rawQty === "string") rawQty = String(rawQty).replace(/,/g, ".").trim();
+    var qty = Number(rawQty);
+    if (isNaN(qty)) qty = 0;
+    var dvtCol = row[dvtIdx] != null ? String(row[dvtIdx]).trim() : "";
+    // Sheet cũ: Key không có |DV: nhưng cột Dvt có giá trị → gắn vào key lookup
+    var lookupKey = key;
+    if (dvtCol && lookupKey.indexOf("|DV:") === -1) {
       var dvtNorm = normalizeDvtKey_(dvtCol);
-      if (dvtNorm) key = key + "|DV:" + dvtNorm;
+      if (dvtNorm) lookupKey = lookupKey + "|DV:" + dvtNorm;
     }
-    map[key] = (Number(map[key]) || 0) + qty;
-    if (dvtCol) dvtLabels[key] = dvtCol;
-    else if (!dvtLabels[key]) dvtLabels[key] = dvtFromStockKey_(key);
+    map[lookupKey] = (Number(map[lookupKey]) || 0) + qty;
+    // Alias bare / MH: để catalog lookup không phụ thuộc prefix
+    var bare = canonicalizeStockSheetKey_(key) || key;
+    if (bare && bare !== lookupKey) {
+      if (map[bare] === undefined) map[bare] = qty;
+      else if (!(Number(map[bare]) > 0) && qty > 0) map[bare] = qty;
+    }
+    var mhOnly = String(bare || "").replace(/^MH:/i, "").replace(/^MV:/i, "");
+    mhOnly = normalizeProductCode(mhOnly) || mhOnly;
+    if (mhOnly) {
+      addStockValueByCode(map, "MH:", mhOnly, qty, dvtCol || "");
+      if (!dvtCol) addStockValueByCode(map, "MH:", mhOnly, qty, "");
+    }
+    if (dvtCol) dvtLabels[lookupKey] = dvtCol;
+    else if (!dvtLabels[lookupKey]) dvtLabels[lookupKey] = dvtFromStockKey_(lookupKey);
   }
-  if (!Object.keys(map).length) return { map: null, dvtLabels: {} };
+  if (!Object.keys(map).length) return { map: null, dvtLabels: {}, source: "TON_Q7-empty" };
   try {
     putCacheJson_(cache, CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS);
     putCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt", dvtLabels, CACHE_TTL_SECONDS);
   } catch (e) {}
-  return { map: map, dvtLabels: dvtLabels };
+  return { map: map, dvtLabels: dvtLabels, source: "TON_Q7" };
 }
 
 
@@ -2835,8 +2874,10 @@ function getCatalogData(forceRefresh) {
     try {
       applyProductOutOfStockToCatalog_(ssCat, danhMuc);
     } catch (eOut) {}
+    var stockMerge = { source: "none", mapKeys: 0, applied: 0 };
     try {
-      applyTonVariantStockToCatalog_(ssCat, danhMuc);
+      stockMerge = applyMasterStockToCatalog_(ssCat, danhMuc) || stockMerge;
+      danhMuc = stockMerge.danhMuc || danhMuc;
     } catch (eTon) {}
     var keys = 0;
     var withTon = 0, zeroTon = 0, missingTon = 0;
@@ -2853,23 +2894,12 @@ function getCatalogData(forceRefresh) {
         sample.push({
           mh: String(it.maHang || "").slice(0, 24),
           tonKho: it.tonKho,
+          TonKho: it.TonKho,
+          stock: it.stock,
           tonHienTai: it.tonHienTai
         });
       }
     }
-    var tonCols = null;
-    var tonMapKeys = 0;
-    var tonMapPos = 0;
-    try {
-      var shTon = ssCat.getSheetByName(TON_VARIANT_SHEET_NAME);
-      tonCols = resolveTonVariantColMap_(shTon);
-      var tMap = readTonVariantMap_(ssCat) || {};
-      tonMapKeys = Object.keys(tMap).length;
-      for (var tk in tMap) {
-        if (!Object.prototype.hasOwnProperty.call(tMap, tk) || tk === "__meta") continue;
-        if (Number(tMap[tk]) > 0) tonMapPos++;
-      }
-    } catch (eDbgTon) {}
     var result = {
       success: true,
       danhMuc: danhMuc,
@@ -2877,17 +2907,17 @@ function getCatalogData(forceRefresh) {
       keyCount: keys,
       forced: !!force,
       mergedTonVariant: true,
-      stockFromTonVariant: true,
-      _debugRun: force ? "catalog-nocache-stockfix-v1" : "catalog-cache-stockfix-v1",
+      stockFromTonVariant: stockMerge.source === "TON_VARIANT",
+      stockSource: stockMerge.source || "none",
+      _debugRun: force ? "catalog-nocache-tonq7-v90" : "catalog-cache-tonq7-v90",
       _debugStock: {
         withTon: withTon,
         zeroTon: zeroTon,
         missingTon: missingTon,
-        tonVariantColMap: tonCols,
-        tonMapKeys: tonMapKeys,
-        tonMapPositive: tonMapPos,
-        sample: sample,
-        stockColMissing: !!(tonCols && (tonCols.tonHienTai == null || tonCols.tonHienTai < 0))
+        stockSource: stockMerge.source || "none",
+        tonMapKeys: stockMerge.mapKeys || 0,
+        applied: stockMerge.applied || 0,
+        sample: sample
       }
     };
     try {
@@ -2901,23 +2931,85 @@ function getCatalogData(forceRefresh) {
 
 
 /**
- * Gắn tonKho từ TON_VARIANT (Ton_Hien_Tai) vào catalog — ưu tiên số thật trên sheet biến thể.
+ * Gắn tồn kho vào catalog — ƯU TIÊN sheet TON_Q7, sau đó TON_VARIANT, giữ Data_Excel nếu đã có.
+ * Gán đủ alias: TonKho / tonKho / stock / tonHienTai.
  */
-function applyTonVariantStockToCatalog_(ss, danhMuc) {
+function applyMasterStockToCatalog_(ss, danhMuc) {
   danhMuc = danhMuc || {};
   ss = ss || getSS();
-  var map = readTonVariantMap_(ss) || {};
-  if (!Object.keys(map).length) return danhMuc;
+  var source = "none";
+  var map = null;
+  var q7Bundle = null;
+  try {
+    q7Bundle = readTonKhoQ7Bundle_(ss);
+    if (q7Bundle && q7Bundle.map && Object.keys(q7Bundle.map).length) {
+      map = q7Bundle.map;
+      source = q7Bundle.source || "TON_Q7";
+    }
+  } catch (eQ7) {}
+  if (!map || !Object.keys(map).length) {
+    try {
+      map = readTonVariantMap_(ss) || {};
+      if (Object.keys(map).length) source = "TON_VARIANT";
+    } catch (eVar) {}
+  }
+  if (!map || !Object.keys(map).length) {
+    Logger.log("CẢNH BÁO TỒN KHO: không đọc được TON_Q7 / TON_VARIANT — giữ tonKho từ Data_Excel (không gán 0 hàng loạt).");
+    return { danhMuc: danhMuc, source: source, mapKeys: 0 };
+  }
+
+  var applied = 0;
   for (var key in danhMuc) {
     if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
     var item = danhMuc[key];
     if (!item) continue;
-    var vStock = getVariantStockIfPresent_(map, item.maHang, item.maVach, item.dvt);
-    if (vStock === null || vStock === undefined) continue;
-    item.tonKho = vStock;
-    item.tonHienTai = vStock;
+    var looked = null;
+    // Strict-ish: ưu tiên getStockValueForItem; nếu 0 thì thử bare / variant present
+    var fromGet = getStockValueForItem(map, item.maHang, item.maVach, item.dvt);
+    var mh = normalizeProductCode(item.maHang);
+    var hasKey = false;
+    if (mh) {
+      hasKey = Object.prototype.hasOwnProperty.call(map, mh) ||
+        Object.prototype.hasOwnProperty.call(map, "MH:" + mh) ||
+        Object.prototype.hasOwnProperty.call(map, String(item.maHang || "").trim());
+    }
+    if (!hasKey) {
+      var mv = normalizeProductCode(item.maVach);
+      if (mv) {
+        hasKey = Object.prototype.hasOwnProperty.call(map, "MV:" + mv);
+      }
+    }
+    if (!hasKey) {
+      var vTry = getVariantStockIfPresent_(map, item.maHang, item.maVach, item.dvt);
+      if (vTry !== null && vTry !== undefined) {
+        looked = vTry;
+        hasKey = true;
+      }
+    } else {
+      looked = fromGet;
+      if ((looked === 0 || looked == null) && mh && map[mh] != null) looked = Number(map[mh]) || 0;
+      if ((looked === 0 || looked == null) && mh && map["MH:" + mh] != null) looked = Number(map["MH:" + mh]) || 0;
+    }
+    if (!hasKey || looked === null || looked === undefined) {
+      // Không đè Data_Excel bằng 0 giả
+      continue;
+    }
+    var stockVal = Number(looked);
+    if (isNaN(stockVal)) stockVal = 0;
+    item.TonKho = stockVal;
+    item.tonKho = stockVal;
+    item.stock = stockVal;
+    item.tonHienTai = stockVal;
+    applied++;
   }
-  return danhMuc;
+  return { danhMuc: danhMuc, source: source, mapKeys: Object.keys(map).length, applied: applied };
+}
+
+
+/** @deprecated dùng applyMasterStockToCatalog_ (ưu tiên TON_Q7) */
+function applyTonVariantStockToCatalog_(ss, danhMuc) {
+  var res = applyMasterStockToCatalog_(ss, danhMuc);
+  return res.danhMuc || danhMuc;
 }
 
 
