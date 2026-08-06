@@ -7,7 +7,7 @@ var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
 
 var TON_Q7_SHEET_NAME = "TON_Q7";
 
-var CACHE_TON_Q7_KEY = "ton_q7_map_v3_catalog_merge";
+var CACHE_TON_Q7_KEY = "ton_q7_map_v4_clamp0";
 
 // Tồn riêng theo biến thể đồ chơi — đối soát: Ton_Ban_Dau - Da_Xuat + Da_Nhan_Nhap = Ton_Hien_Tai
 // MASTER Cha–Con + stock biến thể: KHÔNG được sheet.clear() khi import MISA / tồn
@@ -160,7 +160,9 @@ function buildTonVariantKey_(maHang, dvt) {
 
 
 function calcTonHienTaiVariant_(tonBanDau, daXuat, daNhanNhap) {
-  return (Number(tonBanDau) || 0) - (Number(daXuat) || 0) + (Number(daNhanNhap) || 0);
+  var raw = (Number(tonBanDau) || 0) - (Number(daXuat) || 0) + (Number(daNhanNhap) || 0);
+  if (isNaN(raw)) return 0;
+  return Math.max(0, raw);
 }
 
 
@@ -1252,6 +1254,7 @@ function readTonKhoQ7Bundle_(ss) {
     if (typeof rawQty === "string") rawQty = String(rawQty).replace(/,/g, ".").trim();
     var qty = Number(rawQty);
     if (isNaN(qty)) qty = 0;
+    qty = Math.max(0, qty);
     var dvtCol = row[dvtIdx] != null ? String(row[dvtIdx]).trim() : "";
     // Sheet cũ: Key không có |DV: nhưng cột Dvt có giá trị → gắn vào key lookup
     var lookupKey = key;
