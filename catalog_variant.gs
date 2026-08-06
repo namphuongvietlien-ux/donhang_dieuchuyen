@@ -7,7 +7,7 @@ var PACKING_STOCK_STORE = "Kho Địa điểm kinh doanh Q7";
 
 var TON_Q7_SHEET_NAME = "TON_Q7";
 
-var CACHE_TON_Q7_KEY = "ton_q7_map_v4_clamp0";
+var CACHE_TON_Q7_KEY = "ton_q7_map_v7_sheet_bare";
 
 // Tồn riêng theo biến thể đồ chơi — đối soát: Ton_Ban_Dau - Da_Xuat + Da_Nhan_Nhap = Ton_Hien_Tai
 // MASTER Cha–Con + stock biến thể: KHÔNG được sheet.clear() khi import MISA / tồn
@@ -79,13 +79,33 @@ function writeTonQ7MapToSheet_(ss, map, dvtLabelByKey) {
   map = map || {};
   dvtLabelByKey = dvtLabelByKey || {};
   // Gộp Key trùng (MH:X vs MH:X|DV:cai) → 1 dòng / sản phẩm; ĐVT ở cột Dvt
+  // Cột A sheet: CHỈ mã SP (không lưu tiền tố MH:/MV:)
   var merged = {};
   var mergedDvt = {};
+  var _dbgStripSamples = 0;
   for (var k in map) {
     if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
     if (k === "__meta") continue;
     var ck = canonicalizeStockSheetKey_(k);
     if (!ck) continue;
+    var ckBeforeStrip = ck;
+    ck = String(ck).replace(/^MH:/i, "").replace(/^MV:/i, "").trim();
+    if (!ck) continue;
+    // #region agent log
+    if (_dbgStripSamples < 3 && ckBeforeStrip !== ck) {
+      _dbgStripSamples++;
+      try {
+        console.log(JSON.stringify({
+          sessionId: "f6b0dc",
+          hypothesisId: "H-write-mh",
+          location: "catalog_variant.gs:writeTonQ7MapToSheet_",
+          message: "TON_Q7 write strip MH",
+          data: { from: ckBeforeStrip, to: ck },
+          timestamp: Date.now()
+        }));
+      } catch (_dbgW) {}
+    }
+    // #endregion
     var qty = Number(map[k]) || 0;
     var wasSuffixed = String(k).indexOf("|") !== -1;
     if (merged[ck] === undefined || !wasSuffixed) {
@@ -93,7 +113,7 @@ function writeTonQ7MapToSheet_(ss, map, dvtLabelByKey) {
     } else if (!(Number(merged[ck]) > 0) && qty > 0) {
       merged[ck] = qty;
     }
-    var dvtLabel = dvtLabelByKey[k] || dvtFromStockKey_(k) || dvtLabelByKey[ck] || "";
+    var dvtLabel = dvtLabelByKey[k] || dvtFromStockKey_(k) || dvtLabelByKey[ck] || dvtLabelByKey[ckBeforeStrip] || "";
     if (dvtLabel) mergedDvt[ck] = dvtLabel;
     else if (!mergedDvt[ck]) mergedDvt[ck] = "";
   }
@@ -125,12 +145,12 @@ function writeTonQ7MapToSheet_(ss, map, dvtLabelByKey) {
     keyCount: rows.length,
     store: PACKING_STOCK_STORE,
     ms: Date.now() - t0,
-    _debugRun: "q7-v4-key-canon"
+    _debugRun: "q7-v5-sheet-bare-key"
   };
 }
 
 
-/** Ghi TON_Q7 từ entries {k,q,d} — Key chuẩn không kèm |DV: (ĐVT ở cột Dvt) */
+/** Ghi TON_Q7 từ entries {k,q,d} — Key Cột A = mã SP (không MH:/|DV:) */
 function writeTonQ7EntriesToSheet_(ss, entries) {
   var map = {};
   var dvtLabels = {};
@@ -140,6 +160,8 @@ function writeTonQ7EntriesToSheet_(ss, entries) {
     var rawKey = String(ent.k).trim();
     if (!rawKey) continue;
     var key = canonicalizeStockSheetKey_(rawKey);
+    if (!key) continue;
+    key = String(key).replace(/^MH:/i, "").replace(/^MV:/i, "").trim();
     if (!key) continue;
     map[key] = (Number(map[key]) || 0) + (Number(ent.q) || 0);
     var dLabel = String(ent.d || "").trim() || dvtFromStockKey_(rawKey);
@@ -967,7 +989,7 @@ function removeDuplicateStockRowsUnlocked_(ss) {
 }
 
 
-/** Tổng Ton_Hien_Tai theo Parent_SKU → ghi vào TON_Q7 (MH:Parent) */
+/** Tổng Ton_Hien_Tai theo Parent_SKU → ghi vào TON_Q7 (Key = Parent, không MH:) */
 function syncParentVariantTotalsToTonQ7_(ss, rows, onlyParents) {
   ss = ss || getSS();
   var parentSum = {};
@@ -987,7 +1009,7 @@ function syncParentVariantTotalsToTonQ7_(ss, rows, onlyParents) {
     if (!Object.prototype.hasOwnProperty.call(parentSum, parent)) continue;
     var mh = normalizeProductCode(parent);
     if (!mh) continue;
-    var q7Key = "MH:" + mh;
+    var q7Key = String(mh).replace(/^MH:/i, "").replace(/^MV:/i, "").trim() || mh;
     map[q7Key] = Number(parentSum[parent]) || 0;
     if (!labels[q7Key]) labels[q7Key] = "";
     updated++;
@@ -997,39 +1019,37 @@ function syncParentVariantTotalsToTonQ7_(ss, rows, onlyParents) {
 }
 
 
-/** Trả stock variant (Ton_Hien_Tai) nếu mã có trong TON_VARIANT; null nếu không */
+/** Trả stock variant (Ton_Hien_Tai) nếu mã có trong map; null nếu không — tra cứu O(1) */
 function getVariantStockIfPresent_(map, maHang, maVach, dvt) {
-  if (!map || !Object.keys(map).length) return null;
+  if (!map) return null;
   var mh = normalizeProductCode(maHang);
   var mv = normalizeProductCode(maVach);
+  var dvtNorm = normalizeDvtKey_(dvt);
   var rawKey = buildTonVariantKey_(maHang, dvt);
   var canon = canonicalizeTonVariantKey_(maHang) || mh;
-  if (rawKey && Object.prototype.hasOwnProperty.call(map, rawKey)) {
-    return parseTonStockNumber_(map[rawKey]);
+  var candidates = [];
+  if (rawKey) candidates.push(rawKey);
+  if (canon) candidates.push(canon);
+  if (mh) {
+    candidates.push(mh);
+    candidates.push("MH:" + mh);
+    if (dvtNorm) candidates.push("MH:" + mh + "|DV:" + dvtNorm);
   }
-  if (canon && Object.prototype.hasOwnProperty.call(map, canon)) {
-    return parseTonStockNumber_(map[canon]);
+  if (mv) {
+    candidates.push("MV:" + mv);
+    if (dvtNorm) candidates.push("MV:" + mv + "|DV:" + dvtNorm);
   }
-  if (mh && Object.prototype.hasOwnProperty.call(map, mh)) {
-    return parseTonStockNumber_(map[mh]);
-  }
-  var present = false;
-  for (var k in map) {
-    if (!Object.prototype.hasOwnProperty.call(map, k) || k === "__meta") continue;
-    if (rawKey && k === rawKey) { present = true; break; }
-    if (mh && (k === ("MH:" + mh) || k.indexOf("MH:" + mh + "|DV:") === 0 || k === mh || k.indexOf(mh + "|") === 0)) {
-      present = true; break;
+  var rawMh = String(maHang || "").trim();
+  if (rawMh && rawMh !== mh) candidates.push(rawMh);
+
+  for (var i = 0; i < candidates.length; i++) {
+    var ck = candidates[i];
+    if (!ck) continue;
+    if (map[ck] !== undefined && map[ck] !== null && map[ck] !== "") {
+      return parseTonStockNumber_(map[ck]);
     }
-    if (mv && (k === ("MV:" + mv) || k.indexOf("MV:" + mv + "|DV:") === 0)) { present = true; break; }
   }
-  if (!present) return null;
-  var looked = getStockValueForItem(map, maHang, maVach, dvt);
-  // Không để ĐVT lệch biến tồn thật thành 0 — fallback bare key
-  if (looked === 0 || looked === null || looked === undefined) {
-    if (canon && map[canon] != null) return parseTonStockNumber_(map[canon]);
-    if (mh && map["MH:" + mh] != null) return parseTonStockNumber_(map["MH:" + mh]);
-  }
-  return looked;
+  return null;
 }
 
 
@@ -1248,8 +1268,26 @@ function readTonKhoQ7Bundle_(ss) {
   for (var i = 0; i < data.length; i++) {
     var row = data[i];
     if (!row) continue;
-    var key = String(row[keyIdx] || "").trim();
-    if (!key) continue;
+    // Cột A có thể đã chứa sẵn tiền tố MH: (vd MH:TAM1021) — strip trước khi build key
+    var rawCode = String(row[keyIdx] || "").trim();
+    if (!rawCode) continue;
+    var cleanCode = String(rawCode || "").replace(/^MH:/i, "").trim();
+    if (!cleanCode) continue;
+    var key = cleanCode;
+    // #region agent log
+    if (i < 3) {
+      try {
+        console.log(JSON.stringify({
+          sessionId: "f6b0dc",
+          hypothesisId: "H-mh-prefix",
+          location: "catalog_variant.gs:readTonKhoQ7Bundle_",
+          message: "TON_Q7 colA clean",
+          data: { rawCode: rawCode, cleanCode: cleanCode, stripped: /^MH:/i.test(rawCode) },
+          timestamp: Date.now()
+        }));
+      } catch (_dbgMhClean) {}
+    }
+    // #endregion
     var rawQty = row[qtyIdx];
     if (typeof rawQty === "string") rawQty = String(rawQty).replace(/,/g, ".").trim();
     var qty = Number(rawQty);
@@ -1263,7 +1301,7 @@ function readTonKhoQ7Bundle_(ss) {
       if (dvtNorm) lookupKey = lookupKey + "|DV:" + dvtNorm;
     }
     map[lookupKey] = (Number(map[lookupKey]) || 0) + qty;
-    // Alias bare / MH: để catalog lookup không phụ thuộc prefix
+    // Alias bare / MH: — chỉ GÁN (không cộng lại qty; tránh 2× so với sheet)
     var bare = canonicalizeStockSheetKey_(key) || key;
     if (bare && bare !== lookupKey) {
       if (map[bare] === undefined) map[bare] = qty;
@@ -1272,8 +1310,17 @@ function readTonKhoQ7Bundle_(ss) {
     var mhOnly = String(bare || "").replace(/^MH:/i, "").replace(/^MV:/i, "");
     mhOnly = normalizeProductCode(mhOnly) || mhOnly;
     if (mhOnly) {
-      addStockValueByCode(map, "MH:", mhOnly, qty, dvtCol || "");
-      if (!dvtCol) addStockValueByCode(map, "MH:", mhOnly, qty, "");
+      var dvtNormAlias = normalizeDvtKey_(dvtCol || "");
+      var mhKeyFull = "MH:" + mhOnly + (dvtNormAlias ? ("|DV:" + dvtNormAlias) : "");
+      var mhKeyBare = "MH:" + mhOnly;
+      if (mhKeyFull !== lookupKey) {
+        if (map[mhKeyFull] === undefined) map[mhKeyFull] = qty;
+        else if (!(Number(map[mhKeyFull]) > 0) && qty > 0) map[mhKeyFull] = qty;
+      }
+      if (mhKeyBare !== lookupKey && mhKeyBare !== mhKeyFull) {
+        if (map[mhKeyBare] === undefined) map[mhKeyBare] = qty;
+        else if (!(Number(map[mhKeyBare]) > 0) && qty > 0) map[mhKeyBare] = qty;
+      }
     }
     if (dvtCol) dvtLabels[lookupKey] = dvtCol;
     else if (!dvtLabels[lookupKey]) dvtLabels[lookupKey] = dvtFromStockKey_(lookupKey);
@@ -2907,6 +2954,94 @@ function getCatalogData(forceRefresh) {
 
 
 /**
+ * Tra cứu tồn linh hoạt — cùng logic applyMasterStockToCatalog_:
+ * getStockValueForItem + fallback bare / MH: / getVariantStockIfPresent_ / parentSku.
+ * @returns {number|null} tồn >= 0 nếu tìm thấy key; null nếu không có trong map
+ */
+function resolveStockValueWithFallback_(map, maHang, maVach, dvt, parentSku) {
+  if (!map || typeof map !== "object") return null;
+  var mh = normalizeProductCode(maHang);
+  var hasKey = false;
+  if (mh) {
+    hasKey = Object.prototype.hasOwnProperty.call(map, mh) ||
+      Object.prototype.hasOwnProperty.call(map, "MH:" + mh) ||
+      Object.prototype.hasOwnProperty.call(map, String(maHang || "").trim());
+  }
+  if (!hasKey) {
+    var mv = normalizeProductCode(maVach);
+    if (mv) {
+      hasKey = Object.prototype.hasOwnProperty.call(map, "MV:" + mv);
+    }
+  }
+  var looked = null;
+  if (!hasKey) {
+    var vTry = getVariantStockIfPresent_(map, maHang, maVach, dvt);
+    if (vTry !== null && vTry !== undefined) looked = vTry;
+  } else {
+    looked = getStockValueForItem(map, maHang, maVach, dvt);
+    if ((looked === 0 || looked == null) && mh && map[mh] != null) looked = Number(map[mh]) || 0;
+    if ((looked === 0 || looked == null) && mh && map["MH:" + mh] != null) looked = Number(map["MH:" + mh]) || 0;
+  }
+  if (looked !== null && looked !== undefined && looked !== "") {
+    var n = Number(looked);
+    if (isNaN(n)) n = 0;
+    return Math.max(0, n);
+  }
+
+  // Fallback Parent_SKU / maHangDisplay — O(1) key trực tiếp
+  var parentRaw = String(parentSku || "").trim();
+  if (!parentRaw) return null;
+  var pNorm = normalizeProductCode(parentRaw) || parentRaw.toUpperCase();
+  if (!pNorm) return null;
+  if (mh && pNorm === mh) return null;
+
+  var dvtNorm = normalizeDvtKey_(dvt);
+  var pKeys = [pNorm, "MH:" + pNorm];
+  if (dvtNorm) pKeys.push("MH:" + pNorm + "|DV:" + dvtNorm);
+  if (parentRaw !== pNorm) {
+    pKeys.push(parentRaw);
+    pKeys.push("MH:" + parentRaw);
+    if (dvtNorm) pKeys.push("MH:" + parentRaw + "|DV:" + dvtNorm);
+  }
+
+  for (var pi = 0; pi < pKeys.length; pi++) {
+    var pk = pKeys[pi];
+    if (!pk) continue;
+    if (map[pk] !== undefined && map[pk] !== null && map[pk] !== "") {
+      var pn = Number(parseTonStockNumber_(map[pk]));
+      if (isNaN(pn)) pn = 0;
+      // #region agent log
+      try {
+        console.log(JSON.stringify({
+          sessionId: "f6b0dc",
+          hypothesisId: "H-parent",
+          location: "catalog_variant.gs:resolveStockValueWithFallback_",
+          message: "parentSku fallback hit",
+          data: { maHang: mh || "", parentRaw: parentRaw, hitKey: pk, stock: Math.max(0, pn) },
+          timestamp: Date.now()
+        }));
+      } catch (_dbgParentHit) {}
+      // #endregion
+      return Math.max(0, pn);
+    }
+  }
+  // #region agent log
+  try {
+    console.log(JSON.stringify({
+      sessionId: "f6b0dc",
+      hypothesisId: "H-parent",
+      location: "catalog_variant.gs:resolveStockValueWithFallback_",
+      message: "parentSku fallback miss",
+      data: { maHang: mh || "", parentRaw: parentRaw, pNorm: pNorm, tried: pKeys.length },
+      timestamp: Date.now()
+    }));
+  } catch (_dbgParentMiss) {}
+  // #endregion
+  return null;
+}
+
+
+/**
  * Gắn tồn kho vào catalog — ƯU TIÊN sheet TON_Q7, sau đó TON_VARIANT, giữ Data_Excel nếu đã có.
  * Gán đủ alias: TonKho / tonKho / stock / tonHienTai.
  */
@@ -2939,39 +3074,8 @@ function applyMasterStockToCatalog_(ss, danhMuc) {
     if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
     var item = danhMuc[key];
     if (!item) continue;
-    var looked = null;
-    // Strict-ish: ưu tiên getStockValueForItem; nếu 0 thì thử bare / variant present
-    var fromGet = getStockValueForItem(map, item.maHang, item.maVach, item.dvt);
-    var mh = normalizeProductCode(item.maHang);
-    var hasKey = false;
-    if (mh) {
-      hasKey = Object.prototype.hasOwnProperty.call(map, mh) ||
-        Object.prototype.hasOwnProperty.call(map, "MH:" + mh) ||
-        Object.prototype.hasOwnProperty.call(map, String(item.maHang || "").trim());
-    }
-    if (!hasKey) {
-      var mv = normalizeProductCode(item.maVach);
-      if (mv) {
-        hasKey = Object.prototype.hasOwnProperty.call(map, "MV:" + mv);
-      }
-    }
-    if (!hasKey) {
-      var vTry = getVariantStockIfPresent_(map, item.maHang, item.maVach, item.dvt);
-      if (vTry !== null && vTry !== undefined) {
-        looked = vTry;
-        hasKey = true;
-      }
-    } else {
-      looked = fromGet;
-      if ((looked === 0 || looked == null) && mh && map[mh] != null) looked = Number(map[mh]) || 0;
-      if ((looked === 0 || looked == null) && mh && map["MH:" + mh] != null) looked = Number(map["MH:" + mh]) || 0;
-    }
-    if (!hasKey || looked === null || looked === undefined) {
-      // Không đè Data_Excel bằng 0 giả
-      continue;
-    }
-    var stockVal = Number(looked);
-    if (isNaN(stockVal)) stockVal = 0;
+    var stockVal = resolveStockValueWithFallback_(map, item.maHang, item.maVach, item.dvt);
+    if (stockVal === null || stockVal === undefined) continue;
     item.TonKho = stockVal;
     item.tonKho = stockVal;
     item.stock = stockVal;

@@ -900,6 +900,41 @@ function hasDisplayStockValue_(item) {
   );
 }
 
+/** Bổ sung stock từ danhMucGoc khi server trả 0/null/rỗng */
+function enrichOrderRowStockFromCatalog_(r) {
+  if (!r) return r;
+  var empty =
+    r.stock === null || r.stock === undefined || r.stock === '' ||
+    (typeof r.stock === 'number' && isNaN(r.stock)) ||
+    Number(r.stock) === 0;
+  if (!empty) return r;
+  var cat = resolveSelectedCatalogProduct_(r.maHang, r.maVach, r.dvt) || null;
+  if (!cat && r.parentSku) {
+    cat = resolveSelectedCatalogProduct_(r.parentSku, r.maVach, r.dvt) ||
+      (danhMucGoc[String(r.parentSku).trim().toUpperCase()] || null);
+  }
+  if (!cat || !hasDisplayStockValue_(cat)) return r;
+  var fromCat = resolveDisplayStock_(cat);
+  // #region agent log
+  try {
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'f6b0dc' },
+      body: JSON.stringify({
+        sessionId: 'f6b0dc',
+        hypothesisId: 'H-fe-catalog-stock',
+        location: 'public/app.js:enrichOrderRowStockFromCatalog_',
+        message: 'enriched stock from catalog',
+        data: { maHang: r.maHang || '', parentSku: r.parentSku || '', before: r.stock, after: fromCat },
+        timestamp: Date.now()
+      })
+    }).catch(function() {});
+  } catch (_eEnrichLog) {}
+  // #endregion
+  r.stock = fromCat;
+  return r;
+}
+
 /** Xóa cache FE cũ khi schema tồn kho đổi — ép gọi lại API lấy Ton từ TON_Q7 */
 function invalidateStaleClientCaches_() {
   try {
@@ -3247,7 +3282,8 @@ function ql_hienThiChiTiet(phieu, options) {
   apiGet('getChiTietPhieu', { soPhieu: currentPhieuObj.soPhieu, storeName: currentPhieuObj.khoXuat, includeStock: '1' }, { directOnly: true, timeoutMs: 45000 }).then(function(res) {
     hideLoad();
     var parsed = unwrapListResponse_(res);
-    var rows = parsed.rows;
+    var rows = parsed.rows || [];
+    (rows || []).forEach(function(r) { enrichOrderRowStockFromCatalog_(r); });
     editRows = rows; currentLoadedRows = rows || []; var tb = document.getElementById("ql-tbody"); tb.innerHTML = "";
     var isConfirmedOrder = rows.some(function(r) { return r.trangThai === "Đã xác nhận nhận hàng"; });
     var isPackedOrder = rows.some(function(r) { return r.trangThai === "Đã soạn hàng"; });
@@ -4288,6 +4324,7 @@ function sh_chonDonMobile() {
       document.getElementById("sh-footer").style.display = "none";
       return;
     }
+    (items || []).forEach(function(it) { enrichOrderRowStockFromCatalog_(it); });
     // Đồng bộ header: ưu tiên getOrderDetail (có createdAt + updatedAt/audit)
     var calHit = sh_findOrderInWeekCal_(sp);
     if (calHit) {

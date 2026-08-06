@@ -818,10 +818,39 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
       matchedRows.push(rowItem);
     }
 
+    console.log('STORE_NAME:', storeName, 'IS_Q7:', isPackingQ7Store_(storeName));
+    var q7Map = {};
     if (wantStock && matchedRows.length && isPackingQ7Store_(storeName)) {
-      var tonKhoMap = getStockMapForStore(ss, storeName) || {};
+      q7Map = getStockMapForStore(ss, storeName) || {};
       for (var j = 0; j < matchedRows.length; j++) {
-        matchedRows[j].stock = getStockValueForItem(tonKhoMap, matchedRows[j].maHang, matchedRows[j].maVach, matchedRows[j].dvt);
+        var sQ7 = resolveStockValueWithFallback_(
+          q7Map,
+          matchedRows[j].maHang,
+          matchedRows[j].maVach,
+          matchedRows[j].dvt,
+          matchedRows[j].parentSku || matchedRows[j].maHangDisplay
+        );
+        // #region agent log
+        if (j < 3) {
+          try {
+            console.log(JSON.stringify({
+              sessionId: "f6b0dc",
+              hypothesisId: "H-parent",
+              location: "batch_soan_hang.gs:getChiTietPhieu",
+              message: "Q7 stock resolve sample",
+              data: {
+                maHang: matchedRows[j].maHang,
+                parentSku: matchedRows[j].parentSku || "",
+                maHangDisplay: matchedRows[j].maHangDisplay || "",
+                stock: (sQ7 === null || sQ7 === undefined) ? 0 : sQ7,
+                hit: sQ7 !== null && sQ7 !== undefined
+              },
+              timestamp: Date.now()
+            }));
+          } catch (_dbgQ7Sample) {}
+        }
+        // #endregion
+        matchedRows[j].stock = (sQ7 === null || sQ7 === undefined) ? 0 : sQ7;
       }
     }
     // Overlay tồn biến thể (TON_VARIANT) nếu SKU thuộc nhóm Parent — không đụng logic trừ tồn A/B/C
@@ -830,8 +859,8 @@ function getChiTietPhieu(soPhieu, storeName, includeStock) {
         var variantMap = readTonVariantMap_(ss);
         if (variantMap && Object.keys(variantMap).length) {
           for (var jv = 0; jv < matchedRows.length; jv++) {
-            var vStock = getVariantStockIfPresent_(variantMap, matchedRows[jv].maHang, matchedRows[jv].maVach, matchedRows[jv].dvt);
-            if (vStock !== null) matchedRows[jv].stock = vStock;
+            var vStock = resolveStockValueWithFallback_(variantMap, matchedRows[jv].maHang, matchedRows[jv].maVach, matchedRows[jv].dvt);
+            if (vStock !== null && vStock !== undefined) matchedRows[jv].stock = vStock;
           }
         }
       } catch (varStockErr) {}
@@ -1927,7 +1956,8 @@ function getChiTietDonHangMobile(soPhieu) {
   try {
     var tonKhoMap = getStockMapForStore(ss, khoXuat) || {};
     for (var j = 0; j < items.length; j++) {
-      items[j].stock = getStockValueForItem(tonKhoMap, items[j].maHang, items[j].maVach, items[j].dvt);
+      var sMob = resolveStockValueWithFallback_(tonKhoMap, items[j].maHang, items[j].maVach, items[j].dvt);
+      items[j].stock = (sMob === null || sMob === undefined) ? 0 : sMob;
     }
   } catch (stockErr) {
     for (var k = 0; k < items.length; k++) items[k].stock = "";
@@ -1937,7 +1967,7 @@ function getChiTietDonHangMobile(soPhieu) {
     var variantMap = readTonVariantMap_(ss);
     if (variantMap && Object.keys(variantMap).length) {
       for (var jv = 0; jv < items.length; jv++) {
-        var vStock = getVariantStockIfPresent_(variantMap, items[jv].maHang, items[jv].maVach, items[jv].dvt);
+        var vStock = resolveStockValueWithFallback_(variantMap, items[jv].maHang, items[jv].maVach, items[jv].dvt);
         if (vStock !== null && vStock !== undefined) items[jv].stock = vStock;
       }
     }

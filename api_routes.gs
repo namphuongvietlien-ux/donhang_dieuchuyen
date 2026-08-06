@@ -129,10 +129,11 @@ function doPost(e) {
       } catch(apiErr) {
         return ContentService.createTextOutput(JSON.stringify({
           success: false,
-          error: apiErr.message || String(apiErr),
-          msg: apiErr.message || String(apiErr),
+          error: String(apiErr),
+          stack: apiErr && apiErr.stack,
+          msg: (apiErr && apiErr.message) || String(apiErr),
           action: action,
-          _debugRun: "post-fix-v3-catch"
+          _debugRun: "post-catch-global"
         })).setMimeType(ContentService.MimeType.JSON);
       }
     }
@@ -147,10 +148,15 @@ function doPost(e) {
     } else if (update.callback_query && update.callback_query.message) {
       handleTelegramMessage(update.callback_query.message);
     }
+    return ContentService.createTextOutput("OK");
   } catch (err) {
     Logger.log("doPost error: " + err);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: String(err),
+      stack: err && err.stack
+    })).setMimeType(ContentService.MimeType.JSON);
   }
-  return ContentService.createTextOutput("OK");
 }
 
 function handleTelegramMessage(message) {
@@ -395,14 +401,18 @@ function doGet(e) {
       }
       return ContentService.createTextOutput(JSON.stringify(res)).setMimeType(ContentService.MimeType.JSON);
     }
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ error: err.message })).setMimeType(ContentService.MimeType.JSON);
-  }
-  return HtmlService.createTemplateFromFile('WebApp')
+    return HtmlService.createTemplateFromFile('WebApp')
       .evaluate()
       .setTitle('⚡ Hệ Thống Quản Lý Kho')
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
       .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: String(err),
+      stack: err && err.stack
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 

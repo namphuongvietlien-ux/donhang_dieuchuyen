@@ -727,11 +727,18 @@ function taoBangSoanHangNgayMai(payload) {
     if (_dbgDvtSample.length < 5) {
       _dbgDvtSample.push({ ma: it.maHang || it.maVach, orderDvt: it.dvt || "", out: dvtOut || "", src: dvtSource || "empty" });
     }
-    var stock = stockReady ? getStockValueForItem(q7Map, it.maHang, it.maVach, dvtOut || it.dvt) : 0;
-    var stockSource = stockReady ? "TON_Q7" : "";
-    var vStockPack = getVariantStockIfPresent_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt);
-    if (vStockPack !== null && vStockPack !== undefined) {
-      stock = Number(vStockPack) || 0;
+    var stock = 0;
+    var stockSource = "";
+    if (stockReady) {
+      var sQ7Pack = resolveStockValueWithFallback_(q7Map, it.maHang, it.maVach, dvtOut || it.dvt);
+      if (sQ7Pack !== null && sQ7Pack !== undefined) {
+        stock = sQ7Pack;
+        stockSource = "TON_Q7";
+      }
+    }
+    var sVarPack = resolveStockValueWithFallback_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt);
+    if (sVarPack !== null && sVarPack !== undefined) {
+      stock = sVarPack;
       stockSource = "TON_VARIANT";
     }
     var rowHasStock = !!stockSource;
@@ -746,7 +753,7 @@ function taoBangSoanHangNgayMai(payload) {
     var maPack = metaPack.maHangDisplay || it.maHang || "";
     var tenPack = metaPack.tenHangDisplay || formatVariantDisplayName_(it.maHang, it.tenHang);
 
-    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", rowHasStock ? stock : "", it.totalQty];
+    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", rowHasStock ? Math.max(0, Number(stock) || 0) : "", it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
     rowOut.push(canhBao);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));
