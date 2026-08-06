@@ -5,6 +5,7 @@ Repository contents:
 - webapp.html: original GAS-served frontend
 - public/: static frontend for Vercel
 - api/gas-proxy.js: serverless proxy for GAS
+- fifo_inventory.gs: FIFO stock lots (STOCK_LOTS), in-memory/CacheService, LockService wrappers
 
 Deployment:
 - Frontend: deploy public/ to Vercel or any static host.
