@@ -1,0 +1,22 @@
+---
+description: Ba Luật Bất Khả Xâm Phạm — NO REWRITE, bảo tồn schema tồn/SL đặt, isolated patch
+alwaysApply: true
+---
+
+# LUẬT BẤT KHẢ XÂM PHẠM DÀNH CHO CURSOR AI
+
+## 1. NGUYÊN TẮC SỬA CODE (NO REWRITE)
+
+- Tuyệt đối KHÔNG viết lại toàn bộ file nếu chỉ cần sửa 1 hàm.
+- Chỉ được phép chỉnh sửa đúng hàm/đoạn code liên quan trực tiếp đến yêu cầu.
+- Giữ nguyên 100% cấu trúc HTML (`webapp.html`) và CSS trừ khi được yêu cầu đổi UI.
+
+## 2. BẢO TỒN DATA SCHEMA (KHÔNG ĐỔI TÊN BIẾN)
+
+- Khái niệm TỒN KHO (`tonHienTai`, `tonKhoQ7`, `stock`) và NHU CẦU ĐẶT (`soLuongSoan`, `soLuongDat`) là 2 TRƯỜNG HOÀN TOÀN KHÁC NHAU.
+- Tuyệt đối KHÔNG được gán giá trị số lượng đặt/soạn vào cột Tồn Kho.
+
+## 3. QUY TRÌNH THỰC THI (ISOLATED PATCH)
+
+- Trước khi sửa, phải giải thích nguyên nhân và danh sách các hàm SẼ THAY ĐỔI.
+- Sau khi sửa, kiểm tra cú pháp (`SYNTAX_OK`) và xác nhận không ảnh hưởng đến các hàm xung quanh.

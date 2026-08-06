@@ -170,9 +170,7 @@ function resolvePackingOrderStatusMeta_(item) {
 
 
 function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMDD, packingMode, includePacked) {
-  // #region agent log
   var _dbgT0 = Date.now();
-  // #endregion
   // ngayTo = ngày tổng hợp/giao N2. Fallback: ngay hoặc hôm nay.
   var packingDay = parseDateInputYYYYMMDD(ngayToYYYYMMDD) || parseDateInputYYYYMMDD(ngayYYYYMMDD) || getScriptTodayStart_() || new Date();
   packingDay = new Date(packingDay.getFullYear(), packingDay.getMonth(), packingDay.getDate(), 0, 0, 0, 0);
@@ -182,9 +180,7 @@ function getDanhSachDonSoanHang(ngayYYYYMMDD, userRole, userStore, ngayToYYYYMMD
   var orders = getEligibleOrdersForSoanHang(packingDay, userRole, userStore, null, packingDay, win, mode, {
     includeAllStatuses: true
   });
-  // #region agent log
   var _dbgMs = Date.now() - _dbgT0;
-  // #endregion
   var branchMergeHints = buildBranchMergeHints_(orders);
   return {
     success: true,
@@ -384,7 +380,6 @@ function buildBranchMergeHints_(orders) {
 function taoBangSoanHangNgayMai(payload) {
   // Thuật toán nhanh: chỉ đọc dòng của đơn đã chọn + gom mã + ghi sheet.
   // BỎ đọc "TỔNG HỢP TỒN KHO" (nguyên nhân chậm 1–2 phút).
-  // #region agent log
   var _dbgT0 = Date.now();
   var _dbgSteps = [];
   function _dbgMark(step, extra) {
@@ -408,7 +403,6 @@ function taoBangSoanHangNgayMai(payload) {
     newAfterTime: newAfterTime,
     newBeforeTime: newBeforeTime
   });
-  // #endregion
 
   var ss = getSS();
   var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
@@ -459,14 +453,12 @@ function taoBangSoanHangNgayMai(payload) {
     });
     selectedSet = buildOrderMatchSet_(eligibleOrders.map(function(o) { return o && o.soPhieu; }));
   }
-  // #region agent log
   _dbgMark("readHistory", {
     historyRows: historyPack.data ? historyPack.data.length - 1 : 0,
     scannedRows: historyPack.scannedRows || (historyPack.data ? historyPack.data.length - 1 : 0),
     matchedRows: historyPack.matchedRows || 0,
     targeted: !!selectedOrdersRaw.length
   });
-  // #endregion
 
   var data = historyPack.data;
   if (!data || data.length < 2) {
@@ -497,13 +489,11 @@ function taoBangSoanHangNgayMai(payload) {
   // ĐVT: ưu tiên lịch sử → Data_Excel (cache) → TON_Q7. Ghi ngược vào lịch sử nếu trống.
   var catalogLookup = null;
   try { catalogLookup = getCatalogLookup(ss); } catch (catErr) { catalogLookup = null; }
-  // #region agent log
   _dbgMark("catalogLookup", {
     ready: !!(catalogLookup && (Object.keys(catalogLookup.byMaVach || {}).length || Object.keys(catalogLookup.byMaHang || {}).length)),
     byMaVach: catalogLookup ? Object.keys(catalogLookup.byMaVach || {}).length : 0,
     byMaHang: catalogLookup ? Object.keys(catalogLookup.byMaHang || {}).length : 0
   });
-  // #endregion
   var historyDvtBackfill = []; // { sheetRow, dvt }
   var skippedByTime = 0;
   var skippedNotSupplement = 0;
@@ -605,7 +595,6 @@ function taoBangSoanHangNgayMai(payload) {
   }
 
   var keys = Object.keys(itemMap);
-  // #region agent log
   _dbgMark("aggregateItems", {
     itemCount: keys.length,
     storeCount: storeList.length,
@@ -619,7 +608,6 @@ function taoBangSoanHangNgayMai(payload) {
     newAfterLabel: newAfterLabel,
     newBeforeLabel: newBeforeLabel
   });
-  // #endregion
   if (!keys.length) {
     var emptyMsg = packingMode === "supp"
       ? ("Không có dòng trong khung BỔ SUNG " + (newAfterLabel || "N2 08:00") + " → " + (newBeforeLabel || "N2 10:00") + " (không gồm mốc 10:00).")
@@ -677,7 +665,6 @@ function taoBangSoanHangNgayMai(payload) {
   try { variantMapPack = readTonVariantMap_(ss) || {}; } catch (eVar) { variantMapPack = {}; }
   var parentByChildPack = {};
   try { parentByChildPack = buildTonVariantParentLookup_(ss) || {}; } catch (ePar) { parentByChildPack = {}; }
-  // #region agent log
   _dbgMark("stockIndex", {
     via: "TON_Q7+TON_VARIANT",
     stockReady: stockReady,
@@ -687,7 +674,6 @@ function taoBangSoanHangNgayMai(payload) {
     forceStock: forceStock,
     itemCount: keys.length
   });
-  // #endregion
 
   var sheetName = packingMode === "supp"
     ? "__TMP_SOAN_BO_SUNG"
@@ -716,13 +702,11 @@ function taoBangSoanHangNgayMai(payload) {
   var rows = [];
   var missingLines = 0;
   var warningCol = 8 + storeList.length;
-  // #region agent log
   var _dbgDvtFromOrder = 0;
   var _dbgDvtCatalog = 0;
   var _dbgDvtInferred = 0;
   var _dbgDvtEmpty = 0;
   var _dbgDvtSample = [];
-  // #endregion
   for (var k = 0; k < keys.length; k++) {
     var it = itemMap[keys[k]];
     var sourceStores = Object.keys(it.sourceStores);
@@ -736,7 +720,6 @@ function taoBangSoanHangNgayMai(payload) {
       dvtOut = inferDvtLabelFromStockMap_(q7Map, q7DvtLabels, it.maHang, it.maVach) || "";
       if (dvtOut) dvtSource = "ton_q7";
     }
-    // #region agent log
     if (dvtSource === "resolved") _dbgDvtFromOrder++;
     else if (dvtSource === "catalog") _dbgDvtCatalog++;
     else if (dvtSource === "ton_q7") _dbgDvtInferred++;
@@ -744,7 +727,6 @@ function taoBangSoanHangNgayMai(payload) {
     if (_dbgDvtSample.length < 5) {
       _dbgDvtSample.push({ ma: it.maHang || it.maVach, orderDvt: it.dvt || "", out: dvtOut || "", src: dvtSource || "empty" });
     }
-    // #endregion
     var stock = stockReady ? getStockValueForItem(q7Map, it.maHang, it.maVach, dvtOut || it.dvt) : 0;
     var stockSource = stockReady ? "TON_Q7" : "";
     var vStockPack = getVariantStockIfPresent_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt);
@@ -809,9 +791,7 @@ function taoBangSoanHangNgayMai(payload) {
   for (var rb = 0; rb < rows.length; rb++) sheetBlock.push(padRow_(rows[rb], colCount));
   reportSheet.getRange(1, 1, sheetBlock.length, colCount).setValues(sheetBlock);
   reportSheet.setFrozenRows(headerRow);
-  // #region agent log
   _dbgMark("writeSheetData", { outputRows: rows.length, colCount: colCount, missingLines: missingLines, stockReady: stockReady });
-  // #endregion
 
   // Ghi ĐVT đã resolve từ Data_Excel vào cột J (ĐVT thực tế) của lịch sử — tối đa 400 ô/lần
   var backfilled = 0;
@@ -824,15 +804,11 @@ function taoBangSoanHangNgayMai(payload) {
       } catch (bfErr) {}
     }
   }
-  // #region agent log
   _dbgMark("backfillHistoryDvt", { candidates: historyDvtBackfill.length, written: backfilled });
-  // #endregion
 
   SpreadsheetApp.flush();
-  // #region agent log
   _dbgMark("flush", {});
   var _dbgTotalMs = Date.now() - _dbgT0;
-  // #endregion
 
   return {
     success: true,

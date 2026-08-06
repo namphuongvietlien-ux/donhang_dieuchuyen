@@ -2880,25 +2880,8 @@ function getCatalogData(forceRefresh) {
       danhMuc = stockMerge.danhMuc || danhMuc;
     } catch (eTon) {}
     var keys = 0;
-    var withTon = 0, zeroTon = 0, missingTon = 0;
-    var sample = [];
     for (var k in danhMuc) {
-      if (!Object.prototype.hasOwnProperty.call(danhMuc, k)) continue;
-      keys++;
-      var it = danhMuc[k];
-      if (!it) continue;
-      if (it.tonKho === null || it.tonKho === undefined || it.tonKho === "") missingTon++;
-      else if (Number(it.tonKho) === 0) zeroTon++;
-      else withTon++;
-      if (sample.length < 5) {
-        sample.push({
-          mh: String(it.maHang || "").slice(0, 24),
-          tonKho: it.tonKho,
-          TonKho: it.TonKho,
-          stock: it.stock,
-          tonHienTai: it.tonHienTai
-        });
-      }
+      if (Object.prototype.hasOwnProperty.call(danhMuc, k)) keys++;
     }
     var result = {
       success: true,
@@ -2908,17 +2891,7 @@ function getCatalogData(forceRefresh) {
       forced: !!force,
       mergedTonVariant: true,
       stockFromTonVariant: stockMerge.source === "TON_VARIANT",
-      stockSource: stockMerge.source || "none",
-      _debugRun: force ? "catalog-nocache-tonq7-v90" : "catalog-cache-tonq7-v90",
-      _debugStock: {
-        withTon: withTon,
-        zeroTon: zeroTon,
-        missingTon: missingTon,
-        stockSource: stockMerge.source || "none",
-        tonMapKeys: stockMerge.mapKeys || 0,
-        applied: stockMerge.applied || 0,
-        sample: sample
-      }
+      stockSource: stockMerge.source || "none"
     };
     try {
       putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS);
