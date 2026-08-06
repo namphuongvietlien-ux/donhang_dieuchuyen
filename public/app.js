@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-06-v90-ton-q7-fix';
+var APP_BUILD = '2026-08-06-v91-no-debug-ingest';
 var shCreateDateUserTouched_ = false;
 var shStockWarmState = { ready: false, warming: false, lastMs: 0, promise: null };
 var packingTimelineTimer = null;
@@ -302,17 +302,17 @@ var variantPickerState = { open: false, mode: 'order', parentSku: '', qty: 1, va
 /** Snapshot dòng đơn vừa tạo — dùng In/Excel sau khi clear arrItems */
 var lastCreatedOrderItems_ = [];
 var catalogLoadState = { loading: false, ready: false, version: '' };
-var CATALOG_CACHE_KEY = 'donhang_catalog_v90_ton_q7';
-var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v90_ton_q7';
-var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v90_ton_q7';
+var CATALOG_CACHE_KEY = 'donhang_catalog_v91_no_debug';
+var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v91_no_debug';
+var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v91_no_debug';
 var CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
-var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v90_ton_q7';
-var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v90_ton_q7';
+var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v91_no_debug';
+var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v91_no_debug';
 var BOOTSTRAP_CACHE_TTL_MS = 60 * 60 * 1000;
 /** Auto invalidate local catalog/stock caches when schema bumps */
-var CLIENT_STOCK_CACHE_SCHEMA = 'v90_TON_Q7_FIX';
+var CLIENT_STOCK_CACHE_SCHEMA = 'v91_NO_DEBUG_INGEST';
 var CLIENT_STOCK_CACHE_SCHEMA_KEY = 'donhang_stock_cache_schema';
-var CACHE_KEY_VER = 'v90_TON_Q7_FIX';
+var CACHE_KEY_VER = 'v91_NO_DEBUG_INGEST';
 var APP_CACHE_VER_KEY = 'APP_CACHE_VER';
 var MASTER_CATALOG_LEGACY_KEYS_ = ['MASTER_CATALOG', 'donhang_catalog_v4_composite_key', 'donhang_catalog_ts_v4', 'donhang_catalog_version_v4', 'donhang_bootstrap_v1', 'donhang_bootstrap_ts_v1', 'donhang_catalog_v5_stock_fix', 'donhang_catalog_ts_v5_stock_fix', 'donhang_catalog_version_v5_stock_fix', 'donhang_bootstrap_v2_stock_fix', 'donhang_bootstrap_ts_v2_stock_fix'];
 function escapeHtml(value) {
@@ -915,22 +915,6 @@ function enrichOrderRowStockFromCatalog_(r) {
   }
   if (!cat || !hasDisplayStockValue_(cat)) return r;
   var fromCat = resolveDisplayStock_(cat);
-  // #region agent log
-  try {
-    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'f6b0dc' },
-      body: JSON.stringify({
-        sessionId: 'f6b0dc',
-        hypothesisId: 'H-fe-catalog-stock',
-        location: 'public/app.js:enrichOrderRowStockFromCatalog_',
-        message: 'enriched stock from catalog',
-        data: { maHang: r.maHang || '', parentSku: r.parentSku || '', before: r.stock, after: fromCat },
-        timestamp: Date.now()
-      })
-    }).catch(function() {});
-  } catch (_eEnrichLog) {}
-  // #endregion
   r.stock = fromCat;
   return r;
 }
