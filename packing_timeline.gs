@@ -727,18 +727,42 @@ function taoBangSoanHangNgayMai(payload) {
     if (_dbgDvtSample.length < 5) {
       _dbgDvtSample.push({ ma: it.maHang || it.maVach, orderDvt: it.dvt || "", out: dvtOut || "", src: dvtSource || "empty" });
     }
+    // Mã cột = Parent_SKU (mã trên bao bì/kệ); tên = Cha - Biến thể (Mã con: …)
+    var metaPack = resolveVariantDisplayMeta_(catalogLookup, it.maHang, it.maVach, it.tenHang, parentByChildPack);
+    var maPack = metaPack.maHangDisplay || it.maHang || "";
+    var tenPack = metaPack.tenHangDisplay || formatVariantDisplayName_(it.maHang, it.tenHang);
+
+    // Cột F — tra cứu đa tầng: bare / MH: / maHang / maVach / parent (maPack)
     var stock = 0;
     var stockSource = "";
     if (stockReady) {
-      var sQ7Pack = resolveStockValueWithFallback_(q7Map, it.maHang, it.maVach, dvtOut || it.dvt);
-      if (sQ7Pack !== null && sQ7Pack !== undefined) {
-        stock = sQ7Pack;
-        stockSource = "TON_Q7";
+      var code = String(maPack || it.maHang || it.maVach || "").replace(/^MH:/i, "").trim();
+      var rawStock = q7Map[code]
+        || q7Map["MH:" + code]
+        || q7Map[it.maHang]
+        || q7Map[it.maVach]
+        || q7Map[maPack]
+        || 0;
+      var hitQ7 = (code && (q7Map[code] != null || q7Map["MH:" + code] != null))
+        || (it.maHang && q7Map[it.maHang] != null)
+        || (it.maVach && q7Map[it.maVach] != null)
+        || (maPack && q7Map[maPack] != null);
+      if (!hitQ7) {
+        var sQ7Pack = resolveStockValueWithFallback_(
+          q7Map, it.maHang, it.maVach, dvtOut || it.dvt, maPack || it.parentSku || it.maHangDisplay
+        );
+        if (sQ7Pack !== null && sQ7Pack !== undefined) {
+          rawStock = sQ7Pack;
+          hitQ7 = true;
+        }
       }
+      var safeStock = Math.max(0, Number(rawStock) || 0);
+      stock = safeStock;
+      if (hitQ7) stockSource = "TON_Q7";
     }
-    var sVarPack = resolveStockValueWithFallback_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt);
+    var sVarPack = resolveStockValueWithFallback_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt, maPack || it.parentSku);
     if (sVarPack !== null && sVarPack !== undefined) {
-      stock = sVarPack;
+      stock = Math.max(0, Number(sVarPack) || 0);
       stockSource = "TON_VARIANT";
     }
     var rowHasStock = !!stockSource;
@@ -748,12 +772,8 @@ function taoBangSoanHangNgayMai(payload) {
       canhBao = thieu > 0 ? ("THIẾU " + thieu) : (stockSource === "TON_VARIANT" ? "OK (variant)" : "OK");
       if (thieu > 0) missingLines += 1;
     }
-    // Mã cột = Parent_SKU (mã trên bao bì/kệ); tên = Cha - Biến thể (Mã con: …)
-    var metaPack = resolveVariantDisplayMeta_(catalogLookup, it.maHang, it.maVach, it.tenHang, parentByChildPack);
-    var maPack = metaPack.maHangDisplay || it.maHang || "";
-    var tenPack = metaPack.tenHangDisplay || formatVariantDisplayName_(it.maHang, it.tenHang);
 
-    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", rowHasStock ? Math.max(0, Number(stock) || 0) : "", it.totalQty];
+    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", Math.max(0, Number(stock) || 0), it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
     rowOut.push(canhBao);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));
@@ -852,18 +872,14 @@ function taoBangSoanHangNgayMai(payload) {
 
 /**
  * Lịch tuần gom đơn đa kho động (Thứ 2 → Chủ Nhật).
- * Nhóm theo ngày tạo đơn (calendar) + kho nhận thực tế — không hardcode Q8/PH.
+ * Đọc sheet 1 lần (RAM) + CacheService 5 phút (key cal_{weekStart}).
  * @param {string} weekStartYYYYMMDD Monday hoặc bất kỳ ngày trong tuần
  * @param {string} userRole
  * @param {string} userStore
  */
 function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
   var t0 = Date.now();
-  var ss = getSS();
-  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
-  if (!historySheet) {
-    return { success: false, error: "Không có sheet Lịch Sử Xuất Kho.", days: [], warehouses: [] };
-  }
+  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
 
   var anchor = parseDateInputYYYYMMDD(weekStartYYYYMMDD) || getScriptTodayStart_() || new Date();
   anchor = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
@@ -873,13 +889,37 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
   var weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7, 0, 0, 0, 0);
   var weekStartMs = weekStart.getTime();
   var weekEndMs = weekEnd.getTime();
-  var tz = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+  var weekStartKey = Utilities.formatDate(weekStart, tz, "yyyy-MM-dd");
+  var cacheKey = "cal_" + weekStartKey;
 
-  var pack = readHistoryDataPack_(historySheet, 8000);
-  var data = pack.data || [[]];
-  var filterStore = normalizeStoreName(userStore || "");
+  var cache = null;
+  try { cache = getScriptCache_(); } catch (eCacheGet) { cache = null; }
+  var cached = null;
+  try { cached = getCacheJson_(cache, cacheKey); } catch (eCacheRead) { cached = null; }
+  if (cached && cached.success && cached.days) {
+    var fromCache = filterPackingWeekCalendarForUser_(cached, userRole, userStore);
+    fromCache._debugTotalMs = Date.now() - t0;
+    fromCache._debugCache = "HIT";
+    fromCache._debugRun = "packing-week-calendar-v3-cache";
+    return fromCache;
+  }
+
+  var ss = getSS();
+  var historySheet = ss.getSheetByName("Lịch Sử Xuất Kho");
+  if (!historySheet) {
+    return { success: false, error: "Không có sheet Lịch Sử Xuất Kho.", days: [], warehouses: [] };
+  }
+
+  // Đọc ĐÚNG 1 LẦN toàn bộ vùng dữ liệu → xử lý trong RAM
+  var data = [];
+  try {
+    data = historySheet.getDataRange().getValues() || [];
+  } catch (eRead) {
+    Logger.log("getPackingWeekCalendar_ getDataRange error: " + (eRead.message || eRead));
+    data = [];
+  }
+
   var map = {};
-
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
     if (!row) continue;
@@ -890,9 +930,6 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
 
     var khoXuat = row[2] ? String(row[2]).trim() : "";
     var khoNhan = row[3] ? String(row[3]).trim() : "";
-    if (userRole !== "Admin") {
-      if (!isSameStoreName(khoXuat, filterStore) && !isSameStoreName(khoNhan, filterStore)) continue;
-    }
     var rowStatus = row[12] ? String(row[12]).trim() : "Mới";
     if (rowStatus === "Đã hủy đơn" || rowStatus === "Hủy (Trùng đơn)") continue;
     var isLineCancel = rowStatus === "Đã hủy dòng";
@@ -943,67 +980,75 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
     }
   }
 
+  // Precompute 7 ngày + bucket 1 lần (không quét lại map × 7)
   var weekdayNames = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"];
-  var days = [];
-  var warehouseIndex = {};
-
+  var dayMs = 24 * 60 * 60 * 1000;
+  var dayMeta = [];
+  var dayBuckets = [];
   for (var d = 0; d < 7; d++) {
     var dayDate = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + d, 0, 0, 0, 0);
-    var dayEnd = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate() + 1, 0, 0, 0, 0);
-    var dateStr = Utilities.formatDate(dayDate, tz, "yyyy-MM-dd");
-    var dateLabel = Utilities.formatDate(dayDate, tz, "dd/MM");
-    var byWh = {};
+    dayMeta.push({
+      dateStr: Utilities.formatDate(dayDate, tz, "yyyy-MM-dd"),
+      dateLabel: Utilities.formatDate(dayDate, tz, "dd/MM"),
+      weekday: weekdayNames[d],
+      startMs: dayDate.getTime()
+    });
+    dayBuckets.push({});
+  }
 
-    for (var sp in map) {
-      if (!Object.prototype.hasOwnProperty.call(map, sp)) continue;
-      var ord = map[sp];
-      if (ord.createdAtMs < dayDate.getTime() || ord.createdAtMs >= dayEnd.getTime()) continue;
+  var warehouseIndex = {};
+  for (var sp in map) {
+    if (!Object.prototype.hasOwnProperty.call(map, sp)) continue;
+    var ord = map[sp];
+    var dayIndex = Math.floor((ord.createdAtMs - weekStartMs) / dayMs);
+    if (dayIndex < 0 || dayIndex > 6) continue;
 
-      // Nhóm theo kho nhận thực tế (fallback kho xuất) — động
-      var rawKho = ord.khoNhan || ord.khoXuat || "Khác";
-      var khoKey = normalizeStoreName(rawKho) || String(rawKho).trim() || "other";
-      var khoLabel = formatStoreDisplayLabel_(rawKho) || formatShortStoreLabel(rawKho) || rawKho;
-      if (!byWh[khoKey]) {
-        byWh[khoKey] = { khoKey: khoKey, khoLabel: khoLabel, khoRaw: rawKho, orders: [] };
-      }
-      if (!warehouseIndex[khoKey]) {
-        warehouseIndex[khoKey] = { khoKey: khoKey, khoLabel: khoLabel, khoRaw: rawKho, orderCount: 0 };
-      }
-      warehouseIndex[khoKey].orderCount++;
-
-      var hh = Utilities.formatDate(new Date(ord.createdAtMs), tz, "HH:mm");
-      var dupInfo = dupBySoPhieu[ord.soPhieu] || null;
-      byWh[khoKey].orders.push({
-        soPhieu: ord.soPhieu,
-        khoXuat: ord.khoXuat,
-        khoNhan: ord.khoNhan,
-        createdAt: ord.createdAtMs,
-        createdTime: hh,
-        thoiGian: formatOrderCreatedAtLabel_(ord.createdAtMs),
-        thoiGianPretty: formatOrderCreatedAtPretty_(ord.createdAtMs),
-        totalQty: ord.totalQty || 0,
-        duplicateSuspect: dupInfo,
-        isDuplicateSuspect: !!(dupInfo && !dupInfo.acknowledged)
-      });
+    var rawKho = ord.khoNhan || ord.khoXuat || "Khác";
+    var khoKey = normalizeStoreName(rawKho) || String(rawKho).trim() || "other";
+    var khoLabel = formatStoreDisplayLabel_(rawKho) || formatShortStoreLabel(rawKho) || rawKho;
+    var byWh = dayBuckets[dayIndex];
+    if (!byWh[khoKey]) {
+      byWh[khoKey] = { khoKey: khoKey, khoLabel: khoLabel, khoRaw: rawKho, orders: [] };
     }
+    if (!warehouseIndex[khoKey]) {
+      warehouseIndex[khoKey] = { khoKey: khoKey, khoLabel: khoLabel, khoRaw: rawKho, orderCount: 0 };
+    }
+    warehouseIndex[khoKey].orderCount++;
 
+    var hh = Utilities.formatDate(new Date(ord.createdAtMs), tz, "HH:mm");
+    var dupInfo = dupBySoPhieu[ord.soPhieu] || null;
+    byWh[khoKey].orders.push({
+      soPhieu: ord.soPhieu,
+      khoXuat: ord.khoXuat,
+      khoNhan: ord.khoNhan,
+      createdAt: ord.createdAtMs,
+      createdTime: hh,
+      thoiGian: formatOrderCreatedAtLabel_(ord.createdAtMs),
+      thoiGianPretty: formatOrderCreatedAtPretty_(ord.createdAtMs),
+      totalQty: ord.totalQty || 0,
+      duplicateSuspect: dupInfo,
+      isDuplicateSuspect: !!(dupInfo && !dupInfo.acknowledged)
+    });
+  }
+
+  var days = [];
+  for (var di2 = 0; di2 < 7; di2++) {
+    var byWhDay = dayBuckets[di2];
     var warehouses = [];
-    for (var wk in byWh) {
-      if (!Object.prototype.hasOwnProperty.call(byWh, wk)) continue;
-      byWh[wk].orders.sort(function(a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
-      warehouses.push(byWh[wk]);
+    for (var wk in byWhDay) {
+      if (!Object.prototype.hasOwnProperty.call(byWhDay, wk)) continue;
+      byWhDay[wk].orders.sort(function(a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+      warehouses.push(byWhDay[wk]);
     }
     warehouses.sort(function(a, b) {
       return String(a.khoLabel || "").localeCompare(String(b.khoLabel || ""), "vi");
     });
-
     var dayOrderCount = 0;
     for (var wi = 0; wi < warehouses.length; wi++) dayOrderCount += warehouses[wi].orders.length;
-
     days.push({
-      date: dateStr,
-      dateLabel: dateLabel,
-      weekday: weekdayNames[d],
+      date: dayMeta[di2].dateStr,
+      dateLabel: dayMeta[di2].dateLabel,
+      weekday: dayMeta[di2].weekday,
       isToday: false,
       orderCount: dayOrderCount,
       warehouses: warehouses
@@ -1023,17 +1068,103 @@ function getPackingWeekCalendar_(weekStartYYYYMMDD, userRole, userStore) {
     return String(a.khoLabel || "").localeCompare(String(b.khoLabel || ""), "vi");
   });
 
-  return {
+  var result = {
     success: true,
-    weekStart: Utilities.formatDate(weekStart, tz, "yyyy-MM-dd"),
+    weekStart: weekStartKey,
     weekEnd: Utilities.formatDate(new Date(weekEnd.getTime() - 1), tz, "yyyy-MM-dd"),
     weekLabel: Utilities.formatDate(weekStart, tz, "dd/MM") +
       " → " + Utilities.formatDate(new Date(weekEnd.getTime() - 1), tz, "dd/MM/yyyy"),
     days: days,
     warehouses: warehousesAll,
     totalOrders: Object.keys(map).length,
-    _debugTotalMs: Date.now() - t0,
-    _debugRun: "packing-week-calendar-v2-dup-sku"
+    _debugRun: "packing-week-calendar-v3-cache"
+  };
+
+  try { putCacheJson_(cache, cacheKey, result, 300); } catch (eCachePut) {}
+
+  var filtered = filterPackingWeekCalendarForUser_(result, userRole, userStore);
+  filtered._debugTotalMs = Date.now() - t0;
+  filtered._debugCache = "MISS";
+  filtered._debugRowsScanned = data.length;
+  return filtered;
+}
+
+
+/** Lọc lịch tuần theo kho user (Admin = full). Không mutate object cache. */
+function filterPackingWeekCalendarForUser_(payload, userRole, userStore) {
+  if (!payload || typeof payload !== "object") return payload;
+  if (userRole === "Admin") {
+    return payload;
+  }
+  var filterStore = normalizeStoreName(userStore || "");
+  if (!filterStore) return payload;
+
+  var srcDays = payload.days || [];
+  var days = [];
+  var warehouseIndex = {};
+  var totalOrders = 0;
+
+  for (var d = 0; d < srcDays.length; d++) {
+    var day = srcDays[d] || {};
+    var srcWh = day.warehouses || [];
+    var warehouses = [];
+    var dayOrderCount = 0;
+    for (var w = 0; w < srcWh.length; w++) {
+      var wh = srcWh[w] || {};
+      var ordersIn = wh.orders || [];
+      var ordersOut = [];
+      for (var oi = 0; oi < ordersIn.length; oi++) {
+        var ord = ordersIn[oi];
+        if (!ord) continue;
+        if (!isSameStoreName(ord.khoXuat, filterStore) && !isSameStoreName(ord.khoNhan, filterStore)) continue;
+        ordersOut.push(ord);
+      }
+      if (!ordersOut.length) continue;
+      warehouses.push({
+        khoKey: wh.khoKey,
+        khoLabel: wh.khoLabel,
+        khoRaw: wh.khoRaw,
+        orders: ordersOut
+      });
+      dayOrderCount += ordersOut.length;
+      totalOrders += ordersOut.length;
+      if (!warehouseIndex[wh.khoKey]) {
+        warehouseIndex[wh.khoKey] = {
+          khoKey: wh.khoKey,
+          khoLabel: wh.khoLabel,
+          khoRaw: wh.khoRaw,
+          orderCount: 0
+        };
+      }
+      warehouseIndex[wh.khoKey].orderCount += ordersOut.length;
+    }
+    days.push({
+      date: day.date,
+      dateLabel: day.dateLabel,
+      weekday: day.weekday,
+      isToday: !!day.isToday,
+      orderCount: dayOrderCount,
+      warehouses: warehouses
+    });
+  }
+
+  var warehousesAll = [];
+  for (var wk in warehouseIndex) {
+    if (Object.prototype.hasOwnProperty.call(warehouseIndex, wk)) warehousesAll.push(warehouseIndex[wk]);
+  }
+  warehousesAll.sort(function(a, b) {
+    return String(a.khoLabel || "").localeCompare(String(b.khoLabel || ""), "vi");
+  });
+
+  return {
+    success: payload.success,
+    weekStart: payload.weekStart,
+    weekEnd: payload.weekEnd,
+    weekLabel: payload.weekLabel,
+    days: days,
+    warehouses: warehousesAll,
+    totalOrders: totalOrders,
+    _debugRun: payload._debugRun || "packing-week-calendar-v3-cache"
   };
 }
 
