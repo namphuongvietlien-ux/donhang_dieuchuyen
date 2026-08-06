@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwhqeAzzNrPTm1cH7KMmmj44btXb2OL835xxaItHByohT11sLDrdgfw7BrVlI5txqXonw/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbwG8nZhRTJLaMNVtMMIqppdYsZHC-CELlQjglmGSDAkgwKvRUq-9sTKePws47gWG2pEIg/exec';
 
   async function parseRequestBody(request) {
     let body = request.body;

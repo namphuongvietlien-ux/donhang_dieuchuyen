@@ -1,5 +1,5 @@
 // API helpers
-const GAS_EXEC_URL = 'https://script.google.com/macros/s/AKfycbwhqeAzzNrPTm1cH7KMmmj44btXb2OL835xxaItHByohT11sLDrdgfw7BrVlI5txqXonw/exec';
+const GAS_EXEC_URL = 'https://script.google.com/macros/s/AKfycbwG8nZhRTJLaMNVtMMIqppdYsZHC-CELlQjglmGSDAkgwKvRUq-9sTKePws47gWG2pEIg/exec';
 
 async function callJsonApi(urls, options, timeoutMs) {
   let lastError = null;
@@ -701,14 +701,15 @@ function stockShortageInfo_(stock, needQty) {
 }
 
 function formatStockCellHtml_(stock, needQty) {
-  var short = stockShortageInfo_(stock, needQty);
   if (stock === '' || stock === null || stock === undefined) {
     return '<span style="color:#94a3b8;">-</span>';
   }
+  var safeStock = Math.max(0, Number(stock) || 0);
+  var short = stockShortageInfo_(safeStock, needQty);
   if (!short) {
-    return '<b style="color:#166534;">' + stock + '</b>';
+    return '<b style="color:#166534;">' + safeStock + '</b>';
   }
-  return '<b style="color:#b91c1c;">' + stock + '</b><br><small style="color:#b91c1c;font-weight:700;">⚠️ THIẾU ' + short.thieu + '</small>';
+  return '<b style="color:#b91c1c;">' + safeStock + '</b><br><small style="color:#b91c1c;font-weight:700;">⚠️ THIẾU ' + short.thieu + '</small>';
 }
 
 function rebuildCatalogArray() {
@@ -3310,7 +3311,8 @@ function ql_hienThiChiTiet(phieu, options) {
       var isReadOnlyRow = isConfirmedOrder || isCancelled || !canEditRows;
       var slSoanVal = ql_getSlSoan_(r);
       var compareNeed = slSoanVal !== "" ? slSoanVal : r.slGoc;
-      var shortInfo = !isCancelled ? stockShortageInfo_(r.stock, compareNeed) : null;
+      var stockVal = (r.stock === '' || r.stock == null) ? '' : Math.max(0, Number(r.stock) || 0);
+      var shortInfo = !isCancelled ? stockShortageInfo_(stockVal, compareNeed) : null;
       if (shortInfo) lowStockCount++;
       if (slSoanVal !== "") packedLineCount++;
       var rowStyle = isCancelled
@@ -3320,7 +3322,7 @@ function ql_hienThiChiTiet(phieu, options) {
       var dvtDisplay = formatDvtDisplay_(r.maHang, r.maVach, r.dvt);
       r.dvt = resolveDvtClient_(r.maHang, r.maVach, r.dvt) || r.dvt;
       var variantHtml = ql_renderVariantSelector(r, rowKey, isReadOnlyRow);
-      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-stock="'+(r.stock === '' || r.stock == null ? '' : r.stock)+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;" oninput="ql_onEditQtyInput(this)">';
+      var quantityInput = '<input type="number" class="edit-sl-input" data-row="'+r.rowIndex+'" data-stock="'+(stockVal === '' ? '' : stockVal)+'" data-new="0" value="'+(r.slGoc || 0)+'" '+(isReadOnlyRow ? 'disabled' : '')+' style="border:2px solid #1a73e8;text-align:center;width:70px;" oninput="ql_onEditQtyInput(this)">';
       var cancelButton = canAddItems ? '<td><button type="button" onclick="ql_huyDong('+r.rowIndex+')" '+(isCancelled ? 'disabled' : '')+' style="border:none; background:#d93025; color:white; border-radius:5px; padding:7px 9px; cursor:pointer;">Hủy mã</button></td>' : '<td></td>';
       var requestedDisplay = (!isReadOnlyRow && !isPublicView)
         ? quantityInput
@@ -3332,7 +3334,7 @@ function ql_hienThiChiTiet(phieu, options) {
       var receivedDisplay = hasReceivedQty
         ? ('<b style="color:#166534;">' + Number(r.slThucTe) + '</b>')
         : '<span style="color:#94a3b8;">-</span>';
-      var stockHtml = formatStockCellHtml_(r.stock, compareNeed);
+      var stockHtml = formatStockCellHtml_(stockVal, compareNeed);
       var tenShow = formatPackingProductName_(r);
       var codeHtml = formatPackingCodeHtml_(r);
       // Giữ selector biến thể khi sửa; mã Parent vẫn nổi bật phía trên
@@ -3386,10 +3388,11 @@ function ql_onEditQtyInput(input) {
   var tr = input.closest('tr');
   if (!tr) return;
   var stockRaw = input.getAttribute('data-stock');
+  if (stockRaw !== '' && stockRaw != null) stockRaw = Math.max(0, Number(stockRaw) || 0);
   var stockCell = tr.querySelector('.ql-stock-cell');
   var need = Number(input.value) || 0;
-  if (stockCell) stockCell.innerHTML = formatStockCellHtml_(stockRaw === '' ? '' : stockRaw, need);
-  var short = stockShortageInfo_(stockRaw === '' ? '' : stockRaw, need);
+  if (stockCell) stockCell.innerHTML = formatStockCellHtml_(stockRaw === '' || stockRaw == null ? '' : stockRaw, need);
+  var short = stockShortageInfo_(stockRaw === '' || stockRaw == null ? '' : stockRaw, need);
   if (tr.getAttribute('data-stock-row') === '1') {
     tr.style.background = short ? '#fef2f2' : '';
   }
@@ -3822,7 +3825,7 @@ function sh_loadWeekCalendar_(opts) {
     weekStart: weekStart,
     userRole: sessionUser.role || '',
     userStore: sessionUser.store || ''
-  }, { allowDirectFallback: true, timeoutMs: 90000 }).then(function(res) {
+  }, { directOnly: true, timeoutMs: 90000 }).then(function(res) {
     if (!res || res.success === false) {
       sh_weekCalSetError_((res && (res.error || res.msg)) || 'Không tải được lịch tuần. Hãy clasp push packing_timeline.gs + api_routes.gs.');
       return null;
@@ -4315,7 +4318,9 @@ function sh_chonDonMobile() {
       }
     }).catch(function() {});
     (items || []).forEach(function(it, j) {
-      var stockDisplay = (it.stock !== undefined && it.stock !== null && it.stock !== "") ? Number(it.stock) : "";
+      var stockDisplay = (it.stock !== undefined && it.stock !== null && it.stock !== "")
+        ? Math.max(0, Number(it.stock) || 0)
+        : "";
       // Ưu tiên SL đã soạn (slSoan / cột 16); không dùng lại SL đặt khi đã soạn trước đó
       var packQty = sh_resolvePackInputQty_(it);
       var compareQty = Math.max(Number(it.slGoc) || 0, packQty || 0);
