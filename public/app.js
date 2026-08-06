@@ -2765,6 +2765,48 @@ function buildOrderPdfHeaderHtml_(soPhieu, thoiGianTaoRaw, khoXuat, khoNhan, tho
     '<div class="meta"><b>Kho xuất:</b> ' + kx + '<br><b>Kho nhận / Chi nhánh:</b> ' + kn + '</div>';
 }
 
+/** SL in: soLuongSoan → slSoan → sl */
+function resolvePrintQty_(it) {
+  if (!it) return 0;
+  if (it.soLuongSoan != null && it.soLuongSoan !== '') return Number(it.soLuongSoan) || 0;
+  if (it.slSoan != null && it.slSoan !== '') return Number(it.slSoan) || 0;
+  return Number(it.sl) || 0;
+}
+
+/** Header bảng in sạch thống nhất */
+function getCleanPrintTableHeadHtml_() {
+  return '<thead><tr><th>STT</th><th>Mã Vạch</th><th>Tên Sản Phẩm</th><th>ĐVT</th><th>Số lượng</th><th class="note-cell"></th></tr></thead>';
+}
+
+/**
+ * Body bảng in sạch — map trực tiếp maVach / tenHang / dvt / SL.
+ * KHÔNG ghép maHang vào tên, KHÔNG dùng formatPackingProductName_.
+ */
+function buildCleanPrintTableBodyHtml_(items) {
+  var rowsHtml = '';
+  var stt = 1;
+  (items || []).forEach(function(it) {
+    if (!it) return;
+    var sl = resolvePrintQty_(it);
+    if (sl <= 0) return;
+    var maVach = String(it.maVach || '').trim() || '—';
+    var tenHang = String(it.tenHang || '').trim() || '—';
+    var dvt = String(it.dvt || it.selectedDVT || '').trim() || '—';
+    rowsHtml += '<tr>' +
+      '<td>' + (stt++) + '</td>' +
+      '<td class="code-cell">' + escapeHtml(maVach) + '</td>' +
+      '<td>' + escapeHtml(tenHang) + '</td>' +
+      '<td>' + escapeHtml(dvt) + '</td>' +
+      '<td class="qty-cell">' + sl + '</td>' +
+      '<td class="note-cell"></td>' +
+      '</tr>';
+  });
+  if (!rowsHtml) {
+    rowsHtml = '<tr><td colspan="6" style="text-align:center;color:#64748b;">Không có dòng hàng hợp lệ.</td></tr>';
+  }
+  return rowsHtml;
+}
+
 // ================= IN WEB (IFRAME ẨN) & XUẤT EXCEL =================
 function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
   var headerHtml = buildOrderPdfHeaderHtml_(
@@ -2774,26 +2816,10 @@ function executePrintWeb(soPhieu, khoXuat, khoNhan, itemsArray) {
     khoNhan,
     (itemsArray && itemsArray._thoiGianCapNhat) || ''
   );
-  var htmlStr = '<div class="sheet">' + headerHtml;
-  htmlStr += '<table><thead><tr><th>STT</th><th>Mã Parent (kệ)</th><th>Tên hàng / Phân loại</th><th>ĐVT</th><th>Số lượng (Soạn)</th><th class="note-cell"></th></tr></thead><tbody>';
-  var stt = 1;
-  (itemsArray || []).forEach(function(it) {
-    if (Number(it.sl) > 0) {
-      var parentCode = resolveDisplaySku_(it);
-      var childCode = String(it.maHang || it.variantSku || '').trim();
-      var tenCell = formatPackingProductName_(it);
-      var variantLine = '';
-      if (parentCode && childCode && parentCode.toUpperCase() !== childCode.toUpperCase()) {
-        variantLine = '<div class="variant-line">Phân loại: ' + escapeHtml(it.variantName || it.tenHang || '') +
-          ' · Mã con: ' + escapeHtml(childCode) +
-          (it.maVach ? (' · MV: ' + escapeHtml(it.maVach)) : '') + '</div>';
-      }
-      htmlStr += '<tr><td>' + (stt++) + '</td><td class="code-cell">' + escapeHtml(parentCode) +
-        '</td><td>' + escapeHtml(tenCell) + variantLine + '</td><td>' + escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.selectedDVT || it.dvt)) +
-        '</td><td class="qty-cell">' + it.sl + '</td><td class="note-cell"></td></tr>';
-    }
-  });
-  htmlStr += '</tbody></table><div class="signs"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div></div>';
+  var htmlStr = '<div class="sheet">' + headerHtml +
+    '<table>' + getCleanPrintTableHeadHtml_() +
+    '<tbody>' + buildCleanPrintTableBodyHtml_(itemsArray) + '</tbody></table>' +
+    '<div class="signs"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div></div>';
 
   var iframe = document.createElement('iframe');
   iframe.style.display = 'none';
@@ -4228,32 +4254,15 @@ function buildOrderPdfSheetInnerHtml_(detail) {
   var tgTao = pickOrderCreatedRaw_(detail);
   var tgCap = pickOrderUpdatedRaw_(detail);
   var headerHtml = buildOrderPdfHeaderHtml_(soRaw, tgTao, detail && detail.khoXuat, detail && detail.khoNhan, tgCap);
-  var rowsHtml = '';
-  var stt = 1;
-  (detail.items || []).forEach(function(it) {
-    var sl = Number(it.sl);
-    if (!sl || sl <= 0) return;
-    var parentCode = resolveDisplaySku_(it);
-    var childCode = String(it.maHang || it.variantSku || '').trim();
-    var tenCell = formatPackingProductName_(it);
-    var variantLine = '';
-    if (parentCode && childCode && parentCode.toUpperCase() !== childCode.toUpperCase()) {
-      variantLine = '<div class="variant-line">Phân loại: ' + escapeHtml(it.variantName || it.tenHang || '') +
-        ' · Mã con: ' + escapeHtml(childCode) +
-        (it.maVach ? (' · MV: ' + escapeHtml(it.maVach)) : '') + '</div>';
-    } else if (it.maVach) {
-      variantLine = '<div class="variant-line">MV: ' + escapeHtml(it.maVach) + '</div>';
-    }
-    rowsHtml += '<tr><td>' + (stt++) + '</td><td class="code">' + escapeHtml(parentCode) + '</td><td>' + escapeHtml(tenCell) + variantLine +
-      '</td><td>' + escapeHtml(formatDvtDisplay_(it.maHang, it.maVach, it.selectedDVT || it.dvt)) +
-      '</td><td class="qty">' + sl + '</td><td class="note"></td></tr>';
-  });
-  if (!rowsHtml) rowsHtml = '<tr><td colspan="6" style="text-align:center;color:#64748b;">Không có dòng hàng hợp lệ.</td></tr>';
   return '<div class="sheet">' + headerHtml +
-    '<table><thead><tr><th>STT</th><th>Mã Parent (kệ)</th><th>Tên hàng / Phân loại</th><th>ĐVT</th><th>SL</th><th class="note"></th></tr></thead><tbody>' +
-    rowsHtml + '</tbody></table>' +
+    '<table>' + getCleanPrintTableHeadHtml_() +
+    '<tbody>' + buildCleanPrintTableBodyHtml_(detail && detail.items) + '</tbody></table>' +
     '<div class="signs"><div><b>Người lập phiếu</b><br><br><br>Ký ghi rõ họ tên</div><div><b>Người nhận</b><br><br><br>Ký ghi rõ họ tên</div></div></div>';
 }
+
+/** Alias In hàng loạt — cùng luồng modal In ngày */
+function batchPrintOrders() { return sh_printDaySelectedPdf_(); }
+function inHangLoatPhieu() { return sh_printDaySelectedPdf_(); }
 
 function sh_taiDanhSachDon() {
   sh_ensureCreateDateDefaults_();
