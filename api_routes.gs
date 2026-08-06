@@ -122,6 +122,28 @@ function doPost(e) {
           case 'postProcessReceiveOrder':
             result = postProcessReceiveOrder(payload.payload || {});
             break;
+          case 'stockInLot':
+            requireAdminAction(action, payload.payload || {});
+            result = stockInLot_(payload.payload || {});
+            break;
+          case 'previewFifoOut':
+            requireAuthenticatedAction(payload.payload || {});
+            result = previewFifoOut_(
+              (payload.payload && (payload.payload.maHang || payload.payload.itemCode)) || '',
+              (payload.payload && (payload.payload.qty || payload.payload.requestedQty)) || 0
+            );
+            break;
+          case 'getStockLotsForItem':
+            result = getStockLotsForItem(
+              (payload.payload && (payload.payload.maHang || payload.payload.itemCode)) || ''
+            );
+            break;
+          case 'seedInventoryCache':
+            result = (function() {
+              seedInventoryRequestCache_(getSS());
+              return { success: true, seeded: true };
+            })();
+            break;
           default:
             result = { error: 'Unknown action: ' + action };
         }
@@ -339,6 +361,12 @@ function doGet(e) {
         case 'rebuildTonQ7':
           res = rebuildTonKhoQ7Sheet_(getSS());
           res._debugRun = "q7-v1";
+          break;
+        case 'previewFifoOut':
+          res = previewFifoOut_(e.parameter.maHang || e.parameter.itemCode || '', e.parameter.qty || 0);
+          break;
+        case 'getStockLotsForItem':
+          res = getStockLotsForItem(e.parameter.maHang || e.parameter.itemCode || '');
           break;
         case 'getDashboardSummary':
           res = getDashboardSummary(e.parameter.userRole || '', e.parameter.userStore || '', e.parameter.timeline || '2days', e.parameter.fromDate || '', e.parameter.toDate || '');

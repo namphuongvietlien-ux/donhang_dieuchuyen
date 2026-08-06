@@ -1229,11 +1229,24 @@ function mergeTonQ7FromMatrix_(ss, matrix, reset) {
 
 function readTonKhoQ7Bundle_(ss) {
   ss = ss || getSS();
+  // Ưu tiên In-Memory cache theo request (fifo_inventory.gs)
+  try {
+    var reqCache = getInventoryRequestCache_();
+    if (reqCache && reqCache.tonQ7Bundle && reqCache.tonQ7Bundle.map) {
+      return reqCache.tonQ7Bundle;
+    }
+  } catch (eReq) {}
+
   var cache = getScriptCache_();
   var cached = getCacheJson_(cache, CACHE_TON_Q7_KEY);
   var labelCached = getCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt");
   if (cached && typeof cached === "object" && Object.keys(cached).length) {
-    return { map: cached, dvtLabels: labelCached || {}, source: "TON_Q7-cache" };
+    var fromScriptCache = { map: cached, dvtLabels: labelCached || {}, source: "TON_Q7-cache" };
+    try {
+      var req2 = getInventoryRequestCache_();
+      if (req2) req2.tonQ7Bundle = fromScriptCache;
+    } catch (eSeed) {}
+    return fromScriptCache;
   }
 
   var sh = ss.getSheetByName(TON_Q7_SHEET_NAME);
@@ -1330,7 +1343,12 @@ function readTonKhoQ7Bundle_(ss) {
     putCacheJson_(cache, CACHE_TON_Q7_KEY, map, CACHE_TTL_SECONDS);
     putCacheJson_(cache, CACHE_TON_Q7_KEY + "_dvt", dvtLabels, CACHE_TTL_SECONDS);
   } catch (e) {}
-  return { map: map, dvtLabels: dvtLabels, source: "TON_Q7" };
+  var fromSheet = { map: map, dvtLabels: dvtLabels, source: "TON_Q7" };
+  try {
+    var req3 = getInventoryRequestCache_();
+    if (req3) req3.tonQ7Bundle = fromSheet;
+  } catch (eSeed3) {}
+  return fromSheet;
 }
 
 
