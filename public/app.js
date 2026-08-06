@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-06-v86-stock-fix';
+var APP_BUILD = '2026-08-06-v86-stock-debug';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -873,6 +873,27 @@ function applyCatalogData(res) {
   rebuildCatalogArray();
   catalogLoadState.ready = true;
   catalogLoadState.version = res.version || '';
+  // #region agent log
+  try {
+    var arr = danhMucArr || [];
+    var withTon = 0, zeroTon = 0, missingTon = 0, sample = [];
+    for (var i = 0; i < arr.length; i++) {
+      var it = arr[i];
+      if (!it) continue;
+      var t = (it.tonKho != null ? it.tonKho : (it.TonKho != null ? it.TonKho : (it.stock != null ? it.stock : null)));
+      if (t === null || t === undefined || t === '') missingTon++;
+      else if (Number(t) === 0) zeroTon++;
+      else withTon++;
+      if (sample.length < 5) {
+        sample.push({
+          mh: String(it.maHang || '').slice(0, 24),
+          tonKho: it.tonKho, TonKho: it.TonKho, stock: it.stock, tonHienTai: it.tonHienTai
+        });
+      }
+    }
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'A_B_E',location:'app.js:applyCatalogData',message:'catalog applied stock stats',data:{source:res._debugFromCache?'cache':'api',keyCount:arr.length,withTon:withTon,zeroTon:zeroTon,missingTon:missingTon,beDebug:res._debugStock||null,version:res.version||'',sample:sample,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+  } catch (eDbg) {}
+  // #endregion
 }
 
 function readCatalogFromLocalStorage(expectedVersion) {
@@ -911,7 +932,11 @@ function clearCatalogLocalStorage() {
 function invalidateStaleClientCaches_() {
   try {
     var cur = localStorage.getItem(CLIENT_STOCK_CACHE_SCHEMA_KEY) || '';
-    if (cur === CLIENT_STOCK_CACHE_SCHEMA) return false;
+    var willPurge = cur !== CLIENT_STOCK_CACHE_SCHEMA;
+    // #region agent log
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'A',location:'app.js:invalidateStaleClientCaches_',message:'cache schema check',data:{cur:cur,expected:CLIENT_STOCK_CACHE_SCHEMA,willPurge:willPurge,hasLegacyCatalog:!!localStorage.getItem('donhang_catalog_v4_composite_key')||!!localStorage.getItem(CATALOG_CACHE_KEY),build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    // #endregion
+    if (!willPurge) return false;
     clearCatalogLocalStorage();
     try { localStorage.removeItem(BOOTSTRAP_CACHE_KEY); } catch (e1) {}
     try { localStorage.removeItem(BOOTSTRAP_CACHE_TS_KEY); } catch (e2) {}
@@ -972,6 +997,10 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
   if (catalogLoadState.loading && !forceReload) return Promise.resolve();
   var cached = !forceReload ? readCatalogFromLocalStorage(expectedVersion) : null;
   if (cached && cached.danhMuc) {
+    cached._debugFromCache = true;
+    // #region agent log
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'A',location:'app.js:loadCatalogInBackground',message:'using localStorage catalog cache',data:{forceReload:!!forceReload,expectedVersion:expectedVersion||'',cachedVersion:cached.version||'',build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    // #endregion
     applyCatalogData(cached);
     setCatalogStatus('Quét mã vạch, gõ mã, từ khóa tên hoặc 6 số cuối vạch:');
     return Promise.resolve(cached);
@@ -986,6 +1015,9 @@ function loadCatalogInBackground(forceReload, expectedVersion) {
       setCatalogStatus('Danh mục chưa tải xong - thử lại sau vài giây');
       return res;
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'B_C',location:'app.js:loadCatalogInBackground:api',message:'getCatalogData response meta',data:{forceReload:!!forceReload,keyCount:res.keyCount,forced:res.forced,debugRun:res._debugRun||'',debugStock:res._debugStock||null,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    // #endregion
     applyCatalogData(res);
     saveCatalogToLocalStorage(res);
     var count = danhMucArr ? danhMucArr.length : 0;
@@ -3503,6 +3535,20 @@ function ql_hienThiChiTiet(phieu, options) {
     document.getElementById("ql-view-phieu").style.display = "block";
     refreshPackingTimelineBanners();
     refreshOrderDupAndSkuUi_(currentPhieuObj.soPhieu, currentPhieuObj.khoNhan, rows, ['ql']);
+    // #region agent log
+    try {
+      var stockSample = (rows || []).slice(0, 8).map(function(r) {
+        return { mh: String(r.maHang || '').slice(0, 24), stock: r.stock, tonKho: r.tonKho, TonKho: r.TonKho };
+      });
+      var emptyN = 0, zeroN = 0, okN = 0;
+      (rows || []).forEach(function(r) {
+        if (r.stock === '' || r.stock === null || r.stock === undefined) emptyN++;
+        else if (Number(r.stock) === 0) zeroN++;
+        else okN++;
+      });
+      fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'D',location:'app.js:ql_hienThiChiTiet',message:'QL order detail stock',data:{soPhieu:currentPhieuObj&&currentPhieuObj.soPhieu,khoXuat:currentPhieuObj&&currentPhieuObj.khoXuat,rowCount:(rows||[]).length,emptyN:emptyN,zeroN:zeroN,okN:okN,sample:stockSample,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    } catch (eQlDbg) {}
+    // #endregion
   }).catch(function(err){ hideLoad(); alert('Lỗi: '+err.message); });
 }
 
@@ -4523,6 +4569,20 @@ function sh_chonDonMobile() {
       shFocusPackQtyAfterLoad_ = false;
       sh_focusFirstPackQty_();
     }
+    // #region agent log
+    try {
+      var shSample = (items || []).slice(0, 8).map(function(r) {
+        return { mh: String(r.maHang || '').slice(0, 24), stock: r.stock, tonKho: r.tonKho };
+      });
+      var shEmpty = 0, shZero = 0, shOk = 0;
+      (items || []).forEach(function(r) {
+        if (r.stock === '' || r.stock === null || r.stock === undefined) shEmpty++;
+        else if (Number(r.stock) === 0) shZero++;
+        else shOk++;
+      });
+      fetch('http://127.0.0.1:7769/ingest/270a675c-6905-4e32-ab93-32a7caa18dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'f6b0dc'},body:JSON.stringify({sessionId:'f6b0dc',runId:'pre-fix',hypothesisId:'D',location:'app.js:sh_chonDonMobile',message:'SH packing detail stock',data:{soPhieu:sp,itemCount:(items||[]).length,emptyN:shEmpty,zeroN:shZero,okN:shOk,sample:shSample,build:APP_BUILD},timestamp:Date.now()})}).catch(function(){});
+    } catch (eShDbg) {}
+    // #endregion
   }).catch(function(err){ alert('Lỗi: '+err.message); });
 }
 

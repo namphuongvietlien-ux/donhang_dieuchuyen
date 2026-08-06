@@ -2839,9 +2839,37 @@ function getCatalogData(forceRefresh) {
       applyTonVariantStockToCatalog_(ssCat, danhMuc);
     } catch (eTon) {}
     var keys = 0;
+    var withTon = 0, zeroTon = 0, missingTon = 0;
+    var sample = [];
     for (var k in danhMuc) {
-      if (Object.prototype.hasOwnProperty.call(danhMuc, k)) keys++;
+      if (!Object.prototype.hasOwnProperty.call(danhMuc, k)) continue;
+      keys++;
+      var it = danhMuc[k];
+      if (!it) continue;
+      if (it.tonKho === null || it.tonKho === undefined || it.tonKho === "") missingTon++;
+      else if (Number(it.tonKho) === 0) zeroTon++;
+      else withTon++;
+      if (sample.length < 5) {
+        sample.push({
+          mh: String(it.maHang || "").slice(0, 24),
+          tonKho: it.tonKho,
+          tonHienTai: it.tonHienTai
+        });
+      }
     }
+    var tonCols = null;
+    var tonMapKeys = 0;
+    var tonMapPos = 0;
+    try {
+      var shTon = ssCat.getSheetByName(TON_VARIANT_SHEET_NAME);
+      tonCols = resolveTonVariantColMap_(shTon);
+      var tMap = readTonVariantMap_(ssCat) || {};
+      tonMapKeys = Object.keys(tMap).length;
+      for (var tk in tMap) {
+        if (!Object.prototype.hasOwnProperty.call(tMap, tk) || tk === "__meta") continue;
+        if (Number(tMap[tk]) > 0) tonMapPos++;
+      }
+    } catch (eDbgTon) {}
     var result = {
       success: true,
       danhMuc: danhMuc,
@@ -2850,7 +2878,17 @@ function getCatalogData(forceRefresh) {
       forced: !!force,
       mergedTonVariant: true,
       stockFromTonVariant: true,
-      _debugRun: force ? "catalog-nocache-stockfix-v1" : "catalog-cache-stockfix-v1"
+      _debugRun: force ? "catalog-nocache-stockfix-v1" : "catalog-cache-stockfix-v1",
+      _debugStock: {
+        withTon: withTon,
+        zeroTon: zeroTon,
+        missingTon: missingTon,
+        tonVariantColMap: tonCols,
+        tonMapKeys: tonMapKeys,
+        tonMapPositive: tonMapPos,
+        sample: sample,
+        stockColMissing: !!(tonCols && (tonCols.tonHienTai == null || tonCols.tonHienTai < 0))
+      }
     };
     try {
       putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS);
