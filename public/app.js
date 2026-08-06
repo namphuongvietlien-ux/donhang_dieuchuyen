@@ -112,7 +112,7 @@ function showLoginError(message) {
 }
 
 // --- App logic (extracted from original webapp) ---
-var APP_BUILD = '2026-08-06-v85-dual-cal-link';
+var APP_BUILD = '2026-08-06-v86-stock-fix';
 var shCreateDateUserTouched_ = false;
 // Debug: không POST localhost (trình duyệt user không có ingest → ERR_CONNECTION_REFUSED)
 var DEBUG_INGEST_ENABLED = false;
@@ -336,13 +336,17 @@ var variantPickerState = { open: false, mode: 'order', parentSku: '', qty: 1, va
 /** Snapshot dòng đơn vừa tạo — dùng In/Excel sau khi clear arrItems */
 var lastCreatedOrderItems_ = [];
 var catalogLoadState = { loading: false, ready: false, version: '' };
-var CATALOG_CACHE_KEY = 'donhang_catalog_v4_composite_key';
-var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v4';
-var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v4';
+var CATALOG_CACHE_KEY = 'donhang_catalog_v5_stock_fix';
+var CATALOG_CACHE_TS_KEY = 'donhang_catalog_ts_v5_stock_fix';
+var CATALOG_CACHE_VERSION_KEY = 'donhang_catalog_version_v5_stock_fix';
 var CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
-var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v1';
-var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v1';
+var BOOTSTRAP_CACHE_KEY = 'donhang_bootstrap_v2_stock_fix';
+var BOOTSTRAP_CACHE_TS_KEY = 'donhang_bootstrap_ts_v2_stock_fix';
 var BOOTSTRAP_CACHE_TTL_MS = 60 * 60 * 1000;
+/** Auto invalidate local catalog/stock caches when schema bumps */
+var CLIENT_STOCK_CACHE_SCHEMA = 'v_stock_fix_1.0';
+var CLIENT_STOCK_CACHE_SCHEMA_KEY = 'donhang_stock_cache_schema';
+var MASTER_CATALOG_LEGACY_KEYS_ = ['MASTER_CATALOG', 'donhang_catalog_v4_composite_key', 'donhang_catalog_ts_v4', 'donhang_catalog_version_v4', 'donhang_bootstrap_v1', 'donhang_bootstrap_ts_v1'];
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -903,6 +907,24 @@ function clearCatalogLocalStorage() {
   catalogLoadState.ready = false;
 }
 
+/** Xóa cache FE cũ khi schema tồn kho đổi — ép gọi lại API lấy Ton_Hien_Tai mới */
+function invalidateStaleClientCaches_() {
+  try {
+    var cur = localStorage.getItem(CLIENT_STOCK_CACHE_SCHEMA_KEY) || '';
+    if (cur === CLIENT_STOCK_CACHE_SCHEMA) return false;
+    clearCatalogLocalStorage();
+    try { localStorage.removeItem(BOOTSTRAP_CACHE_KEY); } catch (e1) {}
+    try { localStorage.removeItem(BOOTSTRAP_CACHE_TS_KEY); } catch (e2) {}
+    for (var i = 0; i < MASTER_CATALOG_LEGACY_KEYS_.length; i++) {
+      try { localStorage.removeItem(MASTER_CATALOG_LEGACY_KEYS_[i]); } catch (e3) {}
+    }
+    localStorage.setItem(CLIENT_STOCK_CACHE_SCHEMA_KEY, CLIENT_STOCK_CACHE_SCHEMA);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function getDefaultExportStore() {
   for (var i = 0; i < gStores.length; i++) {
     var label = storeMap[gStores[i]] || gStores[i];
@@ -1223,7 +1245,9 @@ function doLogin() {
 }
 
 function initSystemData() {
-  var cachedBootstrap = readBootstrapFromLocalStorage();
+  var purged = false;
+  try { purged = !!invalidateStaleClientCaches_(); } catch (eInv) { purged = false; }
+  var cachedBootstrap = purged ? null : readBootstrapFromLocalStorage();
   if (cachedBootstrap) {
     applyBootstrapData(cachedBootstrap);
     loadCatalogInBackground(false, cachedBootstrap.catalogVersion || '');
@@ -1245,7 +1269,8 @@ function initSystemData() {
     }
     applyBootstrapData(res);
     saveBootstrapToLocalStorage(res);
-    loadCatalogInBackground(false, res.catalogVersion || '');
+    // Sau fix tồn: luôn force reload catalog 1 lần khi schema cache vừa purge
+    loadCatalogInBackground(!!purged, res.catalogVersion || '');
     if (!res.newProducts || !res.newProducts.length) loadNewProductsInBackground();
     openDeepLinkedOrder();
   }).catch(function(err) {

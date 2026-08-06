@@ -13,7 +13,7 @@ var CACHE_TON_Q7_KEY = "ton_q7_map_v2";
 // MASTER Cha–Con + stock biến thể: KHÔNG được sheet.clear() khi import MISA / tồn
 var TON_VARIANT_SHEET_NAME = "TON_VARIANT";
 
-var CACHE_TON_VARIANT_KEY = "ton_variant_map_v3_outstock";
+var CACHE_TON_VARIANT_KEY = "ton_variant_map_v4_stock_fix";
 
 /** Staging thô từ MISA — được phép ghi đè mỗi lần import */
 var MISA_IMPORT_SHEET_NAME = "MISA_IMPORT";
@@ -161,6 +161,76 @@ function buildTonVariantKey_(maHang, dvt) {
 
 function calcTonHienTaiVariant_(tonBanDau, daXuat, daNhanNhap) {
   return (Number(tonBanDau) || 0) - (Number(daXuat) || 0) + (Number(daNhanNhap) || 0);
+}
+
+
+/** Ép số tồn an toàn — giữ giá trị thật (vd 330); rỗng → 0 */
+function parseTonStockNumber_(raw) {
+  if (raw === "" || raw === null || raw === undefined) return 0;
+  if (typeof raw === "number" && isFinite(raw)) return raw;
+  var s = String(raw).trim().replace(/\u00A0/g, "").replace(/,/g, "");
+  if (!s) return 0;
+  var n = Number(s);
+  return isFinite(n) ? n : 0;
+}
+
+
+/**
+ * Dynamic header map cho TON_VARIANT — tìm cột theo tên (TonKho / Ton_Hien_Tai / Stock…),
+ * không phụ thuộc cứng index [4]/[5].
+ */
+function resolveTonVariantColMap_(shOrHeader) {
+  var defaults = {
+    key: 0,
+    parent: 1,
+    tonBanDau: 2,
+    daXuat: 3,
+    tonHienTai: 4,
+    daNhanNhap: 5,
+    ten: 6,
+    maVach: 7,
+    dvt: 8,
+    updatedAt: 9,
+    isLocked: 10,
+    isOutStock: 11
+  };
+  var header = null;
+  if (Object.prototype.toString.call(shOrHeader) === "[object Array]") {
+    header = shOrHeader;
+  } else if (shOrHeader && typeof shOrHeader.getRange === "function") {
+    try {
+      var lastCol = Math.max(shOrHeader.getLastColumn(), TON_VARIANT_COL_COUNT);
+      header = shOrHeader.getRange(1, 1, 1, lastCol).getValues()[0] || [];
+    } catch (eH) {
+      header = [];
+    }
+  }
+  var map = {};
+  for (var k in defaults) {
+    if (Object.prototype.hasOwnProperty.call(defaults, k)) map[k] = defaults[k];
+  }
+  if (!header || !header.length) return map;
+
+  for (var c = 0; c < header.length; c++) {
+    var h = normalizeHeaderText(header[c]);
+    if (!h) continue;
+    if (h === "key" || h === "mahang" || h === "masp" || h === "sku" || h === "ma") map.key = c;
+    else if (h.indexOf("parent") !== -1) map.parent = c;
+    else if (h.indexOf("tonbandau") !== -1 || h === "bandau" || h === "opening") map.tonBanDau = c;
+    else if (h.indexOf("daxuat") !== -1 || h === "exported" || h === "sold") map.daXuat = c;
+    else if (
+      h.indexOf("tonhientai") !== -1 || h === "tonkho" || h.indexOf("soluongton") !== -1 ||
+      h === "stock" || h === "onhand" || h === "slton" || h === "ton"
+    ) map.tonHienTai = c;
+    else if (h.indexOf("danhan") !== -1 || h.indexOf("nhapnhap") !== -1 || h === "received") map.daNhanNhap = c;
+    else if (h.indexOf("tensp") !== -1 || h.indexOf("tenhang") !== -1 || h.indexOf("chitiet") !== -1) map.ten = c;
+    else if (h.indexOf("mavach") !== -1 || h.indexOf("barcode") !== -1) map.maVach = c;
+    else if (h === "donvitinh" || h === "dvt" || h === "unit" || h.indexOf("donvi") === 0) map.dvt = c;
+    else if (h.indexOf("updated") !== -1) map.updatedAt = c;
+    else if (h.indexOf("islocked") !== -1 || h === "locked" || h === "khoa") map.isLocked = c;
+    else if (h.indexOf("isoutstock") !== -1 || h.indexOf("hethang") !== -1 || h === "outofstock") map.isOutStock = c;
+  }
+  return map;
 }
 
 
@@ -343,24 +413,35 @@ function readTonVariantByKeyMap_(ss) {
   var lastRow = sh.getLastRow();
   if (lastRow < 2) return byKey;
   ensureTonVariantSchema_(sh);
+  var cols = resolveTonVariantColMap_(sh);
   var existing = sh.getRange(2, 1, lastRow - 1, TON_VARIANT_COL_COUNT).getValues();
   for (var r = 0; r < existing.length; r++) {
-    var ek = String(existing[r][0] || "").trim();
+    var row = existing[r];
+    if (!row) continue;
+    var ek = String(row[cols.key] || "").trim();
     if (!ek) continue;
     var ck = canonicalizeTonVariantKey_(ek);
     if (!ck) continue;
-    var dCol = String(existing[r][8] || "").trim() || dvtFromStockKey_(ek);
-    var lockedFlag = parseTonVariantLocked_(existing[r].length > 10 ? existing[r][10] : "");
-    var outStockFlag = parseTonVariantOutStock_(existing[r].length > 11 ? existing[r][11] : "");
+    var dCol = String(row[cols.dvt] || "").trim() || dvtFromStockKey_(ek);
+    var lockedFlag = parseTonVariantLocked_(row.length > cols.isLocked ? row[cols.isLocked] : "");
+    var outStockFlag = parseTonVariantOutStock_(row.length > cols.isOutStock ? row[cols.isOutStock] : "");
+    var tonBanDau = parseTonStockNumber_(row[cols.tonBanDau]);
+    var daXuat = parseTonStockNumber_(row[cols.daXuat]);
+    var daNhanNhap = parseTonStockNumber_(row[cols.daNhanNhap]);
+    var tonCell = row[cols.tonHienTai];
+    var hasTonCell = !(tonCell === "" || tonCell === null || tonCell === undefined);
+    var tonHienTai = hasTonCell
+      ? parseTonStockNumber_(tonCell)
+      : calcTonHienTaiVariant_(tonBanDau, daXuat, daNhanNhap);
     var cand = {
       k: ck,
-      p: String(existing[r][1] || "").trim(),
-      tonBanDau: Number(existing[r][2]) || 0,
-      daXuat: Number(existing[r][3]) || 0,
-      tonHienTai: Number(existing[r][4]) || 0,
-      daNhanNhap: Number(existing[r][5]) || 0,
-      th: String(existing[r][6] || "").trim(),
-      mv: String(existing[r][7] || "").trim(),
+      p: String(row[cols.parent] || "").trim(),
+      tonBanDau: tonBanDau,
+      daXuat: daXuat,
+      tonHienTai: tonHienTai,
+      daNhanNhap: daNhanNhap,
+      th: String(row[cols.ten] || "").trim(),
+      mv: String(row[cols.maVach] || "").trim(),
       d: dCol,
       isLocked: lockedFlag,
       isOutStock: outStockFlag
@@ -381,7 +462,9 @@ function readTonVariantByKeyMap_(ss) {
       if (!cand.d && prev.d) cand.d = prev.d;
       cand.isLocked = !!(cand.isLocked || prev.isLocked);
       cand.isOutStock = !!(cand.isOutStock || prev.isOutStock);
-      cand.tonHienTai = calcTonHienTaiVariant_(cand.tonBanDau, cand.daXuat, cand.daNhanNhap);
+      if (!cand.tonHienTai && (cand.tonBanDau || cand.daXuat || cand.daNhanNhap)) {
+        cand.tonHienTai = calcTonHienTaiVariant_(cand.tonBanDau, cand.daXuat, cand.daNhanNhap);
+      }
       byKey[ck] = cand;
     } else {
       prev.daXuat = Math.max(prev.daXuat, cand.daXuat);
@@ -393,7 +476,11 @@ function readTonVariantByKeyMap_(ss) {
       prev.isLocked = !!(prev.isLocked || cand.isLocked);
       prev.isOutStock = !!(prev.isOutStock || cand.isOutStock);
       prev.k = ck;
-      prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
+      // Giữ tonHienTai lớn hơn khi gộp (không đè số thật bằng 0)
+      if (cand.tonHienTai > prev.tonHienTai) prev.tonHienTai = cand.tonHienTai;
+      else if (!prev.tonHienTai && (prev.tonBanDau || prev.daXuat || prev.daNhanNhap)) {
+        prev.tonHienTai = calcTonHienTaiVariant_(prev.tonBanDau, prev.daXuat, prev.daNhanNhap);
+      }
     }
   }
   return byKey;
@@ -489,24 +576,39 @@ function writeTonVariantEntriesToSheet_(ss, entries) {
 
 
 /** Map lookup (MH:/MV:) từ Ton_Hien_Tai để UI/API dùng getStockValueForItem */
-function buildTonVariantStockMapFromRows_(rows) {
+function buildTonVariantStockMapFromRows_(rows, colMap) {
+  var cols = colMap || {
+    key: 0, parent: 1, tonBanDau: 2, daXuat: 3, tonHienTai: 4,
+    daNhanNhap: 5, ten: 6, maVach: 7, dvt: 8
+  };
   var map = {};
   for (var i = 0; i < (rows || []).length; i++) {
     var r = rows[i];
     if (!r) continue;
-    var key = String(r[0] || "").trim();
-    var ton = Number(r[4]) || 0; // Ton_Hien_Tai
-    var mv = String(r[7] || "").trim();
-    var dvt = String(r[8] || "").trim();
+    var key = String(r[cols.key] || "").trim();
     if (!key) continue;
+    var tonBanDau = parseTonStockNumber_(r[cols.tonBanDau]);
+    var daXuat = parseTonStockNumber_(r[cols.daXuat]);
+    var daNhanNhap = parseTonStockNumber_(r[cols.daNhanNhap]);
+    var tonCell = r[cols.tonHienTai];
+    var hasTonCell = !(tonCell === "" || tonCell === null || tonCell === undefined);
+    var ton = hasTonCell
+      ? parseTonStockNumber_(tonCell)
+      : calcTonHienTaiVariant_(tonBanDau, daXuat, daNhanNhap);
+    var mv = String(r[cols.maVach] || "").trim();
+    var dvt = String(r[cols.dvt] || "").trim();
     map[key] = ton;
     var mh = canonicalizeTonVariantKey_(key) || key.split("|")[0];
     var dv = normalizeDvtKey_(dvt) || (key.indexOf("|") !== -1 ? key.split("|").slice(1).join("|") : "");
     if (mh) {
-      addStockValueByCode(map, "MH:", mh, ton, dv || dvt);
+      // Bare key + MH: — để lookup không phụ thuộc ĐVT lệch chuẩn hoá
+      map[mh] = ton;
+      addStockValueByCode(map, "MH:", mh, ton, "");
+      if (dv || dvt) addStockValueByCode(map, "MH:", mh, ton, dv || dvt);
     }
     if (mv) {
-      addStockValueByCode(map, "MV:", normalizeProductCode(mv), ton, dv || dvt);
+      addStockValueByCode(map, "MV:", normalizeProductCode(mv), ton, "");
+      if (dv || dvt) addStockValueByCode(map, "MV:", normalizeProductCode(mv), ton, dv || dvt);
     }
   }
   return map;
@@ -522,9 +624,10 @@ function readTonVariantMap_(ss) {
   var sh = ss.getSheetByName(TON_VARIANT_SHEET_NAME);
   if (!sh || sh.getLastRow() < 2) return {};
   ensureTonVariantSchema_(sh);
-  // getRange(row, column, numRows, numColumns) — đọc Key..DonViTinh
+  var cols = resolveTonVariantColMap_(sh);
+  // getRange(row, column, numRows, numColumns)
   var data = sh.getRange(2, 1, sh.getLastRow() - 1, TON_VARIANT_COL_COUNT).getValues();
-  var map = buildTonVariantStockMapFromRows_(data);
+  var map = buildTonVariantStockMapFromRows_(data, cols);
   try { putCacheJson_(cache, CACHE_TON_VARIANT_KEY, map, CACHE_TTL_SECONDS); } catch (e) {}
   return map;
 }
@@ -898,7 +1001,16 @@ function getVariantStockIfPresent_(map, maHang, maVach, dvt) {
   var mh = normalizeProductCode(maHang);
   var mv = normalizeProductCode(maVach);
   var rawKey = buildTonVariantKey_(maHang, dvt);
-  if (rawKey && Object.prototype.hasOwnProperty.call(map, rawKey)) return Number(map[rawKey]) || 0;
+  var canon = canonicalizeTonVariantKey_(maHang) || mh;
+  if (rawKey && Object.prototype.hasOwnProperty.call(map, rawKey)) {
+    return parseTonStockNumber_(map[rawKey]);
+  }
+  if (canon && Object.prototype.hasOwnProperty.call(map, canon)) {
+    return parseTonStockNumber_(map[canon]);
+  }
+  if (mh && Object.prototype.hasOwnProperty.call(map, mh)) {
+    return parseTonStockNumber_(map[mh]);
+  }
   var present = false;
   for (var k in map) {
     if (!Object.prototype.hasOwnProperty.call(map, k) || k === "__meta") continue;
@@ -909,7 +1021,13 @@ function getVariantStockIfPresent_(map, maHang, maVach, dvt) {
     if (mv && (k === ("MV:" + mv) || k.indexOf("MV:" + mv + "|DV:") === 0)) { present = true; break; }
   }
   if (!present) return null;
-  return getStockValueForItem(map, maHang, maVach, dvt);
+  var looked = getStockValueForItem(map, maHang, maVach, dvt);
+  // Không để ĐVT lệch biến tồn thật thành 0 — fallback bare key
+  if (looked === 0 || looked === null || looked === undefined) {
+    if (canon && map[canon] != null) return parseTonStockNumber_(map[canon]);
+    if (mh && map["MH:" + mh] != null) return parseTonStockNumber_(map["MH:" + mh]);
+  }
+  return looked;
 }
 
 
@@ -1367,7 +1485,8 @@ function buildCatalogFromSheet_(ss) {
     var dvt2 = dvt2Idx >= 0 ? sanitizeImportDvt_(getCellValue(rawData[i], dvt2Idx, "")) : "";
     var parentSku = parentSkuIdx !== -1 ? String(getCellValue(rawData[i], parentSkuIdx, "") || "").trim() : "";
     var tonRaw = tonIdx >= 0 ? getCellValue(rawData[i], tonIdx, "") : "";
-    var tonNum = tonRaw === "" || tonRaw == null ? NaN : Number(String(tonRaw).replace(/,/g, ""));
+    // Phân biệt ô trống (NaN → không gán tonKho) vs tồn = 0 thật
+    var tonNum = (tonRaw === "" || tonRaw == null) ? NaN : parseTonStockNumber_(tonRaw);
     var isNewFlag = false;
     if (isNewIdx !== -1) {
       var flagRaw = String(rawData[i][isNewIdx] == null ? "" : rawData[i][isNewIdx]).trim().toLowerCase();
@@ -2693,23 +2812,32 @@ function getCatalogData(forceRefresh) {
     var cache = getScriptCache_();
     var force = forceRefresh === true || forceRefresh === 1 || forceRefresh === "1" ||
       forceRefresh === "true" || forceRefresh === "yes";
+    if (force) {
+      try { cache.remove(CACHE_TON_VARIANT_KEY); } catch (eClr1) {}
+      try { cache.remove(CACHE_TON_Q7_KEY); } catch (eClr2) {}
+      try { cache.remove(cacheKey); } catch (eClr3) {}
+    }
     // Cache chunked — hỗ trợ catalog > 90KB (tránh miss cache khiến đọc sheet mỗi lần)
     if (!force) {
       var cached = getCacheJson_(cache, cacheKey);
       if (cached && cached.success && cached.danhMuc) return cached;
     }
 
-    var danhMuc = buildCatalogFromSheet_(getSS());
+    var ssCat = getSS();
+    var danhMuc = buildCatalogFromSheet_(ssCat);
     try {
-      var merged = mergeTonVariantChildrenIntoCatalog_(getSS(), danhMuc);
+      var merged = mergeTonVariantChildrenIntoCatalog_(ssCat, danhMuc);
       danhMuc = merged.danhMuc || danhMuc;
     } catch (eMerge) {}
     try {
-      applyProductLocksToCatalog_(getSS(), danhMuc);
+      applyProductLocksToCatalog_(ssCat, danhMuc);
     } catch (eLock) {}
     try {
-      applyProductOutOfStockToCatalog_(getSS(), danhMuc);
+      applyProductOutOfStockToCatalog_(ssCat, danhMuc);
     } catch (eOut) {}
+    try {
+      applyTonVariantStockToCatalog_(ssCat, danhMuc);
+    } catch (eTon) {}
     var keys = 0;
     for (var k in danhMuc) {
       if (Object.prototype.hasOwnProperty.call(danhMuc, k)) keys++;
@@ -2721,7 +2849,8 @@ function getCatalogData(forceRefresh) {
       keyCount: keys,
       forced: !!force,
       mergedTonVariant: true,
-      _debugRun: force ? "catalog-nocache-merge-v1" : "catalog-cache-merge-v1"
+      stockFromTonVariant: true,
+      _debugRun: force ? "catalog-nocache-stockfix-v1" : "catalog-cache-stockfix-v1"
     };
     try {
       putCacheJson_(cache, cacheKey, result, CACHE_TTL_SECONDS);
@@ -2730,6 +2859,27 @@ function getCatalogData(forceRefresh) {
   } catch (e) {
     return { success: false, error: e.message || String(e) };
   }
+}
+
+
+/**
+ * Gắn tonKho từ TON_VARIANT (Ton_Hien_Tai) vào catalog — ưu tiên số thật trên sheet biến thể.
+ */
+function applyTonVariantStockToCatalog_(ss, danhMuc) {
+  danhMuc = danhMuc || {};
+  ss = ss || getSS();
+  var map = readTonVariantMap_(ss) || {};
+  if (!Object.keys(map).length) return danhMuc;
+  for (var key in danhMuc) {
+    if (!Object.prototype.hasOwnProperty.call(danhMuc, key)) continue;
+    var item = danhMuc[key];
+    if (!item) continue;
+    var vStock = getVariantStockIfPresent_(map, item.maHang, item.maVach, item.dvt);
+    if (vStock === null || vStock === undefined) continue;
+    item.tonKho = vStock;
+    item.tonHienTai = vStock;
+  }
+  return danhMuc;
 }
 
 

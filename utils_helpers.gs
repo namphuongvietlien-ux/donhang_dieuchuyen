@@ -830,8 +830,10 @@ function scoreImportHeaderRole_(norm, role) {
   }
   if (role === "tonKho") {
     if (norm === "tonkho" || norm === "soluongton" || norm === "slton" || norm === "cuoiky") return 100;
+    if (norm === "tonhientai") return 99;
+    if (norm.indexOf("tonbandau") !== -1 || norm === "bandau") return 0;
     if (norm === "soluong" || norm === "soton" || norm === "onhand" || norm === "stock") return 92;
-    if (norm.indexOf("tonkho") !== -1 || norm.indexOf("soluongton") !== -1) return 95;
+    if (norm.indexOf("tonhientai") !== -1 || norm.indexOf("tonkho") !== -1 || norm.indexOf("soluongton") !== -1) return 95;
     if (norm.indexOf("soton") !== -1) return 90;
     if (norm === "qty" || norm === "quantity") return 75;
     if (norm.indexOf("soluong") !== -1 && norm.indexOf("quydoi") === -1) return 80;
@@ -1373,10 +1375,20 @@ function lookupStockByPrefixCode_(tonKhoMap, prefix, code, dvt) {
       return Number(tonKhoMap[candidates[i]]) || 0;
     }
   }
-  // Có ĐVT trên đơn nhưng không khớp ĐVT tồn → không lấy nhầm đơn vị khác
-  if (dvtNorm) return 0;
+  // Có ĐVT trên đơn nhưng không khớp ĐVT tồn → fallback bare MH:/MV: (KHÔNG trả 0 giả)
+  if (dvtNorm) {
+    var bareKeys = [prefix + norm];
+    if (compact) bareKeys.push(prefix + compact);
+    bareKeys.push(norm);
+    if (compact) bareKeys.push(compact);
+    for (var bi = 0; bi < bareKeys.length; bi++) {
+      if (Object.prototype.hasOwnProperty.call(tonKhoMap, bareKeys[bi])) {
+        return Number(tonKhoMap[bareKeys[bi]]) || 0;
+      }
+    }
+  }
 
-  // Không có ĐVT trên đơn: cộng mọi biến thể ĐVT của mã (fallback)
+  // Không có ĐVT trên đơn (hoặc bare miss): cộng mọi biến thể ĐVT của mã (fallback)
   var sum = 0;
   var found = false;
   var bases = [prefix + norm];

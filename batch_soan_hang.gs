@@ -1932,6 +1932,16 @@ function getChiTietDonHangMobile(soPhieu) {
   } catch (stockErr) {
     for (var k = 0; k < items.length; k++) items[k].stock = "";
   }
+  // Overlay tồn biến thể TON_VARIANT (giống getChiTietPhieu) — tránh hiện 0 khi mã nằm ở sheet biến thể
+  try {
+    var variantMap = readTonVariantMap_(ss);
+    if (variantMap && Object.keys(variantMap).length) {
+      for (var jv = 0; jv < items.length; jv++) {
+        var vStock = getVariantStockIfPresent_(variantMap, items[jv].maHang, items[jv].maVach, items[jv].dvt);
+        if (vStock !== null && vStock !== undefined) items[jv].stock = vStock;
+      }
+    }
+  } catch (varStockErr) {}
   return items;
 }
 
