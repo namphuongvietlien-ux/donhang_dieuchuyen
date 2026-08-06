@@ -727,18 +727,42 @@ function taoBangSoanHangNgayMai(payload) {
     if (_dbgDvtSample.length < 5) {
       _dbgDvtSample.push({ ma: it.maHang || it.maVach, orderDvt: it.dvt || "", out: dvtOut || "", src: dvtSource || "empty" });
     }
+    // Mã cột = Parent_SKU (mã trên bao bì/kệ); tên = Cha - Biến thể (Mã con: …)
+    var metaPack = resolveVariantDisplayMeta_(catalogLookup, it.maHang, it.maVach, it.tenHang, parentByChildPack);
+    var maPack = metaPack.maHangDisplay || it.maHang || "";
+    var tenPack = metaPack.tenHangDisplay || formatVariantDisplayName_(it.maHang, it.tenHang);
+
+    // Cột F — tra cứu đa tầng: bare / MH: / maHang / maVach / parent (maPack)
     var stock = 0;
     var stockSource = "";
     if (stockReady) {
-      var sQ7Pack = resolveStockValueWithFallback_(q7Map, it.maHang, it.maVach, dvtOut || it.dvt);
-      if (sQ7Pack !== null && sQ7Pack !== undefined) {
-        stock = sQ7Pack;
-        stockSource = "TON_Q7";
+      var code = String(maPack || it.maHang || it.maVach || "").replace(/^MH:/i, "").trim();
+      var rawStock = q7Map[code]
+        || q7Map["MH:" + code]
+        || q7Map[it.maHang]
+        || q7Map[it.maVach]
+        || q7Map[maPack]
+        || 0;
+      var hitQ7 = (code && (q7Map[code] != null || q7Map["MH:" + code] != null))
+        || (it.maHang && q7Map[it.maHang] != null)
+        || (it.maVach && q7Map[it.maVach] != null)
+        || (maPack && q7Map[maPack] != null);
+      if (!hitQ7) {
+        var sQ7Pack = resolveStockValueWithFallback_(
+          q7Map, it.maHang, it.maVach, dvtOut || it.dvt, maPack || it.parentSku || it.maHangDisplay
+        );
+        if (sQ7Pack !== null && sQ7Pack !== undefined) {
+          rawStock = sQ7Pack;
+          hitQ7 = true;
+        }
       }
+      var safeStock = Math.max(0, Number(rawStock) || 0);
+      stock = safeStock;
+      if (hitQ7) stockSource = "TON_Q7";
     }
-    var sVarPack = resolveStockValueWithFallback_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt);
+    var sVarPack = resolveStockValueWithFallback_(variantMapPack, it.maHang, it.maVach, dvtOut || it.dvt, maPack || it.parentSku);
     if (sVarPack !== null && sVarPack !== undefined) {
-      stock = sVarPack;
+      stock = Math.max(0, Number(sVarPack) || 0);
       stockSource = "TON_VARIANT";
     }
     var rowHasStock = !!stockSource;
@@ -748,12 +772,8 @@ function taoBangSoanHangNgayMai(payload) {
       canhBao = thieu > 0 ? ("THIẾU " + thieu) : (stockSource === "TON_VARIANT" ? "OK (variant)" : "OK");
       if (thieu > 0) missingLines += 1;
     }
-    // Mã cột = Parent_SKU (mã trên bao bì/kệ); tên = Cha - Biến thể (Mã con: …)
-    var metaPack = resolveVariantDisplayMeta_(catalogLookup, it.maHang, it.maVach, it.tenHang, parentByChildPack);
-    var maPack = metaPack.maHangDisplay || it.maHang || "";
-    var tenPack = metaPack.tenHangDisplay || formatVariantDisplayName_(it.maHang, it.tenHang);
 
-    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", rowHasStock ? Math.max(0, Number(stock) || 0) : "", it.totalQty];
+    var rowOut = [0, maPack, it.maVach || "", tenPack || "", dvtOut || "", Math.max(0, Number(stock) || 0), it.totalQty];
     for (var c = 0; c < storeList.length; c++) rowOut.push(it.byStore[storeList[c]] || 0);
     rowOut.push(canhBao);
     rowOut.push(sourceStores.map(function(name) { return activeMap[name] || name; }).join(", "));
